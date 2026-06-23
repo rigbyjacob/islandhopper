@@ -797,28 +797,49 @@ function updateEnvironment(dt) {
 }
 
 // ---- puffy clouds (white → gray with storms, dimmer at night) ----
-let cloudGroups=[], cloudMat, cloudBounds;
+let cloudGroups=[], cloudMats=[], cloudBounds;
+// lumpy cumulus texture: several overlapping soft blobs → irregular fluffy alpha
 function makeCloudTexture(){
-  const c=document.createElement('canvas'); c.width=c.height=128; const x=c.getContext('2d');
-  const g=x.createRadialGradient(64,64,4,64,64,62);
-  g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.5,'rgba(255,255,255,0.62)'); g.addColorStop(1,'rgba(255,255,255,0)');
-  x.fillStyle=g; x.fillRect(0,0,128,128); return new THREE.CanvasTexture(c);
+  const N=128, c=document.createElement('canvas'); c.width=c.height=N; const x=c.getContext('2d');
+  for (let k=0;k<9;k++){
+    const r=N*(0.16+Math.random()*0.18), cx=N*0.5+(Math.random()-0.5)*N*0.42, cy=N*0.52+(Math.random()-0.5)*N*0.3;
+    const g=x.createRadialGradient(cx,cy,1,cx,cy,r);
+    g.addColorStop(0,'rgba(255,255,255,0.95)'); g.addColorStop(0.55,'rgba(255,255,255,0.45)'); g.addColorStop(1,'rgba(255,255,255,0)');
+    x.fillStyle=g; x.fillRect(0,0,N,N);
+  }
+  const tex=new THREE.CanvasTexture(c); return tex;
 }
 function buildClouds(){
-  cloudMat=new THREE.SpriteMaterial({ map:makeCloudTexture(), color:0xffffff, transparent:true, opacity:0.9, depthWrite:false });
-  cloudBounds={ minX:MAP.minX-500, maxX:MAP.maxX+500, minZ:MAP.minZ-500, maxZ:MAP.maxZ+500 };
-  for (let i=0;i<18;i++){ const grp=new THREE.Group(); const puffs=3+Math.floor(Math.random()*4);
-    for (let j=0;j<puffs;j++){ const s=new THREE.Sprite(cloudMat); const sc=80+Math.random()*100;
-      s.scale.set(sc, sc*0.6, 1); s.position.set((Math.random()-0.5)*130,(Math.random()-0.5)*24,(Math.random()-0.5)*80); grp.add(s); }
-    grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), 300+Math.random()*150,
+  const tex=makeCloudTexture();
+  // 3 shading tiers: bright sunlit tops → shaded blue-grey bases (gives clouds volume)
+  cloudMats = [0xffffff, 0xeaf0f6, 0xb9c6d6].map(col => new THREE.SpriteMaterial({
+    map:tex, color:new THREE.Color(col), transparent:true, opacity:0.92, depthWrite:false, fog:true }));
+  cloudBounds={ minX:MAP.minX-700, maxX:MAP.maxX+700, minZ:MAP.minZ-700, maxZ:MAP.maxZ+700 };
+  for (let i=0;i<20;i++){
+    const grp=new THREE.Group();
+    const w=130+Math.random()*120, baseY=300+Math.random()*170;
+    // flatter shaded base row
+    const nb=3+Math.floor(Math.random()*3);
+    for (let j=0;j<nb;j++){ const s=new THREE.Sprite(cloudMats[Math.random()<0.5?2:1]);
+      const sc=w*(0.45+Math.random()*0.4); s.scale.set(sc, sc*0.52, 1);
+      s.position.set((j/(nb-1||1)-0.5)*w*1.1 + (Math.random()-0.5)*20, (Math.random()-0.5)*8, (Math.random()-0.5)*w*0.5); grp.add(s); }
+    // bright domed top puffs
+    const nt=3+Math.floor(Math.random()*4);
+    for (let j=0;j<nt;j++){ const s=new THREE.Sprite(cloudMats[Math.random()<0.6?0:1]);
+      const sc=w*(0.35+Math.random()*0.45); s.scale.set(sc, sc*0.7, 1);
+      s.position.set((Math.random()-0.5)*w*0.8, 14+Math.random()*26, (Math.random()-0.5)*w*0.4); grp.add(s); }
+    grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), baseY,
       cloudBounds.minZ+Math.random()*(cloudBounds.maxZ-cloudBounds.minZ));
-    grp.userData.spd=0.6+Math.random()*0.9; scene.add(grp); cloudGroups.push(grp); }
+    grp.userData.spd=0.5+Math.random()*0.8; scene.add(grp); cloudGroups.push(grp);
+  }
 }
 function updateClouds(dt, sf, day){
-  if(!cloudMat) return;
-  const tint=lerp(1.0,0.36,sf), bright=0.5+0.5*day;
-  cloudMat.color.setRGB(tint*bright, tint*bright, Math.min(1, tint*bright*1.03));
-  cloudMat.opacity = 0.85 * (0.55+0.45*day);
+  if(!cloudMats.length) return;
+  const tint=lerp(1.0,0.34,sf), bright=0.45+0.55*day, op=(0.55+0.45*day)*(1-0.0*sf);
+  const cols=[[1,1,1],[0.92,0.95,1.0],[0.74,0.80,0.86]];
+  for (let i=0;i<cloudMats.length;i++){ const b=cols[i];
+    cloudMats[i].color.setRGB(b[0]*tint*bright, b[1]*tint*bright, Math.min(1,b[2]*tint*bright*1.04));
+    cloudMats[i].opacity = op*0.95; }
   const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=8 + 34*sf;
   for(const grp of cloudGroups){ grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
     if(grp.position.x>cloudBounds.maxX)grp.position.x=cloudBounds.minX; if(grp.position.x<cloudBounds.minX)grp.position.x=cloudBounds.maxX;
@@ -892,16 +913,27 @@ function stepEstimator(dt) {
   }
 }
 
-let pathLine, destRing, estRing, gpsPings = [], gpsPtr = 0;
+let pathLine, estRing, gpsPings = [], gpsPtr = 0;
+let targetGlow, glowHalo, glowBeam, glowRing; const _glowCol = new THREE.Color();
 function buildNavVisuals() {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3*128), 3));
   pathLine = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x5fd0ff, transparent: true, opacity: 0.85 }));
   pathLine.frustumCulled = false; scene.add(pathLine);
 
-  destRing = new THREE.Mesh(new THREE.TorusGeometry(10, 1.2, 8, 24),
-    new THREE.MeshBasicMaterial({ color: 0x5fd0ff, transparent: true, opacity: 0.9 }));
-  destRing.rotation.x = -Math.PI/2; destRing.position.y = 2; scene.add(destRing);
+  // mysterious target glow: a soft halo on the sea, a thin pulsing ring, and a faint beacon column
+  targetGlow = new THREE.Group(); targetGlow.renderOrder = 3;
+  const haloTex = makeDotTexture();
+  glowHalo = new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({
+    map:haloTex, color:0x6fe8ff, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
+  glowHalo.rotation.x = -Math.PI/2; glowHalo.position.y = 1.6; targetGlow.add(glowHalo);
+  glowRing = new THREE.Mesh(new THREE.TorusGeometry(1, 0.06, 8, 64), new THREE.MeshBasicMaterial({
+    color:0x9fe8ff, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
+  glowRing.rotation.x = -Math.PI/2; glowRing.position.y = 1.8; targetGlow.add(glowRing);
+  glowBeam = new THREE.Mesh(new THREE.CylinderGeometry(3, 0.6, 1, 24, 1, true), new THREE.MeshBasicMaterial({
+    color:0x9f7bff, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
+  targetGlow.add(glowBeam);
+  scene.add(targetGlow);
 
   estRing = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.4, 8, 20),
     new THREE.MeshBasicMaterial({ color: 0x7be08a, transparent: true, opacity: 0.85 }));
@@ -929,8 +961,26 @@ function updateNavVisuals(dt) {
     else m.material.opacity = 0; }
   if (estRing && kf) { const e = kf.est; estRing.position.set(e.px, 2.2, e.pz);
     estRing.visible = P.showGps; }    // toggled by "Show GPS fixes"
-  if (destRing) { const tgt = activeTarget(); destRing.position.set(tgt.x, 2, tgt.z);
-    destRing.visible = (P.mode !== 'hold'); }
+  if (targetGlow) {
+    const show = (P.mode !== 'hold');
+    targetGlow.visible = show;
+    if (show) {
+      let tx, tz, rad;
+      if (P.mode === 'tour') { const isl = route[wpIdx]; tx = isl.x; tz = isl.z; rad = Math.max(isl.r*1.5, 22); }
+      else { const tg = activeTarget(); tx = tg.x; tz = tg.z; rad = 26; }
+      const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7), yw = waveHeightJS(tx, tz, tt);
+      targetGlow.position.set(tx, 0, tz);
+      _glowCol.setHSL(0.55 + 0.10*Math.sin(tt*0.45), 0.85, 0.6);   // slow cyan↔violet drift
+      const hs = rad*2.6*(1 + 0.05*pulse);
+      glowHalo.position.y = yw + 1.6; glowHalo.scale.set(hs, hs, 1);
+      glowHalo.material.color.copy(_glowCol); glowHalo.material.opacity = 0.18 + 0.16*pulse;
+      const rs = rad*(1.05 + 0.08*pulse);
+      glowRing.position.y = yw + 1.9; glowRing.scale.set(rs, rs, rs*0.5);
+      glowRing.material.color.copy(_glowCol); glowRing.material.opacity = 0.25 + 0.25*pulse;
+      glowBeam.position.y = yw + 70; glowBeam.scale.set(1 + rad*0.05, 140, 1 + rad*0.05);
+      glowBeam.material.color.copy(_glowCol); glowBeam.material.opacity = 0.04 + 0.05*pulse;
+    }
+  }
   if (pathLine) pathLine.visible = P.showPath && path && path.length > 1;
   updateWake(boat3, clock.elapsedTime);
 }
