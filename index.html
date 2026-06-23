@@ -162,8 +162,15 @@ function fatal(e) {
   errBox.style.display = 'block';
   errBox.textContent = (e && (e.stack || e.message)) ? (e.stack || e.message) : String(e);
 }
-window.addEventListener('error', (ev) => { if (!window.__booted) fatal(ev.error || ev.message); });
-window.addEventListener('unhandledrejection', (ev) => fatal(ev.reason));
+// If something throws while in the crow's-nest view, fall back to orbit instead of hard-crashing.
+window.addEventListener('error', (ev) => {
+  if (window.__booted && fpsMode) { console.warn('crow’s-nest error — reverting to orbit', ev.error||ev.message); try{ setView(false); }catch(_){ } return; }
+  if (!window.__booted) fatal(ev.error || ev.message);
+});
+window.addEventListener('unhandledrejection', (ev) => {
+  if (window.__booted && fpsMode) { console.warn('crow’s-nest error — reverting to orbit', ev.reason); try{ setView(false); }catch(_){ } return; }
+  fatal(ev.reason);
+});
 
 // ============================================================================
 // Tunable parameters (driven by the control panel)
@@ -665,7 +672,8 @@ async function init() {
     controls.update();
     if (fpsMode) updateFpsCam(t);
     activeCam = fpsMode ? fpsCam : camera;
-    renderer.render(scene, activeCam);
+    try { renderer.render(scene, activeCam); }
+    catch (err) { console.warn('render failed', err); if (fpsMode) setView(false); }
 
     updateLabels();
     drawTelemetry(); drawCompass();
@@ -1024,10 +1032,16 @@ function buildOcean() {
   const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 4.0);
   col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.85), 0.0, 0.85)));
 
-  // sun: a sharp glint plus a broad sheen, both following the sun and fading at night
+  // sun reflection: three lobes (sharp glint + mid glitter + broad sheen) form a shimmering sun path
   const halfv = normalize(viewDir.add(sunDir));
-  col.addAssign(uSunCol.mul(pow(max(dot(n, halfv), 0.0), 200.0).mul(2.4).mul(uSunInt)));
-  col.addAssign(uSunCol.mul(pow(max(dot(n, halfv), 0.0), 16.0).mul(0.22).mul(uSunInt)));
+  const hN = max(dot(n, halfv), 0.0);
+  col.addAssign(uSunCol.mul(pow(hN, 220.0).mul(2.6).mul(uSunInt)));
+  col.addAssign(uSunCol.mul(pow(hN,  55.0).mul(0.6).mul(uSunInt)));
+  col.addAssign(uSunCol.mul(pow(hN,  14.0).mul(0.22).mul(uSunInt)));
+
+  // faint reflection of nearby land onto the water (stylized; strongest on flat water near a shore)
+  const landRefl = smoothstep(0.5,1.0,sp).mul(smoothstep(0.62,0.95,n.y)).mul(0.20);
+  col.assign(mix(col, vec3(0.05,0.13,0.10), landRefl.mul(uDayBright)));
 
   // foam: wave-crest foam (steep + high, animated breakup) plus a shoreline band
   const crest = smoothstep(0.7,1.6,wh).mul(smoothstep(0.92,0.72,n.y));
@@ -1160,7 +1174,7 @@ function placeBoat(boat, s, t) {
 // ============================================================================
 const camOffset = new THREE.Vector3(150, 360, 240);
 let camTarget = new THREE.Vector3(MAP.cx, 0, MAP.cz);
-let fpsCam, fpsMode = false, fpsYaw = 0, fpsPitch = -0.06, activeCam;
+let fpsCam, fpsMode = false, fpsYaw = 0, fpsPitch = -0.30, activeCam;   // look down at the bow, not dead-level
 function buildCamera() {
   const aspect = window.innerWidth/window.innerHeight, view = 380;
   camera = new THREE.OrthographicCamera(-view*aspect, view*aspect, view, -view, -4000, 12000);
@@ -1226,6 +1240,47 @@ function initInput() {
 // Control panel UI
 // ============================================================================
 const ui = {};
+// ============================================================================
+// Video capture — record the canvas to MP4 (falls back to WebM if MP4 unsupported)
+// ============================================================================
+let mediaRecorder = null, recChunks = [], recMime = '', recTimer = 0, recT0 = 0;
+function pickRecMime(){
+  const cands = ['video/mp4;codecs=avc1.42E01E','video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+  if (!window.MediaRecorder) return '';
+  for (const m of cands){ try { if (MediaRecorder.isTypeSupported(m)) return m; } catch(_){ } }
+  return '';
+}
+function toggleRecord(btn){
+  if (mediaRecorder && mediaRecorder.state === 'recording'){ mediaRecorder.stop(); return; }
+  const mime = pickRecMime();
+  if (!mime){ btn.textContent = 'Recording unsupported'; return; }
+  recMime = mime; recChunks = [];
+  let stream;
+  try { stream = renderer.domElement.captureStream(30); }
+  catch(e){ btn.textContent = 'Capture failed'; console.warn(e); return; }
+  try { mediaRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16_000_000 }); }
+  catch(e){ mediaRecorder = new MediaRecorder(stream); }
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    clearInterval(recTimer);
+    const blob = new Blob(recChunks, { type: recMime });
+    const ext = recMime.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'caribbean-helmsman-' + Date.now() + '.' + ext;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+    btn.textContent = '● Record video'; btn.classList.remove('active');
+  };
+  mediaRecorder.start();
+  recT0 = performance.now();
+  const label = recMime.indexOf('mp4') >= 0 ? 'MP4' : 'WebM';
+  const tick = () => { const s = Math.floor((performance.now()-recT0)/1000);
+    btn.textContent = `■ Stop ${label} ${String((s/60)|0).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; };
+  tick(); recTimer = setInterval(tick, 500);
+  btn.classList.add('active');
+}
+
 function buildPanel() {
   const panel = document.getElementById('panel');
   const head = el('div','',panel);
@@ -1238,6 +1293,8 @@ function buildPanel() {
   ui.viewBtn = el('div','btn', el('div','btns',s)); ui.viewBtn.textContent = 'View: Orbit 🗺';
   ui.viewBtn.onclick = () => setView(!fpsMode);
   const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
+  ui.recBtn = el('div','btn', el('div','btns',s)); ui.recBtn.textContent = '● Record video';
+  ui.recBtn.onclick = () => toggleRecord(ui.recBtn);
 
   // Modes
   s = section(panel, 'Mode');
