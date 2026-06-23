@@ -1007,20 +1007,35 @@ function buildOcean() {
     return clamp(s, 0, 1); });
 
   const xz = positionLocal.xz;
-  const n = waveN(xz), sp = shore(xz);
+  const n = waveN(xz), sp = shore(xz), wh = waveH(xz);
   const viewDir = normalize(cameraPosition.sub(positionWorld));
-  const deep = vec3(0.015,0.10,0.26), midC = vec3(0.04,0.34,0.52), shallow = vec3(0.20,0.66,0.66);
-  let col = mix(deep, midC, smoothstep(0.0,0.55,sp)).toVar();
-  col.assign(mix(col, shallow, smoothstep(0.6,1.0,sp)));
-  const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 3.0);
-  col.assign(mix(col, uHorizon, fres.mul(0.5)));                       // reflect the actual sky horizon
-  const sunDir = normalize(uSunDir);                                   // glint follows the sun
-  const spec = pow(max(dot(n, normalize(viewDir.add(sunDir))), 0.0), 140.0).mul(1.5).mul(uSunInt);
-  col.addAssign(uSunCol.mul(spec));
-  const crest = smoothstep(0.86,0.74,n.y);
-  const shoreFoam = smoothstep(0.80,0.97,sp).mul(
-    smoothstep(0.35,0.75, sin(xz.x.mul(0.25).add(xz.y.mul(0.22)).add(time.mul(2.2))).mul(0.5).add(0.5)));
-  col.assign(mix(col, vec3(0.95,0.99,1.0), clamp(max(crest.mul(0.5), shoreFoam), 0, 1)));
+  const sunDir = normalize(uSunDir);
+
+  // depth-based base colour: deep blue → turquoise shallows
+  const deep = vec3(0.012,0.09,0.22), midC = vec3(0.03,0.30,0.48), shallow = vec3(0.16,0.62,0.66);
+  let col = mix(deep, midC, smoothstep(0.0,0.5,sp)).toVar();
+  col.assign(mix(col, shallow, smoothstep(0.55,1.0,sp)));
+
+  // subsurface scattering — translucent teal glow through backlit wave crests
+  const sss = smoothstep(-0.2,1.3,wh).mul(clamp(dot(viewDir, sunDir), 0.0, 1.0));
+  col.addAssign(vec3(0.0,0.26,0.20).mul(sss).mul(uSunInt).mul(0.55));
+
+  // fresnel reflection of the sky (toward a horizon/zenith blend), capped so it isn't a hard mirror
+  const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 4.0);
+  col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.85), 0.0, 0.85)));
+
+  // sun: a sharp glint plus a broad sheen, both following the sun and fading at night
+  const halfv = normalize(viewDir.add(sunDir));
+  col.addAssign(uSunCol.mul(pow(max(dot(n, halfv), 0.0), 200.0).mul(2.4).mul(uSunInt)));
+  col.addAssign(uSunCol.mul(pow(max(dot(n, halfv), 0.0), 16.0).mul(0.22).mul(uSunInt)));
+
+  // foam: wave-crest foam (steep + high, animated breakup) plus a shoreline band
+  const crest = smoothstep(0.7,1.6,wh).mul(smoothstep(0.92,0.72,n.y));
+  const foamN = smoothstep(0.4,0.85, sin(xz.x.mul(0.55).add(xz.y.mul(0.47)).add(time.mul(1.6))).mul(0.5).add(0.5));
+  const shoreFoam = smoothstep(0.78,0.98,sp).mul(
+    smoothstep(0.3,0.8, sin(xz.x.mul(0.25).add(xz.y.mul(0.22)).add(time.mul(2.2))).mul(0.5).add(0.5)));
+  const foam = clamp(max(crest.mul(0.7).mul(foamN), shoreFoam), 0.0, 1.0);
+  col.assign(mix(col, vec3(0.93,0.97,1.0), foam));
 
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.positionNode = positionLocal.add(vec3(0, waveH(positionLocal.xz), 0));
@@ -1054,25 +1069,69 @@ function buildTerrain() {
 
 function buildBoat() {
   const g = new THREE.Group();
-  const hullMat = new THREE.MeshStandardMaterial({ color:0x6b3f24, roughness:0.7 });
-  const deckMat = new THREE.MeshStandardMaterial({ color:0xc8a26a, roughness:0.6 });
-  const sailMat = new THREE.MeshStandardMaterial({ color:0xf3ede0, roughness:0.9, side:THREE.DoubleSide });
+  const hullMat = new THREE.MeshStandardMaterial({ color:0x5b3a22, roughness:0.75 });
+  const trimMat = new THREE.MeshStandardMaterial({ color:0x7a2e1e, roughness:0.7 });   // painted wale stripe
+  const deckMat = new THREE.MeshStandardMaterial({ color:0xb18a55, roughness:0.7 });
+  const sparMat = new THREE.MeshStandardMaterial({ color:0x47351f, roughness:0.7 });
+  const sailMat = new THREE.MeshStandardMaterial({ color:0xeae0c8, roughness:0.95, side:THREE.DoubleSide });
+  const goldMat = new THREE.MeshStandardMaterial({ color:0xb0892f, roughness:0.5, metalness:0.4 });
 
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(9,2.4,3.4), hullMat);
-  const hp = hull.geometry.attributes.position;
-  for (let i=0;i<hp.count;i++){ const x=hp.getX(i); if (x>0) hp.setZ(i, hp.getZ(i)*(1-0.6*(x/4.5))); }
-  hp.needsUpdate=true; hull.geometry.computeVertexNormals(); hull.position.y=0.4; g.add(hull);
+  // ---- hull: tapered, sheered (bow at +X) ----
+  const hullGeo = new THREE.BoxGeometry(13, 3.4, 4.6, 14, 4, 5);
+  const hp = hullGeo.attributes.position;
+  for (let i=0;i<hp.count;i++){
+    let x=hp.getX(i), y=hp.getY(i), z=hp.getZ(i); const xn=x/6.5;
+    if (x>0.5){ const f=clampJS((x-0.5)/6.0,0,1); z *= 1 - 0.85*f*f; }        // pointed bow
+    else if (x<-2.0){ const f=clampJS((-x-2.0)/4.5,0,1); z *= 1 - 0.30*f; }   // narrowed transom
+    if (y<0){ z *= 1 - 0.4*(-y/1.7); }                                        // rounded/V bottom
+    if (y>0.9){ y += xn*xn*1.9 + (x>0?0.25:0.0); }                            // sheer (deck line rises fore & aft)
+    hp.setX(i,x); hp.setY(i,y); hp.setZ(i,z);
+  }
+  hp.needsUpdate=true; hullGeo.computeVertexNormals();
+  const hull = new THREE.Mesh(hullGeo, hullMat); hull.position.y=0.6; g.add(hull);
 
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(8,0.5,2.8), deckMat); deck.position.y=1.5; g.add(deck);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.22,9,8),
-    new THREE.MeshStandardMaterial({ color:0x4a3826 })); mast.position.set(-0.5,6,0); g.add(mast);
-  const sail = new THREE.Mesh(new THREE.PlaneGeometry(5.5,6.5), sailMat);
-  sail.position.set(0.6,5.6,0); sail.rotation.y=Math.PI/2;
-  const sp=sail.geometry.attributes.position;
-  for (let i=0;i<sp.count;i++) sp.setZ(i, Math.cos(sp.getX(i)*0.5)*0.6);
-  sp.needsUpdate=true; sail.geometry.computeVertexNormals(); g.add(sail);
-  const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.6,0.9),
-    new THREE.MeshStandardMaterial({ color:0xcc2b2b, side:THREE.DoubleSide })); flag.position.set(-0.5,10,0.4); g.add(flag);
+  // painted wale stripe + gold trim near the rail
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(11.5, 0.55, 4.75), trimMat); stripe.position.set(0.2,1.95,0); g.add(stripe);
+  const railTrim = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.16, 4.85), goldMat); railTrim.position.set(0.2,2.35,0); g.add(railTrim);
+
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(11, 0.4, 3.6), deckMat); deck.position.set(0.2,2.05,0); g.add(deck);
+  // stern castle (poop deck) + forecastle
+  const stern = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.0, 3.8), hullMat); stern.position.set(-4.6,3.0,0); g.add(stern);
+  const sternTop = new THREE.Mesh(new THREE.BoxGeometry(3.0,0.35,3.6), deckMat); sternTop.position.set(-4.6,4.1,0); g.add(sternTop);
+  const fore = new THREE.Mesh(new THREE.BoxGeometry(2.0,1.1,3.4), hullMat); fore.position.set(4.4,2.6,0); g.add(fore);
+
+  // ---- masts, yards, billowed square sails ----
+  function sail(w,h,bulge){
+    const geo=new THREE.PlaneGeometry(w,h,7,4); geo.rotateY(Math.PI/2);   // span Z(width)×Y(height), normal +X
+    const p=geo.attributes.position;
+    for(let i=0;i<p.count;i++){ const z=p.getZ(i), yy=p.getY(i);
+      p.setX(i, Math.cos((z/w)*Math.PI)*bulge*(1-Math.abs(yy/h)*0.35)); }
+    p.needsUpdate=true; geo.computeVertexNormals(); return new THREE.Mesh(geo, sailMat);
+  }
+  function yard(w,y,x){ const c=new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.1,w+1,6), sparMat);
+    c.rotation.x=Math.PI/2; c.position.set(x,y,0); g.add(c); }
+  function mast(x, hgt, sails){
+    const m=new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.26,hgt,8), sparMat); m.position.set(x,2+hgt/2,0); g.add(m);
+    for(const [w,h,yy] of sails){ const s=sail(w,h,0.9); s.position.set(x+0.05,yy,0); g.add(s); yard(w,yy+h/2,x); }
+    return 2+hgt; // top y
+  }
+  const mainTop = mast(0.2, 15.5, [[7.0,4.2,6.2],[5.2,3.4,11.4]]);
+  const foreTop = mast(4.0, 12.0, [[5.4,3.6,5.6],[4.0,2.8,10.0]]);
+  const mizzTop = mast(-4.4, 10.0, [[4.2,3.2,5.2]]);
+
+  // crow's nest on the main
+  const nest=new THREE.Mesh(new THREE.CylinderGeometry(0.7,0.55,0.8,10,1,true), sparMat); nest.position.set(0.2, mainTop-3.4,0); g.add(nest);
+
+  // bowsprit + small jib
+  const bsp=new THREE.Mesh(new THREE.CylinderGeometry(0.13,0.18,5,6), sparMat);
+  bsp.position.set(8.0,3.4,0); bsp.rotation.z=Math.PI/2 - 0.5; g.add(bsp);
+  const jib=new THREE.Mesh(new THREE.PlaneGeometry(3.2,2.4), sailMat); jib.position.set(7.2,3.2,0); jib.rotation.y=Math.PI/2; g.add(jib);
+
+  // flags: black pirate flag on the main, red pennants fore & mizzen
+  const pirate=new THREE.Mesh(new THREE.PlaneGeometry(1.8,1.1),
+    new THREE.MeshStandardMaterial({ color:0x141414, side:THREE.DoubleSide })); pirate.position.set(0.2,mainTop+0.7,0.5); g.add(pirate);
+  for (const tx of [[4.0,foreTop],[-4.4,mizzTop]]){ const fl=new THREE.Mesh(new THREE.PlaneGeometry(1.4,0.7),
+    new THREE.MeshStandardMaterial({ color:0xb02a2a, side:THREE.DoubleSide })); fl.position.set(tx[0],tx[1]+0.5,0.4); g.add(fl); }
 
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(g); return g;
