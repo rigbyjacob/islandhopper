@@ -1,0 +1,1349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Caribbean PID Helmsman</title>
+<style>
+  :root { color-scheme: dark; --pad: 12px; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #06121f;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; }
+  .ilabel { position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
+    font-size: 11px; font-weight: 600; letter-spacing: .2px; color: #f4fbff;
+    text-shadow: 0 1px 2px rgba(0,0,0,.85), 0 0 6px rgba(0,40,70,.6);
+    padding: 1px 5px; border-radius: 5px; background: rgba(10,28,46,.32); }
+
+  .hud { position: fixed; pointer-events: none; color: #eaf6ff;
+    text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #title { top: 14px; left: 16px; }
+  #title h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: .2px; }
+  #title p  { margin: 3px 0 0; font-size: 11.5px; opacity: .72; max-width: 330px; line-height: 1.35; }
+
+  #hint { bottom: 12px; left: 16px; font-size: 11px; opacity: .8; line-height: 1.7; }
+  #hint .key { display:inline-block; padding:1px 6px; margin-right:5px; border-radius:5px;
+    background: rgba(255,255,255,.12); font-family: ui-monospace, monospace; }
+
+  /* ---- control panel ---- */
+  #panel { position: fixed; top: 12px; right: 12px; width: 256px; max-height: calc(100vh - 24px);
+    overflow-y: auto; pointer-events: auto; color: #dceefb; z-index: 10;
+    background: rgba(8,20,33,.82); backdrop-filter: blur(9px);
+    border: 1px solid rgba(140,200,255,.16); border-radius: 12px; padding: 10px 11px 14px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.45); font-size: 12px; }
+  #panel::-webkit-scrollbar { width: 8px; }
+  #panel::-webkit-scrollbar-thumb { background: rgba(140,200,255,.22); border-radius: 4px; }
+  #panel .ttl { font-weight: 650; font-size: 12.5px; letter-spacing: .2px; }
+  #panel .read { font-variant-numeric: tabular-nums; opacity: .85; font-size: 11px; margin-top: 2px; }
+  .sec { margin-top: 11px; border-top: 1px solid rgba(140,200,255,.12); padding-top: 9px; }
+  .sec-h { font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+    color: #8fd0ff; margin-bottom: 7px; opacity: .9; }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px; margin: 6px 0; }
+  .row label { font-size: 11.5px; opacity: .9; }
+  .row .val { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .8; min-width: 42px; text-align: right; }
+  .row input[type=range] { grid-column: 1 / 3; width: 100%; height: 16px; accent-color: #4db8ff; margin: 0; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .btn { flex: 1 1 auto; cursor: pointer; border: 1px solid rgba(140,200,255,.22);
+    background: rgba(80,160,230,.14); color: #dceefb; border-radius: 7px; padding: 6px 8px;
+    font-size: 11px; text-align: center; user-select: none; }
+  .btn:hover { background: rgba(80,160,230,.28); }
+  .btn.active { background: #2f7fc8; border-color: #5fb0ff; color: #fff; }
+  .tg { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; margin: 5px 0; }
+  .tg .box { width: 30px; height: 17px; border-radius: 9px; background: rgba(255,255,255,.16); position: relative; transition: background .15s; flex: 0 0 auto; }
+  .tg .box::after { content:""; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:#cfe6f6; transition: left .15s; }
+  .tg.on .box { background: #2f9c6a; }
+  .tg.on .box::after { left: 15px; background:#eafff4; }
+  .tg .lab { font-size: 11.5px; }
+
+  /* ---- bottom canvases ---- */
+  #telemetry { position: fixed; left: 16px; bottom: 52px; pointer-events: none; z-index: 6;
+    background: rgba(8,20,33,.55); border: 1px solid rgba(140,200,255,.14); border-radius: 9px; }
+  #compass { position: fixed; right: 284px; bottom: 16px; pointer-events: none; z-index: 6;
+    background: rgba(8,20,33,.5); border: 1px solid rgba(140,200,255,.14); border-radius: 50%; }
+
+  /* ---- overlay ---- */
+  #overlay { position: fixed; inset: 0; display: grid; place-items: center;
+    background: radial-gradient(120% 120% at 50% 30%, #0b2236 0%, #06121f 70%); color: #cfe6f6;
+    transition: opacity .6s ease; z-index: 20; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay .box { text-align: center; max-width: 460px; padding: 0 24px; }
+  #overlay h2 { margin: 0 0 6px; font-weight: 600; }
+  #overlay p { margin: 0; font-size: 13px; opacity: .8; line-height: 1.5; }
+  .spinner { width: 26px; height: 26px; margin: 0 auto 16px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.18); border-top-color: #7fd0ff; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #err { white-space: pre-wrap; text-align: left; font-family: ui-monospace, monospace;
+    font-size: 11.5px; color: #ffd3d3; background: rgba(0,0,0,.35); padding: 12px 14px;
+    border-radius: 8px; margin-top: 14px; display: none; max-height: 40vh; overflow: auto; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="labels"></div>
+
+<div class="hud" id="title">
+  <h1>⚓ Caribbean PID Helmsman</h1>
+  <p>Autonomous helm over the Leeward Islands. Tune the loops, throw weather at it, and watch P, I and D fight the sea.</p>
+</div>
+
+<div class="hud" id="hint">
+  <div><span class="key">drag</span>rotate <span class="key">scroll</span>zoom <span class="key">right-drag</span>pan <span class="key">dbl-click</span>set destination</div>
+</div>
+
+<div id="panel"></div>
+<canvas id="telemetry" width="320" height="190"></canvas>
+<canvas id="compass" width="138" height="138"></canvas>
+
+<div id="overlay">
+  <div class="box">
+    <div class="spinner"></div>
+    <h2>Charting the Leeward Islands…</h2>
+    <p>Loading the WebGPU renderer and building the sea. First boot compiles shaders — a few seconds.</p>
+    <div id="err"></div>
+  </div>
+</div>
+
+<!-- Classic script (runs before the module): catches module load/resolve failures,
+     which the module's own handlers can't, plus a watchdog for a stalled boot. -->
+<script>
+  window.__booted = false;
+  window.addEventListener('error', function (e) {
+    if (window.__booted) return;
+    var ov = document.getElementById('overlay'); if (!ov) return;
+    var sp = ov.querySelector('.spinner'); if (sp) sp.style.display = 'none';
+    var h = ov.querySelector('h2'); if (h) h.textContent = 'Could not start the simulator';
+    var p = ov.querySelector('p'); if (p) p.textContent = 'A script failed to load or run. Details:';
+    var eb = document.getElementById('err');
+    if (eb) { eb.style.display = 'block';
+      var msg = e && (e.message || e.error);
+      eb.textContent = msg ? (msg + (e.filename ? '\n' + e.filename + ':' + (e.lineno||'') : '')) : String(e); }
+  }, true);
+  setTimeout(function () {
+    if (window.__booted) return;
+    var ov = document.getElementById('overlay'); if (!ov) return;
+    var h = ov.querySelector('h2');
+    if (h && h.textContent.indexOf('Could not') === -1) {
+      h.textContent = 'Still loading…';
+      ov.querySelector('p').textContent =
+        'Modules are taking a while. Check your connection, or open DevTools → Console for errors. Needs Chrome or Edge with WebGPU.';
+    }
+  }, 12000);
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.webgpu.min.js",
+    "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.webgpu.min.js",
+    "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.tsl.min.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import {
+  Fn, float, vec2, vec3, sin, dot, max, mix, clamp, smoothstep, pow,
+  normalize, length, positionLocal, time, positionWorld, cameraPosition, oneMinus, attribute, uniform, uv
+} from 'three/tsl';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const errBox = document.getElementById('err');
+function fatal(e) {
+  console.error(e);
+  const ov = document.getElementById('overlay');
+  ov.classList.remove('hidden');
+  ov.querySelector('.spinner').style.display = 'none';
+  ov.querySelector('h2').textContent = 'Could not start the simulator';
+  ov.querySelector('p').textContent = 'Your browser needs WebGPU or WebGL2 (use a recent Chrome/Edge). Details:';
+  errBox.style.display = 'block';
+  errBox.textContent = (e && (e.stack || e.message)) ? (e.stack || e.message) : String(e);
+}
+window.addEventListener('error', (ev) => { if (!window.__booted) fatal(ev.error || ev.message); });
+window.addEventListener('unhandledrejection', (ev) => fatal(ev.reason));
+
+// ============================================================================
+// Tunable parameters (driven by the control panel)
+// ============================================================================
+const P = {
+  hKp: 1.8, hKi: 0.05, hKd: 1.1,        // heading PID  (error rad -> rudder rad)
+  sKp: 0.10, sKi: 0.03, sKd: 0.0,        // speed PID    (error u/s -> throttle 0..1)
+  desiredSpeed: 22,
+  desiredHeadingDeg: 90,
+  mode: 'tour',                          // 'tour' | 'hold' | 'goto'
+  curOn: true,  curStrength: 6,  curDirDeg: 205,
+  windOn: true, windStrength: 5, windDirDeg: 60,
+  tideOn: true,
+  stormOn: false, stormIntensity: 0.7,
+  paused: false,
+  // navigation + estimation
+  usePlanner: true,                      // A* path planning (tour/goto)
+  navOnEstimate: true,                   // steer using the Kalman position estimate vs. true position
+  feedForward: false,                    // pre-crab using the estimated current
+  gpsNoise: 5,                           // GPS std-dev (world units)
+  showPath: true, showGps: true,
+  // path following + grounding
+  lookahead: 26,                         // pure-pursuit lookahead (smaller = hugs line tighter)
+  xteGain: 0.012,                        // cross-track correction gain (bigger = snaps to line harder)
+  draft: 2.6,                            // min water depth the hull needs to float
+  // sky & time
+  autoDay: true, timeOfDay: 9.5, dayLength: 120,   // hours; dayLength = real seconds per full day
+};
+const DEFAULTS = JSON.parse(JSON.stringify(P));
+
+const BOAT = { Tmax: 95, Cu: 0.095, Cv: 0.7, Krud: 0.095, Cr: 2.4, Izz: 1.0, m: 1.0, mv: 1.6, deltaMax: 0.6 };
+
+const d2r = (d) => d * Math.PI / 180, r2d = (r) => r * 180 / Math.PI;
+const clampJS = (v, a, b) => Math.min(b, Math.max(a, v));
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const smooth01 = (t) => t*t*(3-2*t);
+const lerp = (a,b,t)=>a+(b-a)*t;
+
+// ============================================================================
+// Shared world model — ocean waves + island layout (used by GPU and CPU)
+// ============================================================================
+// Spread-spectrum ocean: 11 wavelets whose headings step by the golden angle
+// (137.5°) so none line up, with geometric wavelengths, gravity-wave dispersion
+// speeds, and a flattened amplitude spectrum so no single swell forms "corduroy"
+// rows. The same params drive the GPU surface and the CPU sampler that floats the boat.
+const WAVES = (() => {
+  const out = []; let dirDeg = 18, len = 112;
+  for (let i=0;i<11;i++){
+    const a = dirDeg*Math.PI/180, freq = (2*Math.PI)/len;
+    out.push({ nx: Math.cos(a), ny: Math.sin(a), freq,
+               amp: Math.sqrt(len)*0.033, speed: Math.sqrt(3.0*freq) });
+    dirDeg = (dirDeg + 137.5) % 360; len *= 0.80;
+  }
+  return out;
+})();
+
+function waveHeightJS(x, z, t) {
+  let h = 0;
+  for (const w of WAVES) h += Math.sin((x*w.nx + z*w.ny)*w.freq + t*w.speed) * w.amp;
+  return h;
+}
+
+const K = 220;
+const proj = (lon, lat) => ({ x: (lon + 65.8) * K, z: -(lat - 17.0) * K });
+const ISLANDS = [
+  ['Puerto Rico (E)', -66.40, 18.22, 150, 26],
+  ['Vieques',         -65.45, 18.13,  26, 10],
+  ['Culebra',         -65.30, 18.31,  13,  9],
+  ['St. Thomas',      -64.93, 18.34,  17, 16],
+  ['St. John',        -64.73, 18.33,  12, 14],
+  ['Tortola',         -64.62, 18.43,  16, 18],
+  ['Virgin Gorda',    -64.40, 18.48,  13, 14],
+  ['Anegada',         -64.33, 18.73,  15,  3],
+  ['St. Martin',      -63.05, 18.07,  17, 13],
+  ['Anguilla',        -63.05, 18.22,  15,  4],
+  ['St. Barths',      -62.83, 17.90,   9, 10],
+  ['Saba',            -63.23, 17.63,   6, 17],
+  ['St. Eustatius',   -62.98, 17.49,   7, 13],
+  ['St. Kitts',       -62.75, 17.34,  19, 22],
+  ['Nevis',           -62.58, 17.15,  12, 20],
+  ['Barbuda',         -61.78, 17.63,  17,  3],
+  ['Antigua',         -61.80, 17.07,  19, 12],
+  ['Montserrat',      -62.19, 16.74,  12, 20],
+  ['Guadeloupe (N)',  -61.58, 16.25,  30, 24],
+].map(([name, lon, lat, r, h]) => { const p = proj(lon, lat); return { name, x: p.x, z: p.z, r, h }; });
+const BYNAME = Object.fromEntries(ISLANDS.map(i => [i.name, i]));
+
+const MAP = { minX: -150, maxX: 950, minZ: -400, maxZ: 200 };
+MAP.cx = (MAP.minX + MAP.maxX) / 2; MAP.cz = (MAP.minZ + MAP.maxZ) / 2;
+
+function hash(ix, iz) { let n = ix*374761393 + iz*668265263; n = (n ^ (n>>13))*1274126177;
+  return ((n ^ (n>>16)) >>> 0) / 4294967295; }
+function vnoise(x, z) { const ix=Math.floor(x), iz=Math.floor(z), fx=x-ix, fz=z-iz;
+  const u=fx*fx*(3-2*fx), v=fz*fz*(3-2*fz);
+  const a=hash(ix,iz), b=hash(ix+1,iz), c=hash(ix,iz+1), d=hash(ix+1,iz+1);
+  return a*(1-u)*(1-v) + b*u*(1-v) + c*(1-u)*v + d*u*v; }
+function fbm(x, z) { let s=0, amp=0.5, f=1; for (let o=0;o<4;o++){ s+=amp*vnoise(x*f,z*f); f*=2; amp*=0.5; } return s; }
+
+function terrainHeight(x, z) {
+  let h = -6;
+  for (const isl of ISLANDS) {
+    const dx = x-isl.x, dz = z-isl.z, d = Math.hypot(dx, dz), ang = Math.atan2(dz, dx);
+    const coast = isl.r * (1 + 0.42*(fbm(Math.cos(ang)*2 + isl.x*0.01, Math.sin(ang)*2 + isl.z*0.01) - 0.5)*2);
+    const t = 1 - clampJS(d/coast, 0, 1); if (t <= 0) continue;
+    const dome = Math.pow(smooth01(t), 1.4);
+    const peak = isl.h*dome + (fbm(x*0.05+isl.x, z*0.05-isl.z) - 0.5)*isl.h*0.5*dome;
+    if (peak > h) h = peak;
+  }
+  return h;
+}
+
+// ============================================================================
+// PID controller (with derivative filtering + integral clamping anti-windup)
+// ============================================================================
+class PID {
+  constructor(){ this.reset(); }
+  reset(){ this.i = 0; this.prevMeas = 0; this.dFilt = 0; this.started = false;
+           this.p = 0; this.iTerm = 0; this.d = 0; this.out = 0; }
+  // Derivative-on-measurement (no setpoint-change kick) + conditional-integration
+  // anti-windup (stops integrating only when it would deepen saturation).
+  step(err, meas, dt, kp, ki, kd, outMin, outMax, isAngle) {
+    dt = Math.max(dt, 1e-4);
+    this.p = kp * err;
+    if (!this.started) { this.prevMeas = meas; this.started = true; }
+    let dm = meas - this.prevMeas; if (isAngle) dm = wrap(dm); dm /= dt;
+    this.dFilt += (dm - this.dFilt) * Math.min(1, dt * 8);
+    this.d = -kd * this.dFilt;
+    const iTry = this.i + err * dt;
+    let out = this.p + ki * iTry + this.d;
+    const sat = out > outMax ? 1 : (out < outMin ? -1 : 0);
+    if (sat === 0 || Math.sign(err) !== sat) this.i = iTry;     // integrate unless it worsens saturation
+    out = clampJS(this.p + ki * this.i + this.d, outMin, outMax);
+    this.iTerm = ki * this.i; this.prevMeas = meas; this.out = out;
+    return out;
+  }
+}
+const headingPID = new PID(), speedPID = new PID();
+
+// ============================================================================
+// Disturbances — current (+tides), wind (+gusts), wave push, storm
+// ============================================================================
+let stormFactor = 0;            // eased 0..1
+function snoise(t){ return (Math.sin(t*1.3) + 0.5*Math.sin(t*3.1+1.7) + 0.25*Math.sin(t*7.7+4.2)) / 1.75; }
+
+function sampleDisturb(x, z, t) {
+  const cur = { x: 0, z: 0 }, wind = { x: 0, z: 0 }, wave = { x: 0, z: 0 };
+
+  if (P.curOn) {
+    let mag = P.curStrength, dir = d2r(P.curDirDeg);
+    if (P.tideOn) { const o = t * (2*Math.PI/45);     // ~45s tidal cycle (sped up for demo)
+      mag *= 0.55 + 0.45*Math.sin(o); dir += 0.35*Math.sin(o*0.7); }
+    mag *= 1 + 0.6*stormFactor;
+    cur.x = Math.cos(dir)*mag; cur.z = Math.sin(dir)*mag;
+  }
+  if (P.windOn) {
+    const dir = d2r(P.windDirDeg);
+    const gust = (0.35 + 0.9*stormFactor) * P.windStrength * snoise(t*1.0 + x*0.001 + z*0.001);
+    const mag = P.windStrength*(1 + 1.6*stormFactor) + gust;
+    wind.x = Math.cos(dir)*mag; wind.z = Math.sin(dir)*mag;
+  }
+  // wave orbital push from local surface slope
+  const e = 3.0, wc = 2.2*(1 + 1.5*stormFactor);
+  const hx = (waveHeightJS(x+e, z, t) - waveHeightJS(x-e, z, t)) / (2*e);
+  const hz = (waveHeightJS(x, z+e, t) - waveHeightJS(x, z-e, t)) / (2*e);
+  wave.x = -hx*wc; wave.z = -hz*wc;
+  return { cur, wind, wave };
+}
+
+// ============================================================================
+// A* planner (current-aware) — grid over the map, land inflated as obstacles
+// ============================================================================
+const GRID = { minX:-180, maxX:980, minZ:-430, maxZ:230, cell:12 };
+GRID.cols = Math.ceil((GRID.maxX-GRID.minX)/GRID.cell);
+GRID.rows = Math.ceil((GRID.maxZ-GRID.minZ)/GRID.cell);
+const gIdx = (c,r)=> r*GRID.cols + c;
+const cellCenter = (c,r)=> ({ x: GRID.minX+(c+0.5)*GRID.cell, z: GRID.minZ+(r+0.5)*GRID.cell });
+const worldToCell = (x,z)=> ({ c: clampJS(Math.floor((x-GRID.minX)/GRID.cell),0,GRID.cols-1),
+                               r: clampJS(Math.floor((z-GRID.minZ)/GRID.cell),0,GRID.rows-1) });
+let BLOCKED = null, DLAND = null;
+function buildBlocked(inflate=2) {
+  const raw = new Uint8Array(GRID.cols*GRID.rows);
+  for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++){ const p=cellCenter(c,r);
+    raw[gIdx(c,r)] = terrainHeight(p.x,p.z) > -2.5 ? 1 : 0; }
+  const blk = new Uint8Array(GRID.cols*GRID.rows);
+  for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++){ if(!raw[gIdx(c,r)]) continue;
+    for (let dr=-inflate;dr<=inflate;dr++) for (let dc=-inflate;dc<=inflate;dc++){ const rr=r+dr,cc=c+dc;
+      if (rr>=0&&rr<GRID.rows&&cc>=0&&cc<GRID.cols) blk[gIdx(cc,rr)]=1; } }
+  return blk;
+}
+// distance (in cells) to nearest land/blocked cell — for mid-channel routing preference
+function buildDistLand() {
+  const N=GRID.cols*GRID.rows; DLAND=new Int16Array(N).fill(9999); const q=[]; let head=0;
+  for (let i=0;i<N;i++) if (BLOCKED[i]) { DLAND[i]=0; q.push(i); }
+  while (head<q.length){ const ci=q[head++], r=Math.floor(ci/GRID.cols), c=ci-r*GRID.cols;
+    for (const [dc,dr] of [[1,0],[-1,0],[0,1],[0,-1]]){ const cc=c+dc, rr=r+dr;
+      if (cc<0||cc>=GRID.cols||rr<0||rr>=GRID.rows) continue; const ni=gIdx(cc,rr);
+      if (DLAND[ni] > DLAND[ci]+1){ DLAND[ni]=DLAND[ci]+1; q.push(ni); } } }
+}
+function nearestFree(c,r){ if(!BLOCKED[gIdx(c,r)]) return {c,r};
+  for (let rad=1;rad<60;rad++) for (let dr=-rad;dr<=rad;dr++) for (let dc=-rad;dc<=rad;dc++){ const rr=r+dr,cc=c+dc;
+    if (rr<0||rr>=GRID.rows||cc<0||cc>=GRID.cols) continue; if(!BLOCKED[gIdx(cc,rr)]) return {c:cc,r:rr}; } return {c,r}; }
+class Heap { constructor(){ this.a=[]; }
+  push(n){ const a=this.a; a.push(n); let i=a.length-1; while(i>0){ const p=(i-1)>>1; if(a[p].f<=a[i].f) break; [a[p],a[i]]=[a[i],a[p]]; i=p; } }
+  pop(){ const a=this.a, top=a[0], last=a.pop(); if(a.length){ a[0]=last; let i=0; for(;;){ let l=2*i+1,r=2*i+2,s=i;
+    if(l<a.length&&a[l].f<a[s].f)s=l; if(r<a.length&&a[r].f<a[s].f)s=r; if(s===i)break; [a[s],a[i]]=[a[i],a[s]]; i=s; } } return top; }
+  get size(){ return this.a.length; } }
+function planPath(sx, sz, gx, gz) {
+  if (!BLOCKED) return [{x:sx,z:sz},{x:gx,z:gz}];
+  const sC=worldToCell(sx,sz), gC=worldToCell(gx,gz);
+  const s=nearestFree(sC.c,sC.r), g=nearestFree(gC.c,gC.r);
+  const N=GRID.cols*GRID.rows, gScore=new Float64Array(N).fill(Infinity), came=new Int32Array(N).fill(-1), closed=new Uint8Array(N);
+  const h=(c,r)=>Math.hypot(c-g.c,r-g.r)*GRID.cell;
+  const open=new Heap(), sI=gIdx(s.c,s.r); gScore[sI]=0; open.push({c:s.c,r:s.r,f:h(s.c,s.r)});
+  let cu=null;
+  if (P.curOn && P.curStrength>0) { const dir=d2r(P.curDirDeg); cu={x:Math.cos(dir),z:Math.sin(dir),mag:P.curStrength}; }
+  const dirs=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  const gI=gIdx(g.c,g.r); let found=false;
+  while(open.size){ const n=open.pop(), ni=gIdx(n.c,n.r); if(closed[ni])continue; closed[ni]=1; if(ni===gI){found=true;break;}
+    for(const [dc,dr] of dirs){ const cc=n.c+dc, rr=n.r+dr; if(cc<0||cc>=GRID.cols||rr<0||rr>=GRID.rows)continue;
+      const ci=gIdx(cc,rr); if(BLOCKED[ci]||closed[ci])continue;
+      if(dc&&dr){ if(BLOCKED[gIdx(n.c+dc,n.r)]||BLOCKED[gIdx(n.c,n.r+dr)])continue; }   // no corner cutting
+      const ml=Math.hypot(dc,dr), base=ml*GRID.cell; let pen=1;
+      if(cu){ const against=clampJS(-((dc/ml)*cu.x+(dr/ml)*cu.z),0,1); pen += 1.4*against*(cu.mag/8); }
+      if(DLAND){ const near=clampJS((4-DLAND[ci])/4,0,1); pen += 2.2*near*near; }   // hug deep water
+      const tg=gScore[ni]+base*pen;
+      if(tg<gScore[ci]){ gScore[ci]=tg; came[ci]=ni; open.push({c:cc,r:rr,f:tg+h(cc,rr)}); } } }
+  if(!found) return [{x:sx,z:sz},{x:gx,z:gz}];
+  const cells=[]; let cur=gI; while(cur!==-1){ const r=Math.floor(cur/GRID.cols),c=cur-r*GRID.cols; cells.push({c,r}); cur=came[cur]; }
+  cells.reverse();
+  let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz}; pts[pts.length-1]={x:gx,z:gz};
+  const clearLOS=(a,b)=>{ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.cell*0.5));
+    for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
+      const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>-3.5)return false; } return true; };
+  const simp=[pts[0]]; let i=0;
+  while(i<pts.length-1){ let j=pts.length-1; while(j>i+1&&!clearLOS(pts[i],pts[j]))j--; simp.push(pts[j]); i=j; }
+  return simp;
+}
+
+// ============================================================================
+// Kalman filter — estimates [px, pz, cx, cz] (position + current/drift vector)
+// Predict from compass + speed-log (proprioception); update from noisy GPS.
+// ============================================================================
+const mMul=(A,B)=>{const n=A.length,m=B[0].length,k=B.length,C=Array.from({length:n},()=>new Array(m).fill(0));
+  for(let i=0;i<n;i++)for(let j=0;j<m;j++){let s=0;for(let t=0;t<k;t++)s+=A[i][t]*B[t][j];C[i][j]=s;}return C;};
+const mT=A=>A[0].map((_,j)=>A.map(r=>r[j]));
+const mAdd=(A,B)=>A.map((r,i)=>r.map((v,j)=>v+B[i][j]));
+const mSub=(A,B)=>A.map((r,i)=>r.map((v,j)=>v-B[i][j]));
+const mEye=n=>Array.from({length:n},(_,i)=>Array.from({length:n},(_,j)=>i===j?1:0));
+const mInv2=M=>{const [[a,b],[c,d]]=M,det=a*d-b*c||1e-9;return [[d/det,-b/det],[-c/det,a/det]];};
+class KalmanFilter {
+  constructor(px,pz){ this.x=[[px],[pz],[0],[0]]; this.P=[[25,0,0,0],[0,25,0,0],[0,0,100,0],[0,0,0,100]]; }
+  predict(uwx,uwz,dt){ const x=this.x;
+    this.x=[[x[0][0]+(x[2][0]+uwx)*dt],[x[1][0]+(x[3][0]+uwz)*dt],[x[2][0]],[x[3][0]]];
+    const F=[[1,0,dt,0],[0,1,0,dt],[0,0,1,0],[0,0,0,1]];
+    const qP=(0.15*dt)**2, qC=(0.4*dt)**2*100;
+    const Q=[[qP,0,0,0],[0,qP,0,0],[0,0,qC,0],[0,0,0,qC]];
+    this.P=mAdd(mMul(mMul(F,this.P),mT(F)),Q); }
+  update(zx,zz,R){ const H=[[1,0,0,0],[0,1,0,0]];
+    const y=[[zx-this.x[0][0]],[zz-this.x[1][0]]];
+    const S=mAdd(mMul(mMul(H,this.P),mT(H)),[[R,0],[0,R]]);
+    const Kg=mMul(mMul(this.P,mT(H)),mInv2(S));
+    this.x=mAdd(this.x,mMul(Kg,y));
+    this.P=mMul(mSub(mEye(4),mMul(Kg,H)),this.P); }
+  get est(){ return { px:this.x[0][0], pz:this.x[1][0], cx:this.x[2][0], cz:this.x[3][0] }; }
+}
+let kf = null, gpsAccum = 0, lastGps = null;
+let gaussSpare = null;
+function randn(){ if(gaussSpare!==null){ const v=gaussSpare; gaussSpare=null; return v; }
+  const u=Math.random()||1e-9, w=Math.random(), r=Math.sqrt(-2*Math.log(u)), a=2*Math.PI*w; gaussSpare=r*Math.sin(a); return r*Math.cos(a); }
+
+// ============================================================================
+// Boat dynamics (3-DOF: surge u, sway v, yaw r)
+// ============================================================================
+const boat3 = { x: BYNAME['Culebra'].x + 50, z: BYNAME['Culebra'].z + 40,
+  psi: 0, u: 8, v: 0, r: 0, thr: 0.4, delta: 0, speedWater: 8, speedGround: 8 };
+
+function stepDynamics(s, dt, t) {
+  const cos = Math.cos(s.psi), sin = Math.sin(s.psi);
+  const vwx = s.u*cos - s.v*sin, vwz = s.u*sin + s.v*cos;      // velocity over ground (world)
+  const dist = sampleDisturb(s.x, s.z, t);
+  const rwx = vwx - dist.cur.x, rwz = vwz - dist.cur.z;        // velocity through water (world)
+  const ur =  rwx*cos + rwz*sin;                              // body-frame relative surge
+  const vr = -rwx*sin + rwz*cos;                              // body-frame relative sway
+
+  let Fx = BOAT.Tmax*s.thr - BOAT.Cu*ur*Math.abs(ur);
+  let Fy = -BOAT.Cv*vr*Math.abs(vr);
+  let N  = BOAT.Krud*s.delta*ur - BOAT.Cr*s.r;                // rudder moment scales with speed thru water
+
+  const fwx = dist.wind.x + dist.wave.x, fwz = dist.wind.z + dist.wave.z;
+  Fx +=  fwx*cos + fwz*sin;
+  Fy += -fwx*sin + fwz*cos;
+
+  // shallow water: extra hull drag as the keel nears the seabed (only kicks in close to
+  // the draft depth, NOT in the open ~6-deep ocean, so cruising speed is unaffected)
+  const depthHere = -terrainHeight(s.x, s.z);
+  if (depthHere < P.draft + 2.5) Fx -= BOAT.Cu*ur*Math.abs(ur) * clampJS((P.draft+2.5-depthHere)/2.5, 0, 1) * 8;
+
+  s.u += dt*Fx/BOAT.m;
+  s.v += dt*Fy/BOAT.mv;
+  s.r += dt*N/BOAT.Izz;
+  s.psi = wrap(s.psi + dt*s.r);
+
+  const nc = Math.cos(s.psi), ns = Math.sin(s.psi);
+  const nvwx = s.u*nc - s.v*ns, nvwz = s.u*ns + s.v*nc;
+  const nx = s.x + dt*nvwx, nz = s.z + dt*nvwz;
+  if (-terrainHeight(nx, nz) < P.draft) {        // keel would touch bottom → aground, don't advance
+    s.grounded = true; s.u *= -0.05; s.v *= 0.2; s.r *= 0.4;
+  } else { s.grounded = false; s.x = nx; s.z = nz; }
+  s.speedWater = ur;
+  s.speedGround = Math.hypot(nvwx, nvwz);
+}
+
+// ============================================================================
+// Guidance — A* path + pure-pursuit, producing desired heading + speed
+// ============================================================================
+const tourNames = ['Culebra','St. Thomas','Tortola','Virgin Gorda','St. Martin',
+                   'St. Barths','St. Kitts','Nevis','Antigua','Barbuda','Anegada'];
+const route = tourNames.map(n => BYNAME[n]).filter(Boolean);
+let wpIdx = 0;
+let gotoTarget = null;            // {x,z} from double-click
+let path = null;                  // current planned waypoint list
+let planKey = '';                 // change-detection for replanning
+
+function approachPoint(isl) {
+  if (isl.appAng === undefined) isl.appAng = Math.random()*Math.PI*2;
+  let p = { x: isl.x + Math.cos(isl.appAng)*(isl.r+34), z: isl.z + Math.sin(isl.appAng)*(isl.r+34) };
+  if (BLOCKED && terrainHeight(p.x, p.z) > -2.5) {   // snap to navigable water if the approach lands on a shoal
+    const wc = worldToCell(p.x, p.z), fr = nearestFree(wc.c, wc.r); p = cellCenter(fr.c, fr.r);
+  }
+  return p;
+}
+function activeTarget() {
+  if (P.mode === 'goto' && gotoTarget) return gotoTarget;
+  return approachPoint(route[wpIdx]);
+}
+function navPosition(s) {     // where the autopilot believes it is
+  if (P.navOnEstimate && kf) { const e = kf.est; return { x: e.px, z: e.pz }; }
+  return { x: s.x, z: s.z };
+}
+function replan(s) {
+  if (P.mode === 'hold') { path = null; return; }
+  const from = navPosition(s), tgt = activeTarget();
+  path = P.usePlanner ? planPath(from.x, from.z, tgt.x, tgt.z) : [{x:from.x,z:from.z},{x:tgt.x,z:tgt.z}];
+  updatePathLine();
+}
+function maybeReplan(s, dt) {
+  const key = `${P.mode}|${wpIdx}|${P.usePlanner}|${gotoTarget?(gotoTarget.x|0)+','+(gotoTarget.z|0):'-'}`;
+  replanTimer -= dt;
+  if (key !== planKey || replanTimer <= 0 || !path) { planKey = key; replanTimer = 3.0; replan(s); }
+}
+let replanTimer = 0;
+
+function pursuit(pts, pos, lookahead) {
+  let best=Infinity, bi=0, bx=pts[0].x, bz=pts[0].z;
+  for (let i=0;i<pts.length-1;i++){ const a=pts[i], b=pts[i+1];
+    const abx=b.x-a.x, abz=b.z-a.z, L2=abx*abx+abz*abz||1e-9;
+    let tt=clampJS(((pos.x-a.x)*abx+(pos.z-a.z)*abz)/L2,0,1);
+    const px=a.x+abx*tt, pz=a.z+abz*tt, d=Math.hypot(pos.x-px,pos.z-pz);
+    if (d<best){ best=d; bi=i; bx=px; bz=pz; } }
+  // signed cross-track + path tangent at the nearest segment
+  const a=pts[bi], b=pts[Math.min(bi+1, pts.length-1)];
+  let tx=b.x-a.x, tz=b.z-a.z; const tl=Math.hypot(tx,tz)||1; tx/=tl; tz/=tl;
+  const xteSigned = tx*(pos.z-a.z) - tz*(pos.x-a.x);
+  let remain=lookahead, ci=bi, cx=bx, cz=bz;
+  while (ci<pts.length-1){ const b2=pts[ci+1], segd=Math.hypot(b2.x-cx,b2.z-cz);
+    if (segd>=remain){ const f=remain/segd; return { x:cx+(b2.x-cx)*f, z:cz+(b2.z-cz)*f, xte:best, xteSigned }; }
+    remain-=segd; cx=b2.x; cz=b2.z; ci++; }
+  return { x:pts[pts.length-1].x, z:pts[pts.length-1].z, xte:best, xteSigned };
+}
+
+function guidance(s, t) {
+  if (P.mode === 'hold')
+    return { desPsi: d2r(P.desiredHeadingDeg), desSpeed: P.desiredSpeed, course: d2r(P.desiredHeadingDeg), name: '(holding heading)', xte: 0 };
+
+  const nav = navPosition(s), tgt = activeTarget();
+  const dFinal = Math.hypot(tgt.x - nav.x, tgt.z - nav.z);
+  if (!path) replan(s);
+  const aim = pursuit(path, nav, P.lookahead);
+  // pure-pursuit heading toward the lookahead point, plus a cross-track pull onto the line
+  let course = Math.atan2(aim.z - nav.z, aim.x - nav.x);
+  course = course + clampJS(P.xteGain * aim.xteSigned, -0.7, 0.7);
+
+  // disturbance feed-forward: point upstream so water-vel + current = desired course
+  let desPsi = course;
+  if (P.feedForward && kf) {
+    const e = kf.est, spd = Math.max(P.desiredSpeed, 6);
+    const wx = Math.cos(course)*spd - e.cx, wz = Math.sin(course)*spd - e.cz;
+    desPsi = Math.atan2(wz, wx);
+  }
+  let desSpeed = Math.min(P.desiredSpeed, Math.max(5, dFinal*0.22));
+
+  if (P.mode === 'tour' && dFinal < 24) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
+  if (P.mode === 'goto' && dFinal < 12) { desSpeed = 0; }
+  const name = P.mode === 'goto' ? 'destination' : route[wpIdx].name;
+  return { desPsi, desSpeed, course, dist: dFinal, name, xte: aim.xte };
+}
+
+// run-aground recovery: back straight out of the shoal, then replan from open water
+function enterRecovery(s){ s.recovering=true; s.recoverT=0; s.recoverSX=s.x; s.recoverSZ=s.z;
+  s.recoverCount=(s.recoverCount||0)+1; headingPID.reset(); speedPID.reset(); }
+function runRecovery(s, dt, t){
+  s.delta = 0; s.thr = -0.5;                 // rudder centred, reverse engine
+  stepDynamics(s, dt, t);
+  s.recoverT += dt;
+  const backed = Math.hypot(s.x-s.recoverSX, s.z-s.recoverSZ);
+  const clear  = -terrainHeight(s.x, s.z) - P.draft;
+  if ((clear > 4 && backed > 16) || s.recoverT > 6) {
+    s.recovering=false; s.thr=0; s.u=Math.max(s.u,0);
+    planKey=''; path=null;                   // force a fresh route from here
+    if (s.recoverCount >= 3) { s.recoverCount=0;     // stop fighting an unreachable target
+      if (P.mode==='tour') wpIdx=(wpIdx+1)%route.length;
+      else if (P.mode==='goto') gotoTarget=null; }
+  }
+}
+
+// ============================================================================
+// Boot
+// ============================================================================
+let renderer, scene, camera, controls, boatMesh;
+let lastGuide = { name: '—', desPsi: 0, desSpeed: 0 };
+const clock = new THREE.Clock();
+const raycaster = new THREE.Raycaster();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+
+init().catch(fatal);
+
+async function init() {
+  renderer = new THREE.WebGPURenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.getElementById('app').appendChild(renderer.domElement);
+  await renderer.init();
+
+  scene = new THREE.Scene();
+  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain();
+  boatMesh = buildBoat(); buildCamera();
+  buildClouds(); buildBoatShadow(); buildIslandLights();
+  buildNavVisuals();
+  buildWake();
+  buildLabels();
+  buildPanel();
+  initInput();
+
+  BLOCKED = buildBlocked();
+  buildDistLand();
+  kf = new KalmanFilter(boat3.x, boat3.z);
+
+  // heading the boat at the first waypoint to start
+  const t0 = activeTarget();
+  boat3.psi = Math.atan2(t0.z - boat3.z, t0.x - boat3.x);
+  replan(boat3);
+
+  let firstFrame = true, fpsT = 0, fpsN = 0;
+
+  renderer.setAnimationLoop(() => {
+    const dt = Math.min(clock.getDelta(), 0.04);
+    const t = clock.elapsedTime;
+
+    updateEnvironment(dt);   // sun across the sky, sunrise/sunset palette, shadows, clouds, storm
+
+    if (!P.paused) {
+      maybeReplan(boat3, dt);
+      if (boat3.recovering) {
+        runRecovery(boat3, dt, t);
+      } else {
+        const g = guidance(boat3, t);
+        lastGuide = g;
+        const herr = wrap(g.desPsi - boat3.psi);
+        boat3.delta = clampJS(headingPID.step(herr, boat3.psi, dt, P.hKp, P.hKi, P.hKd, -BOAT.deltaMax, BOAT.deltaMax, true), -BOAT.deltaMax, BOAT.deltaMax);
+        const serr = g.desSpeed - boat3.u;
+        boat3.thr = clampJS(speedPID.step(serr, boat3.u, dt, P.sKp, P.sKi, P.sKd, 0, 1, false), 0, 1);
+        stepDynamics(boat3, dt, t);
+        if (boat3.grounded) enterRecovery(boat3);     // ran aground → start backing out
+        recordTelemetry(t, herr, boat3.u, g.desSpeed);
+      }
+      stepEstimator(dt);
+    }
+
+    placeBoat(boatMesh, boat3, t);
+    followCamera(boat3, dt);
+    updateNavVisuals(dt);
+    controls.update();
+    if (fpsMode) updateFpsCam(t);
+    activeCam = fpsMode ? fpsCam : camera;
+    renderer.render(scene, activeCam);
+
+    updateLabels();
+    drawTelemetry(); drawCompass();
+    updateReadouts();
+
+    fpsN++; fpsT += dt;
+    if (fpsT >= 0.5) { ui.fps.textContent = Math.round(fpsN/fpsT) + ' fps'; fpsN = 0; fpsT = 0; }
+
+    if (firstFrame) { firstFrame = false; window.__booted = true;
+      setTimeout(() => document.getElementById('overlay').classList.add('hidden'), 250); }
+  });
+
+  window.addEventListener('resize', onResize);
+}
+
+// ============================================================================
+// Scene building
+// ============================================================================
+// ---- shared sun/sky uniforms (used by the sky dome AND the ocean glint) ----
+const uSunDir  = uniform(new THREE.Vector3(0.4, 0.8, 0.3));
+const uSunCol  = uniform(new THREE.Vector3(1, 0.96, 0.85));
+const uSunInt  = uniform(1.0);
+const uZenith  = uniform(new THREE.Vector3(0.12, 0.43, 0.78));
+const uHorizon = uniform(new THREE.Vector3(0.76, 0.88, 0.96));
+const uDayBright = uniform(1.0);
+const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
+
+let skyMat, skyMesh, fog, sunLight, hemiLight, seaSkirt;
+const _sun = new THREE.Vector3(0.4, 0.8, 0.3);
+const C = {
+  zenNight:new THREE.Color(0x05070f), zenDay:new THREE.Color(0x1d6fc6), zenGold:new THREE.Color(0x3a3570),
+  horNight:new THREE.Color(0x0a1830), horDay:new THREE.Color(0xc4e3f2), horGold:new THREE.Color(0xff7e3c),
+  sunDay:new THREE.Color(0xfff3d4),   sunGold:new THREE.Color(0xff7a30),
+  ltNight:new THREE.Color(0x3b4f86),  ltDay:new THREE.Color(0xfff2da),  ltGold:new THREE.Color(0xff9a52),
+  stormGray:new THREE.Color(0x55606a),
+};
+const _cZen=new THREE.Color(), _cHor=new THREE.Color(), _cSun=new THREE.Color(), _cLight=new THREE.Color();
+
+function buildSky() {
+  const geo = new THREE.SphereGeometry(5200, 40, 24);
+  skyMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false });
+  skyMat.fog = false;                                   // dome must not be fogged into white
+  const vd = normalize(positionLocal);
+  const grad = smoothstep(-0.12, 0.55, vd.y);
+  const col = mix(uHorizon, uZenith, grad).toVar();
+  const sd = max(dot(vd, normalize(uSunDir)), 0.0);
+  const glow = pow(sd, 7.0).mul(0.5).add(pow(sd, 280.0).mul(7.0));   // soft halo + sun disk
+  col.addAssign(uSunCol.mul(glow).mul(uSunInt));
+  skyMat.colorNode = col;
+  skyMesh = new THREE.Mesh(geo, skyMat); skyMesh.renderOrder = -10;
+  skyMesh.position.set(MAP.cx, 0, MAP.cz); scene.add(skyMesh);
+  fog = new THREE.Fog(0xbfe0f0, 1500, 4200); scene.fog = fog;
+}
+// a big calm sea plane filling out to the horizon (so the wave-ocean's edge never shows white)
+function buildSeaSkirt() {
+  const g = new THREE.PlaneGeometry(16000, 16000); g.rotateX(-Math.PI/2);
+  seaSkirt = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x0a3048 }));
+  seaSkirt.position.y = -0.4; seaSkirt.renderOrder = -5; scene.add(seaSkirt);
+}
+function buildLights() {
+  sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
+  sunLight.position.set(420, 620, 360);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.set(2048, 2048);
+  const sc = sunLight.shadow.camera;
+  sc.left=-360; sc.right=360; sc.top=360; sc.bottom=-360; sc.near=20; sc.far=1800; sc.updateProjectionMatrix();
+  sunLight.shadow.bias = -0.0005; sunLight.shadow.normalBias = 1.4;
+  scene.add(sunLight); scene.add(sunLight.target);
+  hemiLight = new THREE.HemisphereLight(0xbfe6ff, 0x35506b, 0.9); scene.add(hemiLight);
+}
+
+// ---- unified day/night + weather environment, run every frame ----
+function updateEnvironment(dt) {
+  const stormTarget = P.stormOn ? P.stormIntensity : 0;
+  stormFactor += (stormTarget - stormFactor) * Math.min(1, dt*0.6);
+  const sf = stormFactor;
+
+  if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
+  const phi = (P.timeOfDay/24)*Math.PI*2;
+  _sun.set(Math.sin(phi), -Math.cos(phi), 0.28).normalize();      // sunrise E, noon up, sunset W
+  const e = _sun.y;
+  const day  = clampJS((e+0.04)/0.30, 0, 1);
+  const warm = clampJS(1 - Math.abs(e-0.03)/0.22, 0, 1) * clampJS(day*1.5, 0, 1);
+
+  _cZen.copy(C.zenNight).lerp(C.zenDay, day).lerp(C.zenGold, warm*0.6);
+  _cHor.copy(C.horNight).lerp(C.horDay, day).lerp(C.horGold, warm);
+  _cSun.copy(C.sunDay).lerp(C.sunGold, warm);
+  _cLight.copy(C.ltNight).lerp(C.ltDay, day).lerp(C.ltGold, warm*0.8);
+  if (sf>0){ _cZen.lerp(C.stormGray, sf*0.75); _cHor.lerp(C.stormGray, sf*0.65); _cLight.lerp(C.stormGray, sf*0.6); }
+
+  uZenith.value.set(_cZen.r,_cZen.g,_cZen.b);
+  uHorizon.value.set(_cHor.r,_cHor.g,_cHor.b);
+  uSunDir.value.copy(_sun);
+  uSunCol.value.set(_cSun.r,_cSun.g,_cSun.b);
+  uSunInt.value  = (0.25 + 1.5*day) * (1 - 0.7*sf);
+  uDayBright.value = (0.32 + 0.68*day) * (1 - 0.45*sf);
+  uNight.value = clampJS((0.12 - e) / 0.18, 0, 1);                 // lights come on at dusk
+  if (islandLights) {
+    islandLights.visible = uNight.value > 0.02;
+    islandLights.material.opacity = uNight.value * (0.88 + 0.12*Math.sin(clock.elapsedTime*1.7));   // gentle collective flicker
+  }
+
+  if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b); fog.near=lerp(1500,560,sf); fog.far=lerp(4200,1900,sf); }
+  if (seaSkirt){ const db=uDayBright.value; seaSkirt.material.color.setRGB(0.03*db,0.16*db,0.28*db);
+    seaSkirt.position.x=controls.target.x; seaSkirt.position.z=controls.target.z; }
+
+  sunLight.color.setRGB(_cLight.r,_cLight.g,_cLight.b);
+  sunLight.intensity = (0.25 + 2.4*day) * (1 - 0.65*sf);
+  hemiLight.intensity = (0.5 + 0.6*day) * (1 - 0.4*sf);     // brighter floor so night islands aren't pure black
+  hemiLight.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
+  const D=780;
+  sunLight.position.set(boat3.x + _sun.x*D, Math.max(e,0.06)*D + 80, boat3.z + _sun.z*D);
+  sunLight.target.position.set(boat3.x, 0, boat3.z); sunLight.target.updateMatrixWorld();
+  sunLight.castShadow = day > 0.06;
+
+  renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.4*sf);
+  if (skyMesh) skyMesh.position.set(controls.target.x, 0, controls.target.z);
+  updateClouds(dt, sf, day);
+  updateBoatShadow(day);
+}
+
+// ---- puffy clouds (white → gray with storms, dimmer at night) ----
+let cloudGroups=[], cloudMat, cloudBounds;
+function makeCloudTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=128; const x=c.getContext('2d');
+  const g=x.createRadialGradient(64,64,4,64,64,62);
+  g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.5,'rgba(255,255,255,0.62)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle=g; x.fillRect(0,0,128,128); return new THREE.CanvasTexture(c);
+}
+function buildClouds(){
+  cloudMat=new THREE.SpriteMaterial({ map:makeCloudTexture(), color:0xffffff, transparent:true, opacity:0.9, depthWrite:false });
+  cloudBounds={ minX:MAP.minX-500, maxX:MAP.maxX+500, minZ:MAP.minZ-500, maxZ:MAP.maxZ+500 };
+  for (let i=0;i<18;i++){ const grp=new THREE.Group(); const puffs=3+Math.floor(Math.random()*4);
+    for (let j=0;j<puffs;j++){ const s=new THREE.Sprite(cloudMat); const sc=80+Math.random()*100;
+      s.scale.set(sc, sc*0.6, 1); s.position.set((Math.random()-0.5)*130,(Math.random()-0.5)*24,(Math.random()-0.5)*80); grp.add(s); }
+    grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), 300+Math.random()*150,
+      cloudBounds.minZ+Math.random()*(cloudBounds.maxZ-cloudBounds.minZ));
+    grp.userData.spd=0.6+Math.random()*0.9; scene.add(grp); cloudGroups.push(grp); }
+}
+function updateClouds(dt, sf, day){
+  if(!cloudMat) return;
+  const tint=lerp(1.0,0.36,sf), bright=0.5+0.5*day;
+  cloudMat.color.setRGB(tint*bright, tint*bright, Math.min(1, tint*bright*1.03));
+  cloudMat.opacity = 0.85 * (0.55+0.45*day);
+  const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=8 + 34*sf;
+  for(const grp of cloudGroups){ grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
+    if(grp.position.x>cloudBounds.maxX)grp.position.x=cloudBounds.minX; if(grp.position.x<cloudBounds.minX)grp.position.x=cloudBounds.maxX;
+    if(grp.position.z>cloudBounds.maxZ)grp.position.z=cloudBounds.minZ; if(grp.position.z<cloudBounds.minZ)grp.position.z=cloudBounds.maxZ; }
+}
+
+// ---- island night lights: warm glowing particles on the land, lit after dusk ----
+let islandLights, islandLightPhases;
+function makeDotTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=64; const x=c.getContext('2d');
+  const g=x.createRadialGradient(32,32,1,32,32,30);
+  g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.4,'rgba(255,255,255,0.55)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle=g; x.fillRect(0,0,64,64); return new THREE.CanvasTexture(c);
+}
+function buildIslandLights(){
+  const pos=[], col=[], ph=[];
+  const palette=[[1.0,0.86,0.55],[1.0,0.74,0.40],[1.0,0.48,0.18],[0.72,0.86,1.0]]; // house, lamp, BBQ, cool
+  for (const isl of ISLANDS){
+    const cap=Math.min(Math.floor(isl.r*1.7), 64); let placed=0, tries=0;
+    while (placed<cap && tries<cap*10){ tries++;
+      const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*isl.r*0.92;
+      const x=isl.x+Math.cos(a)*rr, z=isl.z+Math.sin(a)*rr, h=terrainHeight(x,z);
+      if (h < 1.5) continue;                              // only on land above the beach
+      pos.push(x, h+1.0, z);
+      const c = palette[Math.random()<0.12?3 : Math.random()<0.3?2 : Math.random()<0.55?1:0];
+      col.push(c[0],c[1],c[2]); ph.push(Math.random()*Math.PI*2); placed++;
+    }
+  }
+  islandLightPhases = ph;
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('color',    new THREE.Float32BufferAttribute(col,3));
+  const mat=new THREE.PointsMaterial({ size:11, map:makeDotTexture(), vertexColors:true,
+    transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending,
+    sizeAttenuation:false, fog:false });
+  islandLights=new THREE.Points(geo, mat); islandLights.renderOrder=2; scene.add(islandLights);
+}
+
+// ---- fake soft contact shadow under the boat (water doesn't receive real shadows) ----
+let boatShadow;
+function buildBoatShadow(){
+  const g=new THREE.CircleGeometry(6.5,22); g.rotateX(-Math.PI/2);
+  boatShadow=new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color:0x06121c, transparent:true, opacity:0.22, depthWrite:false }));
+  boatShadow.renderOrder=1; scene.add(boatShadow);
+}
+function updateBoatShadow(day){
+  if(!boatShadow) return;
+  boatShadow.visible = day>0.05;
+  const y=waveHeightJS(boat3.x, boat3.z, clock.elapsedTime)+0.07;
+  boatShadow.position.set(boat3.x - _sun.x*2.5, y, boat3.z - _sun.z*2.5);
+  boatShadow.rotation.y = -Math.atan2(_sun.z, _sun.x);
+  boatShadow.scale.set(1 + (1-clampJS(_sun.y,0.05,1))*2.2, 1, 1);
+  boatShadow.material.opacity = 0.26*clampJS(day,0,1);
+}
+
+// ============================================================================
+// Estimator step + navigation visuals (path, GPS pings, estimated position)
+// ============================================================================
+function stepEstimator(dt) {
+  if (!kf) return;
+  // proprioception: speed-through-water along compass heading (assume good compass + log)
+  const uwx = boat3.speedWater * Math.cos(boat3.psi), uwz = boat3.speedWater * Math.sin(boat3.psi);
+  kf.predict(uwx, uwz, dt);
+  gpsAccum += dt;
+  if (gpsAccum >= 1/3) {                      // GPS fix at ~3 Hz
+    gpsAccum = 0;
+    const zx = boat3.x + randn()*P.gpsNoise, zz = boat3.z + randn()*P.gpsNoise;
+    kf.update(zx, zz, Math.max(P.gpsNoise*P.gpsNoise, 0.25));
+    lastGps = { x: zx, z: zz }; spawnGpsPing(zx, zz);
+  }
+}
+
+let pathLine, destRing, estRing, gpsPings = [], gpsPtr = 0;
+function buildNavVisuals() {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3*128), 3));
+  pathLine = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x5fd0ff, transparent: true, opacity: 0.85 }));
+  pathLine.frustumCulled = false; scene.add(pathLine);
+
+  destRing = new THREE.Mesh(new THREE.TorusGeometry(10, 1.2, 8, 24),
+    new THREE.MeshBasicMaterial({ color: 0x5fd0ff, transparent: true, opacity: 0.9 }));
+  destRing.rotation.x = -Math.PI/2; destRing.position.y = 2; scene.add(destRing);
+
+  estRing = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.4, 8, 20),
+    new THREE.MeshBasicMaterial({ color: 0x7be08a, transparent: true, opacity: 0.85 }));
+  estRing.rotation.x = -Math.PI/2; estRing.position.y = 2.2; scene.add(estRing);
+
+  const pingGeo = new THREE.CircleGeometry(3.2, 14); pingGeo.rotateX(-Math.PI/2);
+  for (let i=0;i<24;i++){ const m = new THREE.Mesh(pingGeo, new THREE.MeshBasicMaterial({
+      color: 0xffd27f, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m.position.y = 1.6; m.userData.life = 0; scene.add(m); gpsPings.push(m); }
+}
+function updatePathLine() {
+  if (!pathLine) return;
+  const pts = (P.showPath && path) ? path : [];
+  const arr = pathLine.geometry.attributes.position.array, n = Math.min(pts.length, 128);
+  for (let i=0;i<n;i++){ arr[i*3]=pts[i].x; arr[i*3+1]=2.0; arr[i*3+2]=pts[i].z; }
+  pathLine.geometry.setDrawRange(0, n);
+  pathLine.geometry.attributes.position.needsUpdate = true;
+  pathLine.visible = P.showPath && n > 1;
+}
+function spawnGpsPing(x,z){ if(!P.showGps) return; const m = gpsPings[gpsPtr]; gpsPtr = (gpsPtr+1)%gpsPings.length;
+  m.position.set(x, 1.6, z); m.userData.life = 1; }
+function updateNavVisuals(dt) {
+  for (const m of gpsPings) { if (m.userData.life > 0) { m.userData.life -= dt*0.8;
+      const l = Math.max(0, m.userData.life); m.material.opacity = l*0.7; m.scale.setScalar(1 + (1-l)*2.2); }
+    else m.material.opacity = 0; }
+  if (estRing && kf) { const e = kf.est; estRing.position.set(e.px, 2.2, e.pz);
+    estRing.visible = P.showGps; }    // toggled by "Show GPS fixes"
+  if (destRing) { const tgt = activeTarget(); destRing.position.set(tgt.x, 2, tgt.z);
+    destRing.visible = (P.mode !== 'hold'); }
+  if (pathLine) pathLine.visible = P.showPath && path && path.length > 1;
+  updateWake(boat3, clock.elapsedTime);
+}
+
+// ---- trailing wake ribbon: a tapered strip sampled from the boat's recent track,
+//      laid on the wave surface so it never clips like the old fixed planes ----
+let wakeMesh = null, wakeTrail = [];
+const WAKE_N = 56;
+function buildWake() {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(WAKE_N*2*3), 3));
+  const idx = [];
+  for (let i=0;i<WAKE_N-1;i++){ const a=i*2,b=i*2+1,c=(i+1)*2,d=(i+1)*2+1; idx.push(a,b,c, b,d,c); }
+  geo.setIndex(idx);
+  wakeMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xdceefc, transparent: true,
+    opacity: 0.16, blending: THREE.NormalBlending, depthWrite: false, side: THREE.DoubleSide }));
+  wakeMesh.frustumCulled = false; scene.add(wakeMesh);
+}
+function updateWake(s, t) {
+  if (!wakeMesh) return;
+  const stern = { x: s.x - Math.cos(s.psi)*4.2, z: s.z - Math.sin(s.psi)*4.2 };
+  const movingFwd = s.speedWater > 1.2;          // only lay wake when making way ahead
+  if (wakeTrail.length === 0) wakeTrail.unshift(stern);
+  else {
+    const d = Math.hypot(stern.x - wakeTrail[0].x, stern.z - wakeTrail[0].z);
+    if (movingFwd && d > 2.2) wakeTrail.unshift(stern);
+    else wakeTrail[0] = stern;                    // keep the head pinned at the stern
+  }
+  if (wakeTrail.length > WAKE_N) wakeTrail.pop();
+  const arr = wakeMesh.geometry.attributes.position.array;
+  for (let i=0;i<WAKE_N;i++){
+    const p  = wakeTrail[Math.min(i, wakeTrail.length-1)];
+    const pa = wakeTrail[Math.min(i, wakeTrail.length-1)], pb = wakeTrail[Math.min(i+1, wakeTrail.length-1)];
+    let dx=pa.x-pb.x, dz=pa.z-pb.z; const L=Math.hypot(dx,dz)||1; dx/=L; dz/=L;
+    const frac = i/(WAKE_N-1);
+    // proper V-wake: a point at the stern, widening behind, tapering away at the tail
+    let halfW = Math.min(frac*10, 3.4); if (frac>0.65) halfW *= (1-(frac-0.65)/0.35);
+    const yy = waveHeightJS(p.x, p.z, t) + 0.2;   // sit on the swell
+    const li=i*6, ri=li+3;
+    arr[li]=p.x + (-dz)*halfW; arr[li+1]=yy; arr[li+2]=p.z + (dx)*halfW;
+    arr[ri]=p.x - (-dz)*halfW; arr[ri+1]=yy; arr[ri+2]=p.z - (dx)*halfW;
+  }
+  wakeMesh.geometry.attributes.position.needsUpdate = true;
+  wakeMesh.material.opacity = 0.05 + 0.16 * clampJS(Math.abs(s.speedWater)/20, 0, 1);  // subtle, fades when slow
+}
+
+// ---- island name labels (HTML, projected from world space) ----
+let labelEls = []; const _vL = new THREE.Vector3();
+function buildLabels() {
+  const layer = document.getElementById('labels');
+  for (const isl of ISLANDS) {
+    const d = document.createElement('div'); d.className = 'ilabel'; d.textContent = isl.name;
+    layer.appendChild(d); labelEls.push({ el: d, isl });
+  }
+}
+function updateLabels() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const fade = clampJS((camera.zoom - 0.5) / 0.6, 0.25, 1);   // dimmer when zoomed way out
+  for (const { el, isl } of labelEls) {
+    _vL.set(isl.x, Math.max(isl.h, 6) + 8, isl.z).project(activeCam || camera);
+    if (_vL.z > 1 || _vL.x < -1.05 || _vL.x > 1.05 || _vL.y < -1.05 || _vL.y > 1.05) { el.style.display = 'none'; continue; }
+    el.style.display = 'block';
+    el.style.left = ((_vL.x*0.5+0.5)*w) + 'px';
+    el.style.top  = ((-_vL.y*0.5+0.5)*h) + 'px';
+    el.style.opacity = fade;
+  }
+}
+
+function buildOcean() {
+  const geo = new THREE.PlaneGeometry(5600, 4000, 540, 380);   // wide enough to cover past Puerto Rico
+  geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
+
+  const waveH = Fn(([p]) => { const h = float(0).toVar();
+    for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed))).mul(w.amp));
+    return h; });
+  const waveN = Fn(([p]) => { const e = 0.9;
+    const hL = waveH(p.add(vec2(-e,0))), hR = waveH(p.add(vec2(e,0)));
+    const hD = waveH(p.add(vec2(0,-e))), hU = waveH(p.add(vec2(0,e)));
+    return normalize(vec3(hL.sub(hR), 2*e, hD.sub(hU))); });
+  const shore = Fn(([p]) => { const s = float(0).toVar();
+    for (const isl of ISLANDS) s.assign(max(s, smoothstep(isl.r*2.7, isl.r*0.9, length(p.sub(vec2(isl.x, isl.z))))));
+    return clamp(s, 0, 1); });
+
+  const xz = positionLocal.xz;
+  const n = waveN(xz), sp = shore(xz);
+  const viewDir = normalize(cameraPosition.sub(positionWorld));
+  const deep = vec3(0.015,0.10,0.26), midC = vec3(0.04,0.34,0.52), shallow = vec3(0.20,0.66,0.66);
+  let col = mix(deep, midC, smoothstep(0.0,0.55,sp)).toVar();
+  col.assign(mix(col, shallow, smoothstep(0.6,1.0,sp)));
+  const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 3.0);
+  col.assign(mix(col, uHorizon, fres.mul(0.5)));                       // reflect the actual sky horizon
+  const sunDir = normalize(uSunDir);                                   // glint follows the sun
+  const spec = pow(max(dot(n, normalize(viewDir.add(sunDir))), 0.0), 140.0).mul(1.5).mul(uSunInt);
+  col.addAssign(uSunCol.mul(spec));
+  const crest = smoothstep(0.86,0.74,n.y);
+  const shoreFoam = smoothstep(0.80,0.97,sp).mul(
+    smoothstep(0.35,0.75, sin(xz.x.mul(0.25).add(xz.y.mul(0.22)).add(time.mul(2.2))).mul(0.5).add(0.5)));
+  col.assign(mix(col, vec3(0.95,0.99,1.0), clamp(max(crest.mul(0.5), shoreFoam), 0, 1)));
+
+  const mat = new THREE.MeshBasicNodeMaterial();
+  mat.positionNode = positionLocal.add(vec3(0, waveH(positionLocal.xz), 0));
+  mat.colorNode = col.mul(uDayBright);                                 // darken the sea at night
+  scene.add(new THREE.Mesh(geo, mat));
+}
+
+function buildTerrain() {
+  const W = MAP.maxX-MAP.minX+200, H = MAP.maxZ-MAP.minZ+200;
+  const geo = new THREE.PlaneGeometry(W, H, 760, 480);   // higher tessellation → crisper coastlines
+  geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
+  const pos = geo.attributes.position, colors = new Float32Array(pos.count*3);
+  const sand=new THREE.Color(0xe6d6a8), grass=new THREE.Color(0x4f8a3c), forest=new THREE.Color(0x2f6630),
+        rock=new THREE.Color(0x7d756a), seabed=new THREE.Color(0x14506b), c=new THREE.Color();
+  for (let i=0;i<pos.count;i++){
+    const x=pos.getX(i), z=pos.getZ(i); let y=terrainHeight(x,z); pos.setY(i,y);
+    if (y<0.2) c.copy(seabed);
+    else if (y<1.8) c.copy(seabed).lerp(sand, smooth01(clampJS((y-0.2)/1.6,0,1)));
+    else if (y<4.5) c.copy(sand).lerp(grass, smooth01(clampJS((y-1.8)/2.7,0,1)));
+    else if (y<13)  c.copy(grass).lerp(forest, smooth01(clampJS((y-4.5)/8.5,0,1)));
+    else            c.copy(forest).lerp(rock, smooth01(clampJS((y-13)/12,0,1)));
+    const tn=(fbm(x*0.12,z*0.12)-0.5)*0.12;
+    colors[i*3]=clampJS(c.r+tn,0,1); colors[i*3+1]=clampJS(c.g+tn,0,1); colors[i*3+2]=clampJS(c.b+tn,0,1);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors,3)); geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardNodeMaterial({ roughness:0.95, metalness:0.0 });
+  mat.colorNode = attribute('color','vec3');
+  const mesh = new THREE.Mesh(geo, mat); mesh.position.y = -0.05;
+  mesh.castShadow = true; mesh.receiveShadow = true; scene.add(mesh);
+}
+
+function buildBoat() {
+  const g = new THREE.Group();
+  const hullMat = new THREE.MeshStandardMaterial({ color:0x6b3f24, roughness:0.7 });
+  const deckMat = new THREE.MeshStandardMaterial({ color:0xc8a26a, roughness:0.6 });
+  const sailMat = new THREE.MeshStandardMaterial({ color:0xf3ede0, roughness:0.9, side:THREE.DoubleSide });
+
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(9,2.4,3.4), hullMat);
+  const hp = hull.geometry.attributes.position;
+  for (let i=0;i<hp.count;i++){ const x=hp.getX(i); if (x>0) hp.setZ(i, hp.getZ(i)*(1-0.6*(x/4.5))); }
+  hp.needsUpdate=true; hull.geometry.computeVertexNormals(); hull.position.y=0.4; g.add(hull);
+
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(8,0.5,2.8), deckMat); deck.position.y=1.5; g.add(deck);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.22,9,8),
+    new THREE.MeshStandardMaterial({ color:0x4a3826 })); mast.position.set(-0.5,6,0); g.add(mast);
+  const sail = new THREE.Mesh(new THREE.PlaneGeometry(5.5,6.5), sailMat);
+  sail.position.set(0.6,5.6,0); sail.rotation.y=Math.PI/2;
+  const sp=sail.geometry.attributes.position;
+  for (let i=0;i<sp.count;i++) sp.setZ(i, Math.cos(sp.getX(i)*0.5)*0.6);
+  sp.needsUpdate=true; sail.geometry.computeVertexNormals(); g.add(sail);
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.6,0.9),
+    new THREE.MeshStandardMaterial({ color:0xcc2b2b, side:THREE.DoubleSide })); flag.position.set(-0.5,10,0.4); g.add(flag);
+
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  scene.add(g); return g;
+}
+
+// orient the hull: local +X = heading, +Y = wave normal (so it conforms to the swell),
+// then bank gently into turns. (The old Euler version pointed the hull 90° off-course.)
+const _mB = new THREE.Matrix4(), _vX = new THREE.Vector3(), _vY = new THREE.Vector3(), _vZ = new THREE.Vector3();
+function placeBoat(boat, s, t) {
+  const y = waveHeightJS(s.x, s.z, t);
+  boat.position.set(s.x, y, s.z);
+  const e = 3.0;
+  const hx = (waveHeightJS(s.x+e, s.z, t) - waveHeightJS(s.x-e, s.z, t)) / (2*e);
+  const hz = (waveHeightJS(s.x, s.z+e, t) - waveHeightJS(s.x, s.z-e, t)) / (2*e);
+  _vY.set(-hx, 1, -hz).normalize();                          // up = wave normal
+  _vX.set(Math.cos(s.psi), 0, Math.sin(s.psi));              // heading
+  _vX.addScaledVector(_vY, -_vX.dot(_vY)).normalize();       // make it perpendicular to up
+  _vZ.crossVectors(_vX, _vY).normalize();
+  _mB.makeBasis(_vX, _vY, _vZ);
+  boat.quaternion.setFromRotationMatrix(_mB);
+  boat.rotateX(clampJS(s.r, -0.6, 0.6) * 0.35);              // bank into the turn
+}
+
+// ============================================================================
+// Camera
+// ============================================================================
+const camOffset = new THREE.Vector3(150, 360, 240);
+let camTarget = new THREE.Vector3(MAP.cx, 0, MAP.cz);
+let fpsCam, fpsMode = false, fpsYaw = 0, fpsPitch = -0.06, activeCam;
+function buildCamera() {
+  const aspect = window.innerWidth/window.innerHeight, view = 380;
+  camera = new THREE.OrthographicCamera(-view*aspect, view*aspect, view, -view, -4000, 12000);
+  camera.position.copy(camTarget).add(camOffset); camera.lookAt(camTarget);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.copy(camTarget); controls.enableDamping = true; controls.dampingFactor = 0.08;
+  controls.minZoom = 0.4; controls.maxZoom = 6.0; controls.maxPolarAngle = Math.PI*0.49;
+  controls.update();
+  fpsCam = new THREE.PerspectiveCamera(72, aspect, 0.5, 16000);
+  activeCam = camera;
+}
+function setView(fps) {
+  fpsMode = fps; controls.enabled = !fps;
+  document.getElementById('app').style.cursor = fps ? 'grab' : '';
+  if (ui.viewBtn) ui.viewBtn.textContent = fps ? 'View: Crow’s nest ⚓' : 'View: Orbit 🗺';
+}
+const _nest = new THREE.Vector3();
+function updateFpsCam(t) {
+  const y = waveHeightJS(boat3.x, boat3.z, t);
+  // sit above the rigging (mast top ~10.5, flag ~10.5) and a touch forward so the sail stays behind
+  _nest.set(boat3.x + Math.cos(boat3.psi)*1.5, y + 15, boat3.z + Math.sin(boat3.psi)*1.5);
+  fpsCam.position.copy(_nest);
+  const yaw = boat3.psi + fpsYaw, cp = Math.cos(fpsPitch);
+  fpsCam.lookAt(_nest.x + Math.cos(yaw)*cp, _nest.y + Math.sin(fpsPitch), _nest.z + Math.sin(yaw)*cp);
+}
+function followCamera(s, dt) {
+  const k = 1 - Math.pow(0.0015, dt);
+  controls.target.x += (s.x - controls.target.x)*k*0.7;
+  controls.target.z += (s.z - controls.target.z)*k*0.7;
+}
+function onResize() {
+  const aspect = window.innerWidth/window.innerHeight, view = 380;
+  camera.left=-view*aspect; camera.right=view*aspect; camera.top=view; camera.bottom=-view;
+  camera.updateProjectionMatrix();
+  if (fpsCam) { fpsCam.aspect = aspect; fpsCam.updateProjectionMatrix(); }
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// ============================================================================
+// Input — double-click to set a destination on the water
+// ============================================================================
+function initInput() {
+  renderer.domElement.addEventListener('dblclick', (e) => {
+    const r = renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
+    raycaster.setFromCamera(ndc, camera);
+    const pt = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(groundPlane, pt)) {
+      gotoTarget = { x: pt.x, z: pt.z }; setMode('goto');
+    }
+  });
+  // crow's-nest view: 'V' toggles, drag to look around
+  window.addEventListener('keydown', (e) => { if (e.key === 'v' || e.key === 'V') setView(!fpsMode); });
+  let dragging=false, lx=0, ly=0;
+  renderer.domElement.addEventListener('pointerdown', (e)=>{ if(fpsMode){ dragging=true; lx=e.clientX; ly=e.clientY; } });
+  window.addEventListener('pointerup', ()=>{ dragging=false; });
+  window.addEventListener('pointermove', (e)=>{ if(fpsMode && dragging){
+    fpsYaw -= (e.clientX-lx)*0.004; fpsPitch = clampJS(fpsPitch - (e.clientY-ly)*0.004, -0.5, 0.5);
+    lx=e.clientX; ly=e.clientY; } });
+}
+
+// ============================================================================
+// Control panel UI
+// ============================================================================
+const ui = {};
+function buildPanel() {
+  const panel = document.getElementById('panel');
+  const head = el('div','',panel);
+  const ttl = el('div','ttl',head); ttl.textContent = 'Helm Console';
+  ui.read = el('div','read',head);
+  ui.fps = el('div','read',head); ui.fps.textContent = '— fps';
+
+  // View
+  let s = section(panel, 'View');
+  ui.viewBtn = el('div','btn', el('div','btns',s)); ui.viewBtn.textContent = 'View: Orbit 🗺';
+  ui.viewBtn.onclick = () => setView(!fpsMode);
+  const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
+
+  // Modes
+  s = section(panel, 'Mode');
+  const modeRow = el('div','btns',s);
+  ui.modeBtns = {};
+  for (const [m,label] of [['tour','Island tour'],['hold','Hold heading'],['goto','Go-to (dbl-click)']]) {
+    const b = el('div','btn',modeRow); b.textContent = label; b.onclick = () => setMode(m); ui.modeBtns[m] = b;
+  }
+  ui.holdWrap = el('div','',s);
+  addSlider(ui.holdWrap, 'Target heading', P, 'desiredHeadingDeg', 0, 359, 1, v=>v.toFixed(0)+'°');
+  const stepRow = el('div','btns',ui.holdWrap);
+  for (const [lbl,dd] of [['Step −45°',-45],['Step +45°',45]]) {
+    const b=el('div','btn',stepRow); b.textContent=lbl;
+    b.onclick=()=>{ P.desiredHeadingDeg=((P.desiredHeadingDeg+dd)%360+360)%360; syncSlider('desiredHeadingDeg'); };
+  }
+
+  // Speed
+  s = section(panel, 'Speed');
+  addSlider(s, 'Target speed', P, 'desiredSpeed', 0, 30, 0.5, v=>v.toFixed(1)+' kn');
+
+  // Heading PID
+  s = section(panel, 'Heading PID → rudder');
+  addSlider(s, 'Kp (proportional)', P, 'hKp', 0, 6, 0.05, v=>v.toFixed(2));
+  addSlider(s, 'Ki (integral)',     P, 'hKi', 0, 0.6, 0.005, v=>v.toFixed(3));
+  addSlider(s, 'Kd (derivative)',   P, 'hKd', 0, 4, 0.05, v=>v.toFixed(2));
+
+  // Speed PID
+  s = section(panel, 'Speed PID → throttle');
+  addSlider(s, 'Kp', P, 'sKp', 0, 0.5, 0.005, v=>v.toFixed(3));
+  addSlider(s, 'Ki', P, 'sKi', 0, 0.2, 0.002, v=>v.toFixed(3));
+  addSlider(s, 'Kd', P, 'sKd', 0, 0.2, 0.002, v=>v.toFixed(3));
+
+  // Disturbances
+  s = section(panel, 'Weather & sea');
+  addToggle(s, 'Ocean current', P, 'curOn');
+  addSlider(s, 'Current strength', P, 'curStrength', 0, 16, 0.5, v=>v.toFixed(1));
+  addSlider(s, 'Current bearing',  P, 'curDirDeg', 0, 359, 1, v=>v.toFixed(0)+'°');
+  addToggle(s, 'Tides (current oscillates)', P, 'tideOn');
+  addToggle(s, 'Wind', P, 'windOn');
+  addSlider(s, 'Wind strength', P, 'windStrength', 0, 16, 0.5, v=>v.toFixed(1));
+  addSlider(s, 'Wind bearing',  P, 'windDirDeg', 0, 359, 1, v=>v.toFixed(0)+'°');
+  addToggle(s, 'Storm', P, 'stormOn');
+  addSlider(s, 'Storm intensity', P, 'stormIntensity', 0, 1, 0.05, v=>v.toFixed(2));
+
+  // Navigation & estimation
+  s = section(panel, 'Navigation & estimation');
+  addToggle(s, 'A* path planning', P, 'usePlanner', ()=>{ path=null; });
+  addToggle(s, 'Steer on GPS estimate', P, 'navOnEstimate');
+  addToggle(s, 'Disturbance feed-forward', P, 'feedForward');
+  addSlider(s, 'Path lookahead', P, 'lookahead', 12, 60, 1, v=>v.toFixed(0));
+  addSlider(s, 'Cross-track gain', P, 'xteGain', 0, 0.04, 0.002, v=>v.toFixed(3));
+  addSlider(s, 'Boat draft', P, 'draft', 1, 6, 0.2, v=>v.toFixed(1));
+  addSlider(s, 'GPS noise σ', P, 'gpsNoise', 0, 16, 0.5, v=>v.toFixed(1));
+  addToggle(s, 'Show planned path', P, 'showPath');
+  addToggle(s, 'Show GPS fixes', P, 'showGps');
+
+  // Sky & time
+  s = section(panel, 'Sky & time');
+  const autoTg = addToggle(s, 'Day / night cycle', P, 'autoDay');
+  addSlider(s, 'Time of day', P, 'timeOfDay', 0, 23.99, 0.05,
+    v => { const h=Math.floor(v), m=Math.floor((v-h)*60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); },
+    () => { P.autoDay = false; autoTg.classList.remove('on'); });
+  addSlider(s, 'Day length', P, 'dayLength', 20, 600, 10, v=>v.toFixed(0)+'s');
+
+  // Actions
+  s = section(panel, '');
+  const acts = el('div','btns',s);
+  const pauseBtn = el('div','btn',acts); pauseBtn.textContent='Pause';
+  pauseBtn.onclick=()=>{ P.paused=!P.paused; pauseBtn.textContent=P.paused?'Resume':'Pause'; pauseBtn.classList.toggle('active',P.paused); };
+  const resetTune = el('div','btn',acts); resetTune.textContent='Reset gains';
+  resetTune.onclick=()=>{ for (const k of ['hKp','hKi','hKd','sKp','sKi','sKd']) { P[k]=DEFAULTS[k]; syncSlider(k); } headingPID.reset(); speedPID.reset(); };
+  const resetBoat = el('div','btn',acts); resetBoat.textContent='Reset boat';
+  resetBoat.onclick=()=>{ const c=BYNAME['Culebra']; Object.assign(boat3,{x:c.x+50,z:c.z+40,u:8,v:0,r:0,thr:0.4,delta:0}); wpIdx=0; const t0=activeTarget(); boat3.psi=Math.atan2(t0.z-boat3.z,t0.x-boat3.x); headingPID.reset(); speedPID.reset(); TEL.length=0; kf=new KalmanFilter(boat3.x,boat3.z); path=null; planKey=''; replan(boat3); };
+
+  setMode(P.mode);
+}
+
+function setMode(m) {
+  P.mode = m;
+  for (const k in ui.modeBtns) ui.modeBtns[k].classList.toggle('active', k===m);
+  if (ui.holdWrap) ui.holdWrap.style.display = (m==='hold') ? '' : 'none';
+  headingPID.reset();
+}
+
+// --- small UI factory ---
+function el(tag, cls, parent){ const e=document.createElement(tag); if(cls)e.className=cls; if(parent)parent.appendChild(e); return e; }
+function section(parent, title){ const s=el('div','sec',parent); if(title){ const h=el('div','sec-h',s); h.textContent=title; } return s; }
+const sliderRefs = {};
+function addSlider(parent, label, obj, key, min, max, step, fmt, onChange){
+  const row=el('div','row',parent);
+  const lab=el('label','',row); lab.textContent=label;
+  const val=el('div','val',row); val.textContent=fmt?fmt(obj[key]):obj[key];
+  const inp=el('input','',row); inp.type='range'; inp.min=min; inp.max=max; inp.step=step; inp.value=obj[key];
+  inp.oninput=()=>{ obj[key]=parseFloat(inp.value); val.textContent=fmt?fmt(obj[key]):obj[key]; if(onChange) onChange(obj[key]); };
+  sliderRefs[key]={inp,val,fmt};
+}
+function syncSlider(key){ const r=sliderRefs[key]; if(!r)return; r.inp.value=P[key]; r.val.textContent=r.fmt?r.fmt(P[key]):P[key]; }
+function addToggle(parent, label, obj, key, onChange){
+  const t=el('div','tg'+(obj[key]?' on':''),parent);
+  el('div','box',t); const l=el('div','lab',t); l.textContent=label;
+  t.onclick=()=>{ obj[key]=!obj[key]; t.classList.toggle('on',obj[key]); if(onChange) onChange(obj[key]); };
+  return t;
+}
+
+function updateReadouts(){
+  const g=lastGuide;
+  let est='';
+  if (kf) { const e=kf.est, tc=sampleDisturb(boat3.x, boat3.z, clock.elapsedTime).cur;
+    const cerr=Math.hypot(e.cx-tc.x, e.cz-tc.z);
+    est = `<div class="read">ĉ ${Math.hypot(e.cx,e.cz).toFixed(1)} (err ${cerr.toFixed(1)}) · XTE ${(g.xte||0).toFixed(0)}m</div>`; }
+  ui.read.innerHTML = `spd <b>${boat3.u.toFixed(1)}</b> / ${(g.desSpeed||0).toFixed(0)} &nbsp; `
+    + `hdg <b>${((r2d(boat3.psi)%360+360)%360).toFixed(0)}°</b> &nbsp; → ${g.name||'—'}` + est;
+}
+
+// ============================================================================
+// Telemetry graphs + compass
+// ============================================================================
+const TEL = []; const TEL_MAX = 320;
+function recordTelemetry(t, herr, u, desSpeed){
+  TEL.push({ t, herrDeg: r2d(herr), p: headingPID.p, i: headingPID.iTerm, d: headingPID.d,
+    out: headingPID.out, u, desSpeed });
+  if (TEL.length > TEL_MAX) TEL.shift();
+}
+const tcv = document.getElementById('telemetry'), tcx = tcv.getContext('2d');
+function drawTelemetry(){
+  const W=tcv.width, H=tcv.height; tcx.clearRect(0,0,W,H);
+  const padL=6, padR=6, gw=W-padL-padR;
+  const aT=6, aH=86, bT=aH+18, bH=80;   // two stacked graphs
+  tcx.font='10px ui-monospace, monospace'; tcx.textBaseline='middle';
+  // ---- graph A: heading error (deg, ±90 clamp) ----
+  panelBg(padL,aT,gw,aH);
+  zeroLine(padL,aT,gw,aH);
+  tcx.fillStyle='rgba(220,238,251,.7)'; tcx.textAlign='left';
+  tcx.fillText('heading error  ±90°', padL+5, aT+9);
+  plot(TEL, d=>clampJS(d.herrDeg,-90,90)/90, padL,aT,gw,aH, '#ffe08a', 1.6);
+  // ---- graph B: rudder P/I/D split (±deltaMax) ----
+  panelBg(padL,bT,gw,bH);
+  zeroLine(padL,bT,gw,bH);
+  const sc = 1/BOAT.deltaMax;
+  plot(TEL, d=>clampJS(d.p*sc,-1,1), padL,bT,gw,bH, '#ff7b7b', 1.2);   // P red
+  plot(TEL, d=>clampJS(d.i*sc,-1,1), padL,bT,gw,bH, '#7be08a', 1.2);   // I green
+  plot(TEL, d=>clampJS(d.d*sc,-1,1), padL,bT,gw,bH, '#7bb8ff', 1.2);   // D blue
+  plot(TEL, d=>clampJS(d.out*sc,-1,1), padL,bT,gw,bH, '#ffffff', 1.8); // total white
+  tcx.textAlign='left';
+  tcx.fillStyle='#ff7b7b'; tcx.fillText('P', padL+5, bT+9);
+  tcx.fillStyle='#7be08a'; tcx.fillText('I', padL+20, bT+9);
+  tcx.fillStyle='#7bb8ff'; tcx.fillText('D', padL+33, bT+9);
+  tcx.fillStyle='#ffffff'; tcx.fillText('= rudder', padL+46, bT+9);
+}
+function panelBg(x,y,w,h){ tcx.fillStyle='rgba(10,24,38,.45)'; tcx.fillRect(x,y,w,h); }
+function zeroLine(x,y,w,h){ tcx.strokeStyle='rgba(150,200,255,.22)'; tcx.lineWidth=1;
+  tcx.beginPath(); tcx.moveTo(x, y+h/2); tcx.lineTo(x+w, y+h/2); tcx.stroke(); }
+function plot(arr, f, x, y, w, h, color, lw){
+  if (arr.length<2) return; tcx.strokeStyle=color; tcx.lineWidth=lw; tcx.beginPath();
+  for (let k=0;k<arr.length;k++){ const px=x + (k/(TEL_MAX-1))*w; const py=y+h/2 - f(arr[k])*(h/2-3);
+    if(k===0) tcx.moveTo(px,py); else tcx.lineTo(px,py); }
+  tcx.stroke();
+}
+
+const ccv=document.getElementById('compass'), ccx=ccv.getContext('2d');
+function drawCompass(){
+  const W=ccv.width, H=ccv.height, cx=W/2, cy=H/2, R=W/2-10; ccx.clearRect(0,0,W,H);
+  ccx.strokeStyle='rgba(150,200,255,.35)'; ccx.lineWidth=1.5; ccx.beginPath(); ccx.arc(cx,cy,R,0,Math.PI*2); ccx.stroke();
+  ccx.fillStyle='rgba(220,238,251,.8)'; ccx.font='10px ui-sans-serif'; ccx.textAlign='center'; ccx.textBaseline='middle';
+  ccx.fillText('N',cx,cy-R+8); ccx.fillText('S',cx,cy+R-8); ccx.fillText('E',cx+R-7,cy); ccx.fillText('W',cx-R+7,cy);
+  // world heading (cos,sin) over (x,z): east=+x=right, south=+z=down → screen maps directly
+  const arrow=(ang,len,color,lw,dashed)=>{ ccx.strokeStyle=color; ccx.lineWidth=lw; ccx.setLineDash(dashed?[4,3]:[]);
+    const ex=cx+Math.cos(ang)*R*len, ey=cy+Math.sin(ang)*R*len;
+    ccx.beginPath(); ccx.moveTo(cx,cy); ccx.lineTo(ex,ey); ccx.stroke();
+    ccx.setLineDash([]); ccx.fillStyle=color;
+    ccx.beginPath(); const a2=0.4; ccx.moveTo(ex,ey);
+    ccx.lineTo(ex-Math.cos(ang-a2)*7, ey-Math.sin(ang-a2)*7);
+    ccx.lineTo(ex-Math.cos(ang+a2)*7, ey-Math.sin(ang+a2)*7); ccx.fill(); };
+  if (P.curOn) arrow(d2r(P.curDirDeg), 0.85, 'rgba(80,200,200,.8)', 2, false);  // current (teal)
+  if (kf) { const e=kf.est, mag=Math.hypot(e.cx,e.cz); if (mag>0.3)
+    arrow(Math.atan2(e.cz,e.cx), 0.6, 'rgba(123,224,138,.9)', 1.5, true); }       // est. current (green dashed)
+  if (P.windOn) arrow(d2r(P.windDirDeg), 0.7, 'rgba(230,240,255,.7)', 2, false); // wind (white)
+  arrow(lastGuide.desPsi||0, 0.9, '#5fd0ff', 2, true);                            // desired (cyan dashed)
+  arrow(boat3.psi, 0.9, '#ffe08a', 2.5, false);                                   // boat heading (yellow)
+}
+</script>
+</body>
+</html>
