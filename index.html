@@ -581,18 +581,31 @@ let gotoTarget = null;            // {x,z} from double-click
 let path = null;                  // current planned waypoint list
 let planKey = '';                 // change-detection for replanning
 
-function approachPoint(isl, from) {
-  // aim for the side of the island facing the boat (its NEAREST point), not a fixed random side
+function snapToWater(p){
+  if (BLOCKED && terrainHeight(p.x, p.z) > -3.2){ const wc=worldToCell(p.x,p.z), fr=nearestFree(wc.c,wc.r); p=cellCenter(fr.c,fr.r); }
+  return p;
+}
+function approachPoint(isl, from) {     // goto mode: aim for the nearest point of the island facing the boat
   const fx = from ? from.x : boat3.x, fz = from ? from.z : boat3.z;
   const ang = Math.atan2(fz - isl.z, fx - isl.x);
-  let p = { x: isl.x + Math.cos(ang)*(isl.r+30), z: isl.z + Math.sin(ang)*(isl.r+30) };
-  if (BLOCKED && terrainHeight(p.x, p.z) > -2.5) {   // snap to navigable water if the approach lands on a shoal
-    const wc = worldToCell(p.x, p.z), fr = nearestFree(wc.c, wc.r); p = cellCenter(fr.c, fr.r);
-  }
-  return p;
+  return snapToWater({ x: isl.x + Math.cos(ang)*(isl.r+30), z: isl.z + Math.sin(ang)*(isl.r+30) });
+}
+// Tour 'gate': a FIXED pass point on the side of the island nearest the prev→next chord. Fixed (not
+// re-aimed at the moving boat) and on the smooth-flow side, so the boat sweeps close to the island and
+// continues toward the next with minimal heading change (low curvature at the knot points).
+function routeGate(idx){
+  const isl = route[idx];
+  const prev = route[(idx-1+route.length)%route.length], next = route[(idx+1)%route.length];
+  const ax=prev.x,az=prev.z,bx=next.x,bz=next.z,cx=isl.x,cz=isl.z, abx=bx-ax,abz=bz-az, L2=abx*abx+abz*abz||1;
+  const tp=clampJS(((cx-ax)*abx+(cz-az)*abz)/L2,0,1), fx=ax+abx*tp, fz=az+abz*tp;   // foot of perpendicular
+  let dx=fx-cx, dz=fz-cz, dl=Math.hypot(dx,dz);
+  if (dl<1){ const cl=Math.hypot(abx,abz)||1; dx=-abz/cl; dz=abx/cl; }              // island on the chord → go perpendicular
+  else { dx/=dl; dz/=dl; }
+  return snapToWater({ x: cx+dx*(isl.r+26), z: cz+dz*(isl.r+26) });
 }
 function activeTarget(from) {
   if (P.mode === 'goto' && gotoTarget) return gotoTarget;
+  if (P.mode === 'tour') return routeGate(wpIdx);
   return approachPoint(route[wpIdx], from);
 }
 function navPosition(s) {     // where the autopilot believes it is
