@@ -432,7 +432,7 @@ function sampleDisturb(x, z, t) {
 // ============================================================================
 // A* planner (current-aware) — grid over the map, land inflated as obstacles
 // ============================================================================
-const GRID = { minX:-180, maxX:980, minZ:-430, maxZ:230, cell:12 };
+const GRID = { minX:-420, maxX:1240, minZ:-540, maxZ:400, cell:12 };   // covers all islands, the SE islets, AND the boat start at (1080,300)
 GRID.cols = Math.ceil((GRID.maxX-GRID.minX)/GRID.cell);
 GRID.rows = Math.ceil((GRID.maxZ-GRID.minZ)/GRID.cell);
 const gIdx = (c,r)=> r*GRID.cols + c;
