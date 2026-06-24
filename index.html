@@ -220,9 +220,11 @@ const P = {
   autoDay: true, timeOfDay: 9.5, dayLength: 120,   // hours; dayLength = real seconds per full day
   // HUD visibility
   showTitle: true, showHints: true, showTelemetry: true, showCompass: true, showLabels: true,
-  ao: false,   // ambient occlusion post-process (experimental, orbit view)
   // recording transition shape: fade-out → hold-at-full → fade-in (seconds), plus ease curve
   transFadeOut: 0.4, transHold: 0.2, transFadeIn: 0.4, transEase: 1.0,  // ease 0=linear … 1=smoothstep
+  // lighting
+  shadowDepth: 0.6,   // 0 = flat (lots of sky fill) … 1 = deep contrast (little fill, dark shaded sides)
+  bloom: false,       // HDR-ish glow post-process (guarded toggle)
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
@@ -704,8 +706,9 @@ async function init() {
     if (fpsMode) updateFpsCam(t);
     activeCam = fpsMode ? fpsCam : camera;
     try {
-      renderer.render(scene, activeCam);
-    } catch (err) { console.warn('render failed', err); if (fpsMode) setView(false); }
+      if (bloomActive && bloomPost && !fpsMode) bloomPost.render();
+      else renderer.render(scene, activeCam);
+    } catch (err) { console.warn('render failed', err); bloomActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
     if (P.showLabels) updateLabels();
@@ -737,6 +740,7 @@ const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights
 
 let skyMat, skyMesh, fog, sunLight, hemiLight, seaSkirt;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3);
+const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3();
 const C = {
   zenNight:new THREE.Color(0x05070f), zenDay:new THREE.Color(0x1d6fc6), zenGold:new THREE.Color(0x3a3570),
   horNight:new THREE.Color(0x0a1830), horDay:new THREE.Color(0xc4e3f2), horGold:new THREE.Color(0xff7e3c),
@@ -816,12 +820,29 @@ function updateEnvironment(dt) {
     seaSkirt.position.x=controls.target.x; seaSkirt.position.z=controls.target.z; }
 
   sunLight.color.setRGB(_cLight.r,_cLight.g,_cLight.b);
-  sunLight.intensity = (0.25 + 2.4*day) * (1 - 0.65*sf);
-  hemiLight.intensity = (0.5 + 0.6*day) * (1 - 0.4*sf);     // brighter floor so night islands aren't pure black
+  // Shadow depth: less hemisphere fill → darker shaded sides → more dimensional, less flat midday
+  // look. A floor keeps night islands from going pure black; the sun gets a touch stronger to match.
+  const fill = lerp(1.0, 0.32, clampJS(P.shadowDepth,0,1));
+  sunLight.intensity = (0.25 + (2.4+0.5*P.shadowDepth)*day) * (1 - 0.65*sf);
+  hemiLight.intensity = (0.42 + 0.62*fill*day) * (1 - 0.4*sf);     // floor (0.42) so night islands aren't pure black
   hemiLight.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
   const D=780;
-  sunLight.position.set(boat3.x + _sun.x*D, Math.max(e,0.06)*D + 80, boat3.z + _sun.z*D);
-  sunLight.target.position.set(boat3.x, 0, boat3.z); sunLight.target.updateMatrixWorld();
+  // Shadow-map texel snapping: the shadow frustum follows the boat, so without snapping it slides
+  // sub-texel every frame and thin frond shadows "swim". Snap the follow-centre to whole shadow
+  // texels *in the light's own X/Y basis* (snapping world-XZ isn't enough when the sun is low),
+  // so the map only shifts in discrete, imperceptible steps.
+  const texel = (sunLight.shadow.camera.right - sunLight.shadow.camera.left) / sunLight.shadow.mapSize.x;
+  _shFwd.copy(_sun).multiplyScalar(-1).normalize();                 // light looks down the sun ray
+  _shUp.set(0,1,0); if (Math.abs(_shFwd.y) > 0.99) _shUp.set(0,0,1);
+  _shRight.crossVectors(_shFwd, _shUp).normalize();
+  _shUp.crossVectors(_shRight, _shFwd).normalize();
+  _shCtr.set(boat3.x, 0, boat3.z);
+  const a = Math.round(_shCtr.dot(_shRight)/texel)*texel,           // snap the two lateral components
+        b = Math.round(_shCtr.dot(_shUp)/texel)*texel,
+        f = _shCtr.dot(_shFwd);                                     // keep depth-along-ray unchanged
+  _shCtr.copy(_shRight).multiplyScalar(a).addScaledVector(_shUp, b).addScaledVector(_shFwd, f);
+  sunLight.position.set(_shCtr.x + _sun.x*D, Math.max(e,0.06)*D + 80, _shCtr.z + _sun.z*D);
+  sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
   sunLight.castShadow = day > 0.06;
 
   renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.4*sf);
@@ -1666,6 +1687,24 @@ function updateRecUI(){
 // per-puff cloud shading (buildClouds) — so it's always on, free, and can't black out the frame.
 // The old GTAO post-process couldn't reproduce our custom-shader scene and was removed.
 
+// Bloom (HDR-ish glow) — guarded, OFF by default, lazy dynamic-import so a failure can't break boot.
+// Makes bright spots (sun sparkle on wave caps, fireworks, sun glint) bleed a soft halo.
+let bloomPost = null, bloomActive = false;
+async function enableBloom(){
+  if (bloomPost){ bloomActive = true; return; }
+  try {
+    const mod = await import('three/addons/tsl/display/BloomNode.js');
+    const scenePass = pass(scene, camera);
+    const col = scenePass.getTextureNode();
+    const bloomPass = mod.bloom(col, 0.55, 0.45, 0.85);   // strength, radius, threshold (only the brightest bloom)
+    const pp = new THREE.PostProcessing(renderer);
+    pp.outputNode = col.add(bloomPass);
+    bloomPost = pp; bloomActive = true; console.log('bloom enabled');
+  } catch(e){ console.warn('bloom setup failed — reverting', e); bloomActive=false; bloomPost=null;
+    P.bloom=false; if (ui.bloomTog) ui.bloomTog.classList.remove('on'); }
+}
+function disableBloom(){ bloomActive = false; }
+
 // persist all panel settings between refreshes
 const SETTINGS_KEY = 'pidHelmsman.v1';
 function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
@@ -1789,6 +1828,8 @@ function buildPanel() {
     v => { const h=Math.floor(v), m=Math.floor((v-h)*60); return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); },
     () => { P.autoDay = false; autoTg.classList.remove('on'); });
   addSlider(s, 'Day length', P, 'dayLength', 20, 600, 10, v=>v.toFixed(0)+'s');
+  addSlider(s, 'Shadow depth', P, 'shadowDepth', 0, 1, 0.05, v=>v.toFixed(2));
+  ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
 
   // Actions
   s = section(panel, '');
