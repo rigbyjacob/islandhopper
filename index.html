@@ -1557,9 +1557,13 @@ function buildOcean() {
     const depthCol = mix(vec3(0.32,0.80,0.88), vec3(0.06,0.22,0.46), clamp(depthN, 0.0, 1.0));   // shallow cyan → deep blue (not too dark, so seabed relief still reads)
     const cband = depthN.mul(11.0);                                            // iso-depth contour bands across the undersea relief
     const cline = oneMinus(smoothstep(0.0, 0.18, abs(sin(cband.mul(3.14159265)))));
+    // confine the overlay to the data region: outside the MAP bounds the texture clamps to its edge
+    // value (which would streak contours to the horizon), so fade the whole effect to nothing there.
+    const bIn = smoothstep(0.0,0.03,bUv.x).mul(oneMinus(smoothstep(0.97,1.0,bUv.x)))
+                .mul(smoothstep(0.0,0.03,bUv.y)).mul(oneMinus(smoothstep(0.97,1.0,bUv.y)));
     // light translucent tint + contour lines on the surface; the translucent ocean reveals the seabed below
     const blended = mix(col, depthCol, float(0.28)).add(vec3(0.7,0.9,1.0).mul(cline).mul(0.5));
-    col.assign(mix(col, blended, uBathy));
+    col.assign(mix(col, blended, uBathy.mul(bIn)));
 
     return col.mul(uDayBright);   // darken the sea at night
   });
@@ -1567,7 +1571,15 @@ function buildOcean() {
   oceanMat = new THREE.MeshBasicNodeMaterial();
   oceanMat.positionNode = positionLocal.add(vec3(0, waveH(positionLocal.xz), 0));
   oceanMat.colorNode = oceanColor();
-  oceanMat.opacityNode = oneMinus(uBathy.mul(0.62));   // translucent when bathymetry is on → seabed shows through
+  // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
+  // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
+  oceanMat.opacityNode = Fn(() => {
+    const u = positionWorld.x.sub(MAP.minX).div(MAP.maxX-MAP.minX);
+    const v = positionWorld.z.sub(MAP.minZ).div(MAP.maxZ-MAP.minZ);
+    const m = smoothstep(0.0,0.03,u).mul(oneMinus(smoothstep(0.97,1.0,u)))
+              .mul(smoothstep(0.0,0.03,v)).mul(oneMinus(smoothstep(0.97,1.0,v)));
+    return oneMinus(uBathy.mul(0.62).mul(m));
+  })();
   oceanMat.transparent = true; oceanMat.depthWrite = true;
   scene.add(new THREE.Mesh(geo, oceanMat));
 }
