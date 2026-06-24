@@ -217,7 +217,7 @@ const P = {
   navOnEstimate: true,                   // steer using the Kalman position estimate vs. true position
   feedForward: false,                    // pre-crab using the estimated current
   gpsNoise: 5,                           // GPS std-dev (world units)
-  showPath: true, showGps: false,
+  showPath: true, pathFull: true, showGps: false,   // pathFull: whole route vs just the next-waypoint leg
   // path following + grounding
   lookahead: 26,                         // pure-pursuit lookahead (smaller = hugs line tighter)
   xteGain: 0.012,                        // cross-track correction gain (bigger = snaps to line harder)
@@ -1583,7 +1583,7 @@ let targetGlow, glowHalo; const _glowCol = new THREE.Color();
 function buildNavVisuals() {
   // planned route as a ribbon of forward-tapering "wedge" dashes lying on the water (world-space width,
   // so perspective foreshortens them). The boat EATS dashes as it passes — only the path ahead draws.
-  const DASHMAX = 96;
+  const DASHMAX = 460;   // enough dashes to show the whole global loop when "full path" is on
   const rg = new THREE.BufferGeometry();
   rg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DASHMAX*4*3), 3));
   const idx = new Uint16Array(DASHMAX*6);
@@ -1627,9 +1627,17 @@ function updatePathLine() {
     const a=pts[i], b=pts[Math.min(i+1,pts.length-1)], segl=Math.max(segS[i+1]-segS[i],1e-6), tt=(s-segS[i])/segl;
     let dx=b.x-a.x, dz=b.z-a.z, dl=Math.hypot(dx,dz)||1; return { x:a.x+dx*tt, z:a.z+dz*tt, dx:dx/dl, dz:dz/dl }; };
   const arr = pathRibbon.geometry.attributes.position.array;
-  const dash=10, gap=7, wB=4.6, wF=1.4, y=0.45, DASHMAX=96;  // sit low at the water surface (sunken)
+  const dash=10, gap=7, wB=4.6, wF=1.4, y=0.45, DASHMAX=460;  // sit low at the water surface (sunken)
+  // "full" → draw the whole route ahead; otherwise stop at the next waypoint (the current target gate)
+  let capS = total;
+  if (P.pathFull === false && P.mode==='tour' && route[wpIdx]){
+    const g = routeGate(wpIdx); let bd=Infinity;
+    for (let i=0;i<pts.length-1;i++){ const a=pts[i],b=pts[i+1], abx=b.x-a.x,abz=b.z-a.z, L2=abx*abx+abz*abz||1e-6;
+      const tt=clampJS(((g.x-a.x)*abx+(g.z-a.z)*abz)/L2,0,1), px=a.x+abx*tt,pz=a.z+abz*tt, d=Math.hypot(g.x-px,g.z-pz), arc=segS[i]+tt*Math.hypot(abx,abz);
+      if (d<bd && arc>bestS){ bd=d; capS=arc+dash; } }
+  }
   let s = bestS + 20, di = 0;                                 // begin well ahead of the bow → boat eats dashes earlier
-  while (s < total && di < DASHMAX){
+  while (s < Math.min(total, capS) && di < DASHMAX){
     const p0=at(s), p1=at(s+dash), nx=-p0.dz, nz=p0.dx, b=di*12;
     arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y; arr[b+2 ]=p0.z-nz*wB*0.5;   // back-left  (wide)
     arr[b+3 ]=p0.x+nx*wB*0.5; arr[b+4 ]=y; arr[b+5 ]=p0.z+nz*wB*0.5;   // back-right
@@ -2661,6 +2669,7 @@ function buildPanel() {
   addSlider(s, 'Boat draft', P, 'draft', 1, 6, 0.2, v=>v.toFixed(1));
   addSlider(s, 'GPS noise σ', P, 'gpsNoise', 0, 16, 0.5, v=>v.toFixed(1));
   addToggle(s, 'Show planned path', P, 'showPath');
+  addToggle(s, 'Full route (off = next waypoint only)', P, 'pathFull');
   addToggle(s, 'Show GPS fixes', P, 'showGps');
 
   // Sky & time
