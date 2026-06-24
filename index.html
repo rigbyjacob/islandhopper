@@ -1465,7 +1465,7 @@ function makeLabelSprite(text, color, sizeY){
 // labels reveal how much real depth the vertical scale is compressing (only shown in bathymetry mode)
 let dipStick = null;
 function buildDipStick(){
-  const X=233, Z=-120;                                         // open water just S of the unnamed islet, ~1700 m
+  const X=200, Z=-80;                                          // open water SW of the unnamed islet, ~3800 m
   const maxM = Math.max(0, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
   const g = new THREE.Group(); g.visible = false;
   const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.85, depthTest:false });
@@ -1480,9 +1480,9 @@ function buildDipStick(){
       const lab=makeLabelSprite(txt, 0xfff0c8, 6.5); lab.material.depthTest=false;   // draw on top (underwater → would otherwise be hidden)
       lab.position.set(X+8, y, Z); g.add(lab); lastLabelY=y; }
   };
-  tick(0, '0 m  (surface)', true);
+  tick(0, null);                                               // surface ring, no label
   for (let m=500; m<maxM-250; m+=500) tick(m, m+' m', false);
-  tick(maxM, '≈'+(Math.round(maxM/10)*10)+' m  (seabed)', true);
+  tick(maxM, null);                                            // seabed ring, no label (was overlapping)
   const title=makeLabelSprite('▼  depth sounding', 0xffffff, 8); title.material.depthTest=false;
   title.position.set(X, 10, Z); g.add(title);
   scene.add(g); dipStick=g;
