@@ -410,10 +410,10 @@ const cellCenter = (c,r)=> ({ x: GRID.minX+(c+0.5)*GRID.cell, z: GRID.minZ+(r+0.
 const worldToCell = (x,z)=> ({ c: clampJS(Math.floor((x-GRID.minX)/GRID.cell),0,GRID.cols-1),
                                r: clampJS(Math.floor((z-GRID.minZ)/GRID.cell),0,GRID.rows-1) });
 let BLOCKED = null, DLAND = null;
-function buildBlocked(inflate=2) {
+function buildBlocked(inflate=3) {            // wider margin (3 cells ≈ 36u) so routes keep clear of shoals
   const raw = new Uint8Array(GRID.cols*GRID.rows);
   for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++){ const p=cellCenter(c,r);
-    raw[gIdx(c,r)] = terrainHeight(p.x,p.z) > -2.5 ? 1 : 0; }
+    raw[gIdx(c,r)] = terrainHeight(p.x,p.z) > -4.5 ? 1 : 0; }   // block any water shallower than ~4.5 deep (draft 2.6 + wave/safety margin)
   const blk = new Uint8Array(GRID.cols*GRID.rows);
   for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++){ if(!raw[gIdx(c,r)]) continue;
     for (let dr=-inflate;dr<=inflate;dr++) for (let dc=-inflate;dc<=inflate;dc++){ const rr=r+dr,cc=c+dc;
@@ -463,7 +463,7 @@ function planPath(sx, sz, gx, gz) {
   let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz}; pts[pts.length-1]={x:gx,z:gz};
   const clearLOS=(a,b)=>{ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.cell*0.5));
     for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
-      const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>-3.5)return false; } return true; };
+      const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>-4.5)return false; } return true; };
   const simp=[pts[0]]; let i=0;
   while(i<pts.length-1){ let j=pts.length-1; while(j>i+1&&!clearLOS(pts[i],pts[j]))j--; simp.push(pts[j]); i=j; }
   return simp;
@@ -869,7 +869,7 @@ function updateEnvironment(dt) {
   uSunDir.value.copy(_sun);
   uSunCol.value.set(_cSun.r,_cSun.g,_cSun.b);
   uSunInt.value  = (0.25 + 1.5*day) * (1 - 0.7*sf);
-  uDayBright.value = (0.32 + 0.68*day) * (1 - 0.45*sf);
+  uDayBright.value = (0.09 + 0.91*day) * (1 - 0.45*sf);   // much darker at night so shallows/foam don't glow
   uNight.value = clampJS((0.14 - e) / 0.18, 0, 1);                 // lights come on at dusk
   if (islandLightsGroup) {
     islandLightsGroup.visible = uNight.value > 0.02;
@@ -879,7 +879,7 @@ function updateEnvironment(dt) {
   if (boatLights.length){                                            // ship running lights — flicker like torch flames
     const lit = clampJS(uNight.value*1.15, 0, 1);
     const fk = 0.78 + 0.22*Math.sin(clock.elapsedTime*9.0 + 1.3);
-    for (const L of boatLights){ L.mat.opacity = lit*fk*0.95; L.flame.color.setRGB(lit, lit*0.62*fk, lit*0.28); }
+    for (const L of boatLights){ L.mat.opacity = lit*fk*0.95; L.flame.color.setRGB(lit, lit*0.62*fk, lit*0.28); L.light.intensity = lit*fk*14.0; }
   }
 
   if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b); fog.near=lerp(1500,560,sf); fog.far=lerp(4200,1900,sf); }
@@ -991,7 +991,7 @@ function buildClouds(){
 }
 function updateClouds(dt, sf, day){
   if(!cloudSprites.length) return;
-  const tint=lerp(1.0,0.34,sf), bright=0.45+0.55*day, op=(0.82+0.18*day);   // opaque at night (no stacked-ellipse see-through)
+  const tint=lerp(1.0,0.34,sf), bright=0.10+0.90*day, op=(0.82+0.18*day);   // dark clouds at night (not glowing white)
   const cols=[[1,1,1],[0.90,0.94,1.0],[0.62,0.70,0.82]];   // brighter tops, darker shaded bases
   for (const s of cloudSprites){ const b=cols[s.userData.tier], ao=s.userData.ao, m=s.material;
     m.color.setRGB(b[0]*tint*bright*ao, b[1]*tint*bright*ao, Math.min(1,b[2]*tint*bright*ao*1.04));
@@ -1585,7 +1585,8 @@ function buildBoat() {
     const lm = new THREE.SpriteMaterial({ map:lampTex, color:0xffb259, transparent:true, opacity:0,
       blending:THREE.AdditiveBlending, depthWrite:false, fog:false });
     const sp = new THREE.Sprite(lm); sp.scale.set(2.6,2.6,1); sp.position.set(-1.2,3.85,sz); sp.renderOrder=4; g.add(sp);
-    boatLights.push({ mat:lm, flame:flame.material });
+    const pl = new THREE.PointLight(0xffac4d, 0, 22, 1.5); pl.position.set(-1.2,3.7,sz); g.add(pl);   // actually lights the hull/sails
+    boatLights.push({ mat:lm, flame:flame.material, light:pl });
   }
 
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
