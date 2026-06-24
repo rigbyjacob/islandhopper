@@ -1229,14 +1229,20 @@ function stepEstimator(dt) {
   }
 }
 
-let pathLine, estRing, gpsPings = [], gpsPtr = 0;
+let pathRibbon, estRing, gpsPings = [], gpsPtr = 0;
 let targetGlow, glowHalo; const _glowCol = new THREE.Color();
 function buildNavVisuals() {
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3*128), 3));
-  pathLine = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xf2dca0, transparent: true,
-    opacity: 0.92, dashSize: 7, gapSize: 5, depthTest: false }));   // old-map ink-and-dash plotted route
-  pathLine.frustumCulled = false; pathLine.renderOrder = 5; scene.add(pathLine);
+  // planned route as a ribbon of forward-tapering "wedge" dashes lying on the water (world-space width,
+  // so perspective foreshortens them). The boat EATS dashes as it passes — only the path ahead draws.
+  const DASHMAX = 96;
+  const rg = new THREE.BufferGeometry();
+  rg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DASHMAX*4*3), 3));
+  const idx = new Uint16Array(DASHMAX*6);
+  for (let i=0;i<DASHMAX;i++){ const b=i*4; idx[i*6]=b; idx[i*6+1]=b+1; idx[i*6+2]=b+2; idx[i*6+3]=b; idx[i*6+4]=b+2; idx[i*6+5]=b+3; }
+  rg.setIndex(new THREE.BufferAttribute(idx,1));
+  pathRibbon = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: 0xf2dca0, transparent: true,
+    opacity: 0.85, depthTest: false, side: THREE.DoubleSide }));
+  pathRibbon.frustumCulled = false; pathRibbon.renderOrder = 5; scene.add(pathRibbon);
 
   // target glow: a soft warm pulsing halo on the sea around the target island
   targetGlow = new THREE.Group(); targetGlow.renderOrder = 3;
@@ -1255,18 +1261,40 @@ function buildNavVisuals() {
     m.position.y = 1.6; m.userData.life = 0; scene.add(m); gpsPings.push(m); }
 }
 function updatePathLine() {
-  if (!pathLine) return;
-  const pts = (P.showPath && path) ? path : [];
-  const arr = pathLine.geometry.attributes.position.array, n = Math.min(pts.length, 128);
-  for (let i=0;i<n;i++){ arr[i*3]=pts[i].x; arr[i*3+1]=2.6; arr[i*3+2]=pts[i].z; }
-  pathLine.geometry.setDrawRange(0, n);
-  pathLine.geometry.attributes.position.needsUpdate = true;
-  if (n > 1) pathLine.computeLineDistances();   // (method is on the Line, not the geometry) — for dashes
-  pathLine.visible = P.showPath && n > 1;
+  if (!pathRibbon) return;
+  const pts = path, show = P.showPath && pts && pts.length > 1;
+  pathRibbon.visible = show;
+  if (!show){ pathRibbon.geometry.setDrawRange(0,0); return; }
+  // cumulative arc-length of each path vertex
+  const segS=[0]; let acc=0;
+  for (let i=0;i<pts.length-1;i++){ acc += Math.hypot(pts[i+1].x-pts[i].x, pts[i+1].z-pts[i].z); segS.push(acc); }
+  const total=acc;
+  // boat progress = arc-length of its nearest point on the path (everything behind is "eaten")
+  let bestD=Infinity, bestS=0;
+  for (let i=0;i<pts.length-1;i++){ const a=pts[i],b=pts[i+1], abx=b.x-a.x,abz=b.z-a.z, L2=abx*abx+abz*abz||1e-6;
+    const tt=clampJS(((boat3.x-a.x)*abx+(boat3.z-a.z)*abz)/L2,0,1), px=a.x+abx*tt,pz=a.z+abz*tt, d=Math.hypot(boat3.x-px,boat3.z-pz);
+    if(d<bestD){ bestD=d; bestS=segS[i]+tt*Math.hypot(abx,abz); } }
+  const at=(s)=>{ s=clampJS(s,0,total); let i=0; while(i<segS.length-1 && segS[i+1]<s) i++;
+    const a=pts[i], b=pts[Math.min(i+1,pts.length-1)], segl=Math.max(segS[i+1]-segS[i],1e-6), tt=(s-segS[i])/segl;
+    let dx=b.x-a.x, dz=b.z-a.z, dl=Math.hypot(dx,dz)||1; return { x:a.x+dx*tt, z:a.z+dz*tt, dx:dx/dl, dz:dz/dl }; };
+  const arr = pathRibbon.geometry.attributes.position.array;
+  const dash=10, gap=7, wB=4.6, wF=1.4, y=2.6, DASHMAX=96;
+  let s = bestS + 4, di = 0;                                  // begin just ahead of the boat
+  while (s < total && di < DASHMAX){
+    const p0=at(s), p1=at(s+dash), nx=-p0.dz, nz=p0.dx, b=di*12;
+    arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y; arr[b+2 ]=p0.z-nz*wB*0.5;   // back-left  (wide)
+    arr[b+3 ]=p0.x+nx*wB*0.5; arr[b+4 ]=y; arr[b+5 ]=p0.z+nz*wB*0.5;   // back-right
+    arr[b+6 ]=p1.x+nx*wF*0.5; arr[b+7 ]=y; arr[b+8 ]=p1.z+nz*wF*0.5;   // front-right (narrow → wedge)
+    arr[b+9 ]=p1.x-nx*wF*0.5; arr[b+10]=y; arr[b+11]=p1.z-nz*wF*0.5;   // front-left
+    di++; s += dash+gap;
+  }
+  pathRibbon.geometry.setDrawRange(0, di*6);
+  pathRibbon.geometry.attributes.position.needsUpdate = true;
 }
 function spawnGpsPing(x,z){ if(!P.showGps) return; const m = gpsPings[gpsPtr]; gpsPtr = (gpsPtr+1)%gpsPings.length;
   m.position.set(x, 1.6, z); m.userData.life = 1; }
 function updateNavVisuals(dt) {
+  updatePathLine();   // every frame so the boat 'eats' dashes as it advances
   for (const m of gpsPings) { if (m.userData.life > 0) { m.userData.life -= dt*0.8;
       const l = Math.max(0, m.userData.life); m.material.opacity = l*0.7; m.scale.setScalar(1 + (1-l)*2.2); }
     else m.material.opacity = 0; }
@@ -1287,7 +1315,6 @@ function updateNavVisuals(dt) {
       glowHalo.material.color.copy(_glowCol); glowHalo.material.opacity = 0.24 + 0.2*pulse;
     }
   }
-  if (pathLine) pathLine.visible = P.showPath && path && path.length > 1;
   updateWake(boat3, clock.elapsedTime);
 }
 
