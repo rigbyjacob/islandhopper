@@ -1481,8 +1481,8 @@ function buildDipStick(){
       lab.position.set(X+8, y, Z); g.add(lab); lastLabelY=y; }
   };
   tick(0, null);                                               // surface ring, no label
-  for (let m=500; m<maxM-250; m+=500) tick(m, m+' m', false);
-  tick(maxM, null);                                            // seabed ring, no label (was overlapping)
+  for (let m=500; m<maxM-250; m+=500) tick(m, (m===500||m===1000) ? (m+' m') : null);   // label only 500 & 1000
+  tick(maxM, '≈'+(Math.round(maxM/10)*10)+' m', true);         // label the max depth at the seabed
   const title=makeLabelSprite('▼  depth sounding', 0xffffff, 8); title.material.depthTest=false;
   title.position.set(X, 10, Z); g.add(title);
   scene.add(g); dipStick=g;
