@@ -1622,10 +1622,13 @@ function buildOcean() {
     const bRad = oneMinus(smoothstep(float(BR0), float(BR1), dCtr));
     const bGate = smoothstep(0.0,0.02,bUv.x).mul(oneMinus(smoothstep(0.98,1.0,bUv.x)))
                   .mul(smoothstep(0.0,0.02,bUv.y)).mul(oneMinus(smoothstep(0.98,1.0,bUv.y)));
-    const bIn = bRad.mul(bGate);
-    // light translucent tint + contour lines on the surface; the translucent ocean reveals the seabed below
+    // WIDE gentle "deep water" wash reaching far past the seabed reveal, so the open sea around the
+    // bathymetry reads as deep ocean and the edge melts in instead of meeting bright water
+    const bWide = oneMinus(smoothstep(float(BR0), float(BR1+750.0), dCtr));
+    col.assign(mix(col, vec3(0.05,0.15,0.31), uBathy.mul(bWide).mul(0.5)));
+    // detailed real-seabed tint + contour lines within the reveal
     const blended = mix(col, depthCol, float(0.30)).add(vec3(0.7,0.9,1.0).mul(cline).mul(0.5));
-    col.assign(mix(col, blended, uBathy.mul(bIn)));
+    col.assign(mix(col, blended, uBathy.mul(bRad).mul(bGate)));
 
     return col.mul(uDayBright);   // darken the sea at night
   });
