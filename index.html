@@ -2033,21 +2033,22 @@ async function enableRain(){
     const col = rainScenePass.getTextureNode();
     const hash21 = Fn(([p]) => fract(sin(dot(p, vec2(127.1,311.7))).mul(43758.5453)));
     const hash22 = Fn(([p]) => fract(sin(vec2(dot(p, vec2(127.1,311.7)), dot(p, vec2(269.5,183.3)))).mul(43758.5453)));
-    const film = Fn(([uvp]) => {                     // water-film height at aspect-corrected screen uv
+    // one grid of static drops that fade in and evaporate; density gated by storm strength
+    const dropLayer = Fn(([uvp, cells, seed]) => {
+      const g = uvp.mul(cells).add(seed), id = floor(g), f = fract(g).sub(0.5);
+      const rnd = hash22(id.add(seed));
+      const c = f.sub(rnd.sub(0.5).mul(0.78));                                    // jittered position in cell
+      const phase = fract(rnd.x.add(time.mul(rnd.y.mul(0.06).add(0.03))));        // each drop on its own clock
+      const evap = smoothstep(0.0, 0.14, phase).mul(smoothstep(0.92, 0.5, phase));// fade in → hold → evaporate
+      const present = clamp(uRain.mul(1.25).sub(rnd.x).mul(7.0), 0.0, 1.0);       // fewer drops at low storm
+      const rad = rnd.y.mul(0.16).add(0.05);
+      return smoothstep(rad, 0.0, length(c)).mul(evap).mul(present);
+    });
+    const film = Fn(([uvp]) => {                     // 3 UNALIGNED grids → irregular sprinkle, no streaks
       const h = float(0.0).toVar();
-      const lanes = float(11.0);
-      const lane = floor(uvp.x.mul(lanes));
-      const rnd = hash21(vec2(lane, 3.0));
-      const head = fract(time.mul(rnd.mul(0.5).add(0.35)).mul(0.18).add(rnd.mul(7.0)));   // sliding head position
-      const lx = fract(uvp.x.mul(lanes)).sub(0.5);
-      const wob = sin(head.mul(18.0).add(rnd.mul(40.0))).mul(0.10);
-      h.addAssign(smoothstep(0.12, 0.0, length(vec2(lx.sub(wob).mul(1.5), uvp.y.sub(head)))));   // head drop
-      const dy = uvp.y.sub(head);
-      const above = smoothstep(0.0,-0.45,dy).mul(smoothstep(-0.9,-0.05,dy));
-      h.addAssign(smoothstep(0.05, 0.0, abs(lx.sub(wob))).mul(above).mul(0.5));               // trail
-      const g = uvp.mul(vec2(26.0,26.0)), id = floor(g), f = fract(g).sub(0.5), rr = hash22(id);
-      const c = f.sub(rr.sub(0.5).mul(0.7));
-      h.addAssign(smoothstep(rr.x.mul(0.24).add(0.10), 0.0, length(c)).mul(0.8));             // static sprinkle
+      h.addAssign(dropLayer(uvp, vec2(13.0,13.0), vec2(0.0,0.0)));
+      h.addAssign(dropLayer(uvp, vec2(19.0,17.0), vec2(3.7,1.2)));
+      h.addAssign(dropLayer(uvp, vec2(28.0,26.0), vec2(8.3,5.9)).mul(0.7));
       return h;
     });
     const asp = screenSize.x.div(screenSize.y);
@@ -2055,8 +2056,8 @@ async function enableRain(){
     const e = float(0.0018);
     const hC = film(uvA), hX = film(uvA.add(vec2(e,0.0))), hY = film(uvA.add(vec2(0.0,e)));
     const grad = vec2(hC.sub(hX), hC.sub(hY)).mul(uRain);
-    const refr = col.sample(screenUV.add(grad.mul(1.1)));                                     // refraction
-    const rim = pow(clamp(hC,0.0,1.0), 2.0).mul(0.35).mul(uRain);                             // glint
+    const refr = col.sample(screenUV.add(grad.mul(0.55)));                                    // gentler refraction
+    const rim = pow(clamp(hC,0.0,1.0), 2.0).mul(0.22).mul(uRain);                             // subtle glint
     const pp = new THREE.PostProcessing(renderer);
     pp.outputNode = refr.add(vec3(rim));
     rainPost = pp; rainActive = true; console.log('rain enabled');
