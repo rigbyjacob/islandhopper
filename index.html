@@ -909,21 +909,25 @@ function buildSeaSkirt() {
   // the planes from intersecting kills it at the source. (Far edge is past the fog, so no seam.)
   seaSkirt.position.y = -66; seaSkirt.renderOrder = -5; scene.add(seaSkirt);   // below the deepest GEBCO seabed (~-60) so it never occludes the bathymetry
 }
-// wide coarse seabed covering the whole 17x GEBCO tile, so the far ocean floor extends past the fog
-// (no visible map edge). Sits 2u below the detailed island mesh, which renders on top in the core.
+// wide coarse seabed for the FAR field only. The detailed island mesh already covers the core; to avoid
+// two overlapping seabeds clipping each other, this one dives well below the detailed mesh wherever they
+// overlap (hidden there) and only surfaces to real depth OUTSIDE the detailed footprint.
 function buildFarSeabed() {
   const m = BATHY2_META, W = m.x1-m.x0, H = m.zS-m.zN;
-  const geo = new THREE.PlaneGeometry(W, H, 300, 200); geo.rotateX(-Math.PI/2);
+  const geo = new THREE.PlaneGeometry(W, H, 460, 300); geo.rotateX(-Math.PI/2);
   geo.translate((m.x0+m.x1)/2, 0, (m.zN+m.zS)/2);
+  const DX0=MAP.minX-100, DX1=MAP.maxX+100, DZ0=MAP.minZ-100, DZ1=MAP.maxZ+100;   // detailed-mesh footprint
   const pos = geo.attributes.position;
   for (let i=0;i<pos.count;i++){ const x=pos.getX(i), z=pos.getZ(i);
-    const mt = gebcoMetres(x,z);                           // metres (>=0 = land)
-    let d = mt>=0 ? 58 : compressM(-mt);                   // land → treat as deep so it stays dark and hidden under islands
-    d = Math.max(9, Math.min(59, d));                      // never a bright shallow plate, never below the sea-skirt
-    pos.setY(i, -d - 1.5); }                               // 1.5u under the detailed mesh, always deep underwater
+    const mt = gebcoMetres(x,z);
+    let d = mt>=0 ? 58 : compressM(-mt); d = Math.max(9, Math.min(59, d));
+    let y = -d - 1.0;
+    const ins = Math.min(x-DX0, DX1-x, z-DZ0, DZ1-z);     // >0 = inside the detailed footprint
+    if (ins > 0){ y = lerp(y, -72, Math.min(ins/70, 1)); }   // dive to -72 under the detailed mesh → fully hidden, no clip
+    pos.setY(i, y); }
   geo.computeVertexNormals();
   const mat = new THREE.MeshStandardNodeMaterial({ roughness:0.97, metalness:0.0 });
-  mat.colorNode = vec3(0.078, 0.31, 0.42);                 // EXACT detailed-seabed colour, so the two meshes match
+  mat.colorNode = vec3(0.05, 0.19, 0.27);                  // darker than the lit detailed mesh, to match its appearance
   const mesh = new THREE.Mesh(geo, mat); mesh.renderOrder = -4; scene.add(mesh);
 }
 function buildLights() {
