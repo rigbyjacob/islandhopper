@@ -172,7 +172,7 @@ import * as THREE from 'three';
 import {
   Fn, float, vec2, vec3, sin, dot, max, mix, clamp, smoothstep, pow,
   normalize, length, positionLocal, time, positionWorld, cameraPosition, oneMinus, attribute, uniform, uv, floor, fract,
-  pass, mrt, output, normalView
+  pass, mrt, output, normalView, texture, abs
 } from 'three/tsl';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -236,6 +236,7 @@ const P = {
   tourPace: false,    // stretch/compress boat speed so the whole route takes ~tourMinutes
   tourMinutes: 6,     // target duration for the full route (soft deadline; PID stays in control)
   cineStyle: 0.5,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
+  bathy: false,       // bathymetric overlay — show underwater depth + contours
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
@@ -788,6 +789,7 @@ const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reac
 const uMoonDir = uniform(new THREE.Vector3(0, 1, 0));
 const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
+const uBathy   = uniform(0.0);   // bathymetry overlay strength (0 off → 1 on)
 
 let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
@@ -860,6 +862,7 @@ function updateEnvironment(dt) {
   // and the CPU sampler that floats the boat (seaAmp).
   seaAmp = P.waveHeight;
   uSea.value = seaAmp;
+  uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
 
   if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
   const phi = (P.timeOfDay/24)*Math.PI*2;
@@ -1410,9 +1413,22 @@ function updateLabels() {
   }
 }
 
+function buildBathyTexture(){
+  // sample seabed depth across the map into a texture so the ocean shader can show bathymetry
+  const W=384, H=240, data=new Uint8Array(W*H*4);
+  for (let j=0;j<H;j++) for (let i=0;i<W;i++){
+    const x=lerp(MAP.minX,MAP.maxX,i/(W-1)), z=lerp(MAP.minZ,MAP.maxZ,j/(H-1));
+    const depth=clampJS(-terrainHeight(x,z), 0, 90), v=Math.round(depth/90*255), k=(j*W+i)*4;
+    data[k]=v; data[k+1]=v; data[k+2]=v; data[k+3]=255;
+  }
+  const t=new THREE.DataTexture(data,W,H,THREE.RGBAFormat); t.needsUpdate=true;
+  t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.minFilter=t.magFilter=THREE.LinearFilter;
+  return t;
+}
 function buildOcean() {
   const geo = new THREE.PlaneGeometry(5600, 4000, 540, 380);   // wide enough to cover past Puerto Rico
   geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
+  const bathyTex = buildBathyTexture();
 
   const waveH = Fn(([p]) => { const h = float(0).toVar();
     for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed))).mul(w.amp));
@@ -1497,6 +1513,16 @@ function buildOcean() {
     // dapple reads in full sun, not just inside cloud shadows. whN = wave height in base units.
     const whN = wh.div(uSea.max(0.001));
     col.assign(col.mul(mix(float(0.74), float(1.10), smoothstep(-1.0, 0.9, whN)).mul(oneMinus(mottle.mul(0.10)))));
+
+    // ---- bathymetry overlay (toggle): seabed depth ramp + iso-depth contour lines ----
+    const bUv = vec2( positionWorld.x.sub(MAP.minX).div(MAP.maxX-MAP.minX),
+                      positionWorld.z.sub(MAP.minZ).div(MAP.maxZ-MAP.minZ) );
+    const depthN = texture(bathyTex, bUv).r;                                   // 0 surface → 1 deep(90u)
+    const depthCol = mix(vec3(0.20,0.82,0.86), vec3(0.0,0.04,0.22), clamp(depthN.mul(1.25),0.0,1.0));
+    const cband = depthN.mul(13.0);                                            // contour every ~7u of depth
+    const cline = oneMinus(smoothstep(0.0, 0.16, abs(sin(cband.mul(3.14159265)))));
+    const blended = mix(col, depthCol, float(0.74)).add(vec3(0.85,0.95,1.0).mul(cline).mul(0.4));
+    col.assign(mix(col, blended, uBathy));
 
     return col.mul(uDayBright);   // darken the sea at night
   });
@@ -1981,6 +2007,7 @@ function buildPanel() {
   addToggle(s, 'PID telemetry graphs', P, 'showTelemetry', applyHud);
   addToggle(s, 'Compass', P, 'showCompass', applyHud);
   addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
+  addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
 
   // View
   s = section(panel, 'View');
