@@ -254,16 +254,16 @@ const lerp = (a,b,t)=>a+(b-a)*t;
 // (137.5°) so none line up, with geometric wavelengths, gravity-wave dispersion
 // speeds, and a flattened amplitude spectrum so no single swell forms "corduroy"
 // rows. The same params drive the GPU surface and the CPU sampler that floats the boat.
-// BAND-LIMITED: the ocean mesh quad is ~10u, so any wavelength under ~25u can't be represented by
-// the geometry and makes the normals strobe (view-dependent specular flicker, worst on turns). Start
-// long (200u) and keep the smallest swell ~50u — comfortably above the mesh resolution — so every
-// wavelet is well-sampled. Micro-detail comes from the noise-gated sparkle term, not sub-quad sines.
+// Wide spectrum: LONG swells (≈180u) for the morphing distance look + SHORT chop (down to ≈20u) for
+// close-up surface texture / normal detail. The earlier band-limit dropped the short waves and made
+// the water read flat at grazing angles (uniform sky reflection). The flicker that prompted that was
+// really the sea-skirt z-fight (fixed by lowering the skirt), NOT wave normals, so the chop is safe.
 const WAVES = (() => {
-  const out = []; let dirDeg = 18, len = 200;
-  for (let i=0;i<8;i++){
+  const out = []; let dirDeg = 18, len = 180;
+  for (let i=0;i<12;i++){
     const a = dirDeg*Math.PI/180, freq = (2*Math.PI)/len;
     out.push({ nx: Math.cos(a), ny: Math.sin(a), freq,
-               amp: Math.sqrt(len)*0.026, speed: Math.sqrt(3.0*freq) });
+               amp: Math.sqrt(len)*0.022, speed: Math.sqrt(3.0*freq) });
     dirDeg = (dirDeg + 137.5) % 360; len *= 0.82;
   }
   return out;
