@@ -1381,16 +1381,22 @@ function buildOcean() {
   const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 4.0);
   col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.85), 0.0, 0.85)));
 
-  // sun reflection: three lobes (sharp glint + mid glitter + broad sheen) form a shimmering sun path
+  // sun reflection: three lobes (sharp glint + mid glitter + broad sheen) form a shimmering sun path.
+  // Distance-aware: far from the camera each pixel spans many wave periods, so the sharp lobes
+  // alias into a flicker — fade the sharpest ones and flatten the normal with distance (LOD), so
+  // crisp glints stay only where the surface is well-resolved up close.
+  const vdist = length(cameraPosition.sub(positionWorld));
+  const sharp = smoothstep(1200.0, 200.0, vdist);                  // 1 near → 0 far
+  const nSpec = normalize(mix(vec3(0,1,0), n, sharp.mul(0.8).add(0.2)));
   const halfv = normalize(viewDir.add(sunDir));
-  const hN = max(dot(n, halfv), 0.0);
-  col.addAssign(uSunCol.mul(pow(hN, 220.0).mul(2.6).mul(uSunInt)));
+  const hN = max(dot(nSpec, halfv), 0.0);
+  col.addAssign(uSunCol.mul(pow(hN, 220.0).mul(2.6).mul(uSunInt).mul(mix(0.3,1.0,sharp))));
   col.addAssign(uSunCol.mul(pow(hN,  55.0).mul(0.6).mul(uSunInt)));
   col.addAssign(uSunCol.mul(pow(hN,  14.0).mul(0.13).mul(uSunInt)));
   // sun sparkle — tiny ultra-sharp glints in the glint zone, gated by aperiodic noise so they
-  // twinkle like the real tropics (sea of diamonds), not a smooth highlight
+  // twinkle like the real tropics (sea of diamonds); faded with distance so they don't strobe.
   const spk = vnoise(xz.mul(0.9).add(vec2(time.mul(0.7), time.mul(-0.5))));
-  col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 700.0).mul(smoothstep(0.82,0.97,spk)).mul(uSunInt).mul(4.5)));
+  col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 360.0).mul(smoothstep(0.82,0.97,spk)).mul(uSunInt).mul(4.0).mul(sharp)));
   // fake wave self-shadowing — darken points blocked from the sun by a crest toward the sun
   // (adds depth/contrast and helps break up the wave pattern)
   const sunH = normalize(vec2(uSunDir.x, uSunDir.z));
@@ -1568,9 +1574,7 @@ function buildCamera() {
   controls.minZoom = 0.4; controls.maxZoom = 6.0; controls.maxPolarAngle = Math.PI*0.49;
   controls.update();
   fpsCam = new THREE.PerspectiveCamera(72, aspect, 0.5, 16000);
-  // Director cam: near plane pulled WAY out (it never gets within ~30u of anything) so the huge
-  // near:far ratio doesn't wreck depth precision and z-fight the ocean surface into flickering.
-  cineCam = new THREE.PerspectiveCamera(50, aspect, 12, 26000);   // cinematic director camera
+  cineCam = new THREE.PerspectiveCamera(50, aspect, 0.5, 26000);   // cinematic director camera
   activeCam = camera;
 }
 function setView(fps) {
