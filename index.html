@@ -321,7 +321,8 @@ function gebcoMetres(x,z){ const M=BATHY_META;
   const a=BATHY[r0*M.w+c0], b=BATHY[r0*M.w+c1], c=BATHY[r1*M.w+c0], d=BATHY[r1*M.w+c1];
   return (a*(1-tx)+b*tx)*(1-tz) + (c*(1-tx)+d*tx)*tz; }
 // compress 0..~8300 m of real depth into a viewable 0..60 world units (banks/shelves get the fine end)
-function gebcoDepthWorld(x,z){ const dm=Math.max(0,-gebcoMetres(x,z)); return 60*(1-Math.exp(-dm/600)); }
+function compressM(dm){ return 60*(1-Math.exp(-Math.max(0,dm)/600)); }
+function gebcoDepthWorld(x,z){ return compressM(-gebcoMetres(x,z)); }
 function buildTerrainField(){
   let minX=1e9,maxX=-1e9,minZ=1e9,maxZ=-1e9;
   for(const p of ISLAND_POLYS) for(const v of p.r){minX=Math.min(minX,v[0]);maxX=Math.max(maxX,v[0]);minZ=Math.min(minZ,v[1]);maxZ=Math.max(maxZ,v[1]);}
@@ -761,7 +762,7 @@ async function init() {
   loadSettings();   // restore saved panel settings before building the scene
   scene = new THREE.Scene();
   buildTerrainField();
-  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain();
+  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain(); buildDipStick();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
   buildNavVisuals();
@@ -928,6 +929,7 @@ function updateEnvironment(dt) {
   seaAmp = P.waveHeight;
   uSea.value = seaAmp;
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
+  if (dipStick) dipStick.visible = uBathy.value > 0.04;                 // depth sounding shows with bathymetry
   uRain.value = stormFactor;                                            // rain-on-lens intensity follows the storm
 
   if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
@@ -1458,6 +1460,30 @@ function makeLabelSprite(text, color, sizeY){
   sp.scale.set(sizeY*(w/h), sizeY, 1);   // sizeY in WORLD units → obeys perspective (per-frame capped near the camera)
   return sp;
 }
+// a "depth sounding" pole in southern open water: ticks at the surface, every 500 m, and the seabed —
+// labels reveal how much real depth the vertical scale is compressing (only shown in bathymetry mode)
+let dipStick = null;
+function buildDipStick(){
+  const X=380, Z=270;                                          // deep open water S of the chain (~2500 m)
+  const maxM = Math.max(0, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
+  const g = new THREE.Group(); g.visible = false;
+  const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.8 });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.45,-seabedY,8), poleMat);
+  pole.position.set(X, seabedY/2, Z); g.add(pole);
+  const ringGeo = new THREE.TorusGeometry(2.4,0.35,6,18); ringGeo.rotateX(Math.PI/2);
+  const ringMat = new THREE.MeshBasicMaterial({ color:0xffe6a8 });
+  let lastLabelY = 1e9;
+  const tick=(m, txt, force)=>{ const y=-compressM(m);
+    const ring=new THREE.Mesh(ringGeo, ringMat); ring.position.set(X,y,Z); g.add(ring);
+    if (txt && (force || Math.abs(y-lastLabelY) > 6)){                    // skip labels that would collide
+      const lab=makeLabelSprite(txt, 0xfff0c8, 7.5); lab.position.set(X+7, y, Z); g.add(lab); lastLabelY=y; }
+  };
+  tick(0, '0 m  (surface)', true);
+  for (let m=500; m<maxM-200; m+=500) tick(m, m+' m', false);
+  tick(maxM, '≈'+(Math.round(maxM/10)*10)+' m  (seabed)', true);
+  const title=makeLabelSprite('▼  depth sounding', 0xffffff, 9); title.position.set(X, 9, Z); g.add(title);
+  scene.add(g); dipStick=g;
+}
 function buildLabels(){
   for (const isl of ISLANDS){ const sp=makeLabelSprite(isl.name, 0xffffff, 14);   // ~14 world units tall
     sp.position.set(isl.x, Math.max(isl.h,6)+13, isl.z); scene.add(sp); labelEls.push({ sp, isl }); }
@@ -1484,6 +1510,8 @@ function buildBathyTexture(){
     const depth=clampJS(-seabedHeight(x,z), 0, 60), v=Math.round(depth/60*255), k=(j*W+i)*4;   // 0..60u compressed depth
     data[k]=v; data[k+1]=v; data[k+2]=v; data[k+3]=255;
   }
+  // force the outer border to "deep" so ClampToEdge beyond the tile reads as uniform abyss (never streaks)
+  for (let j=0;j<H;j++) for (let i=0;i<W;i++){ if(i===0||i===W-1||j===0||j===H-1){ const k=(j*W+i)*4; data[k]=data[k+1]=data[k+2]=255; } }
   const t=new THREE.DataTexture(data,W,H,THREE.RGBAFormat); t.needsUpdate=true;
   t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.minFilter=t.magFilter=THREE.LinearFilter;
   return t;
@@ -1495,7 +1523,7 @@ function buildOcean() {
   // circular bathymetry border: centre on the island centroid, full out to BR0, fading to nothing at BR1
   let _icx=0,_icz=0; for(const isl of ISLANDS){ _icx+=isl.x; _icz+=isl.z; } _icx/=ISLANDS.length; _icz/=ISLANDS.length;
   let _irm=0; for(const isl of ISLANDS){ _irm=Math.max(_irm, Math.hypot(isl.x-_icx, isl.z-_icz)+isl.r); }
-  const BCX=_icx, BCZ=_icz, BR0=_irm+90, BR1=_irm+300;
+  const BCX=_icx, BCZ=_icz, BR0=_irm+170, BR1=_irm+470;   // larger reveal radius (shows more of the real tile)
 
   const waveH = Fn(([p]) => { const h = float(0).toVar();
     for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed))).mul(w.amp));
