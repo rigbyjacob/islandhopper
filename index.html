@@ -454,7 +454,7 @@ function planPath(sx, sz, gx, gz) {
       if(dc&&dr){ if(BLOCKED[gIdx(n.c+dc,n.r)]||BLOCKED[gIdx(n.c,n.r+dr)])continue; }   // no corner cutting
       const ml=Math.hypot(dc,dr), base=ml*GRID.cell; let pen=1;
       if(cu){ const against=clampJS(-((dc/ml)*cu.x+(dr/ml)*cu.z),0,1); pen += 1.4*against*(cu.mag/8); }
-      if(DLAND){ const near=clampJS((4-DLAND[ci])/4,0,1); pen += 2.2*near*near; }   // hug deep water
+      if(DLAND){ const near=clampJS((8-DLAND[ci])/8,0,1); pen += 7.0*near*near; }   // STRONGLY prefer open water → route around island groups, not through their channels
       const tg=gScore[ni]+base*pen;
       if(tg<gScore[ci]){ gScore[ci]=tg; came[ci]=ni; open.push({c:cc,r:rr,f:tg+h(cc,rr)}); } } }
   if(!found) return [{x:sx,z:sz},{x:gx,z:gz}];
@@ -1679,6 +1679,7 @@ function followCamera(s, dt) {
 // critically-damped springs on both the camera position and the look-at point.
 // ============================================================================
 let cineMode = false, cineCam, cineInit = false;
+let cineShowcase = 0, cineShowcaseIsl = null, cineShowcaseAng = 0, cineShowcaseArmed = true;   // helicopter orbit at final island
 const _cP=new THREE.Vector3(), _cPv=new THREE.Vector3(),     // camera-position spring state + velocity
       _cL=new THREE.Vector3(), _cLv=new THREE.Vector3(),     // look-at spring state + velocity
       _cDesP=new THREE.Vector3(), _cDesL=new THREE.Vector3();
@@ -1725,6 +1726,28 @@ function cineDesired(){
   _cDesL.set(bx + ch*lead + rx*thirdOff, by + 8, bz + sh*lead + rz*thirdOff);
 }
 function updateCineCam(dt){
+  // ---- helicopter showcase: when the boat reaches the FINAL island of the route, orbit the island
+  // while keeping the boat in focus for a few seconds, then resume normal follow ----
+  if (P.mode==='tour' && route.length){
+    const lastIsl = route[route.length-1], atLast = (wpIdx === route.length-1);
+    const dIsl = Math.hypot(boat3.x-lastIsl.x, boat3.z-lastIsl.z);
+    if (atLast && dIsl < lastIsl.r + 80 && cineShowcase <= 0 && cineShowcaseArmed){
+      cineShowcase = 9.0; cineShowcaseIsl = lastIsl; cineShowcaseArmed = false;
+      cineShowcaseAng = Math.atan2(_cP.z-lastIsl.z, _cP.x-lastIsl.x);   // start from current camera bearing
+    }
+    if (!atLast) cineShowcaseArmed = true;        // re-arm for the next lap
+  } else cineShowcase = 0;
+  if (cineShowcase > 0 && cineShowcaseIsl){
+    cineShowcase -= dt;
+    const isl = cineShowcaseIsl, t = clock.elapsedTime, by = waveHeightJS(boat3.x, boat3.z, t);
+    cineShowcaseAng += dt*0.42;                                        // slow helicopter orbit
+    const orbR = isl.r + 150, orbH = Math.max(isl.h||10, 8) + 80;
+    _cDesP.set(isl.x + Math.cos(cineShowcaseAng)*orbR, orbH, isl.z + Math.sin(cineShowcaseAng)*orbR);
+    const tH = terrainHeight(_cDesP.x,_cDesP.z); if (_cDesP.y < tH+34) _cDesP.y = tH+34;
+    _cDesL.set(boat3.x, by+6, boat3.z);                               // keep focus on the boat
+    springVec(_cP, _cPv, _cDesP, 1.2, dt); springVec(_cL, _cLv, _cDesL, 2.2, dt);
+    cineCam.position.copy(_cP); cineCam.lookAt(_cL); return;
+  }
   cineDesired();
   if (!cineInit){   // swoop-in: start high & pulled back, springs glide down into the follow pose
     const ch=Math.cos(boat3.psi), sh=Math.sin(boat3.psi);
