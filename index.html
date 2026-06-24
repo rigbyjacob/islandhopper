@@ -1501,7 +1501,7 @@ function updateLabels(){
 }
 
 // the bathymetry overlay covers the whole WIDE GEBCO tile (17x area) so the depth tint extends far out
-const BATHY_RGN = { x0: MAP.cx-1600, x1: MAP.cx+1600, z0: MAP.cz-1400, z1: MAP.cz+1400 };   // visible seabed region (inset inside the mesh)
+const BATHY_RGN = { x0: MAP.cx-1800, x1: MAP.cx+1800, z0: MAP.cz-1600, z1: MAP.cz+1600 };   // visible seabed region (inset inside the mesh)
 function buildBathyTexture(){
   // sample the REAL GEBCO seabed depth across the visible region into a texture for the ocean shader
   const W=900, H=800, data=new Uint8Array(W*H*4);
@@ -1520,7 +1520,9 @@ function buildOcean() {
   const geo = new THREE.PlaneGeometry(5600, 4000, 540, 380);   // wide enough to cover past Puerto Rico
   geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
   const bathyTex = buildBathyTexture();
-  // circular bathymetry border: centre on the TOUR chain (not all islands — Puerto Rico would drag it west)
+  // soft CIRCULAR bathymetry border, centred on the seabed mesh, kept inside the data region so it never
+  // hits the texture edge (which caused the white contour ring). Large radius — fades far out in deep water.
+  const BCX=MAP.cx, BCZ=MAP.cz, BR0=1150, BR1=1560;
 
   const waveH = Fn(([p]) => { const h = float(0).toVar();
     for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed))).mul(w.amp));
@@ -1615,12 +1617,11 @@ function buildOcean() {
     const cline = oneMinus(smoothstep(0.0, 0.16, abs(sin(cband.mul(3.14159265)))));
     // CIRCULAR border: radial fade centred on the islands (a natural round edge, not a hard rectangle),
     // AND a data-region gate so the tile edges never streak.
-    // soft fade ONLY at the far edges of the data region (no circle) — full bathymetry across the whole
-    // seabed, easing to nothing toward the rectangle's outer margin so there's no hard boundary
-    const fadeEdge = smoothstep(0.0,0.10,bUv.x).mul(oneMinus(smoothstep(0.90,1.0,bUv.x)))
-                     .mul(smoothstep(0.0,0.10,bUv.y)).mul(oneMinus(smoothstep(0.90,1.0,bUv.y)));
+    // soft CIRCULAR fade (a round border reads nicer than a rectangle)
+    const _dx = positionWorld.x.sub(BCX), _dz = positionWorld.z.sub(BCZ);
+    const bRad = oneMinus(smoothstep(float(BR0), float(BR1), vec2(_dx,_dz).length()));
     const blended = mix(col, depthCol, float(0.30)).add(vec3(0.7,0.9,1.0).mul(cline).mul(0.5));
-    col.assign(mix(col, blended, uBathy.mul(fadeEdge)));
+    col.assign(mix(col, blended, uBathy.mul(bRad)));
 
     return col.mul(uDayBright);   // darken the sea at night
   });
@@ -1631,10 +1632,8 @@ function buildOcean() {
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
   oceanMat.opacityNode = Fn(() => {
-    const u = positionWorld.x.sub(BATHY_RGN.x0).div(BATHY_RGN.x1-BATHY_RGN.x0);
-    const v = positionWorld.z.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0);
-    const m = smoothstep(0.0,0.10,u).mul(oneMinus(smoothstep(0.90,1.0,u)))
-              .mul(smoothstep(0.0,0.10,v)).mul(oneMinus(smoothstep(0.90,1.0,v)));   // translucent across the whole region, soft edges only
+    const _dx = positionWorld.x.sub(BCX), _dz = positionWorld.z.sub(BCZ);
+    const m = oneMinus(smoothstep(float(BR0), float(BR1), vec2(_dx,_dz).length()));   // translucent inside the soft circle
     return oneMinus(uBathy.mul(0.62).mul(m));
   })();
   oceanMat.transparent = true; oceanMat.depthWrite = true;
@@ -1642,8 +1641,8 @@ function buildOcean() {
 }
 
 function buildTerrain() {
-  const W = 3400, H = 3000;                              // one big seabed mesh covering well past the islands (no 2nd mesh)
-  const segX=1340, segY=1180, nx=segX+1, ny=segY+1;      // ~2.5u/seg — keeps coastlines crisp, samples real GEBCO far out
+  const W = 3800, H = 3400;                              // one big seabed mesh covering well past the islands (no 2nd mesh)
+  const segX=1460, segY=1300, nx=segX+1, ny=segY+1;      // ~2.6u/seg — keeps coastlines crisp, samples real GEBCO far out
   const geo = new THREE.PlaneGeometry(W, H, segX, segY);
   geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
   const pos = geo.attributes.position, colors = new Float32Array(pos.count*3);
