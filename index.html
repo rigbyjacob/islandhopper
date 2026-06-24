@@ -1249,8 +1249,8 @@ function buildNavVisuals() {
   const idx = new Uint16Array(DASHMAX*6);
   for (let i=0;i<DASHMAX;i++){ const b=i*4; idx[i*6]=b; idx[i*6+1]=b+1; idx[i*6+2]=b+2; idx[i*6+3]=b; idx[i*6+4]=b+2; idx[i*6+5]=b+3; }
   rg.setIndex(new THREE.BufferAttribute(idx,1));
-  pathRibbon = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: 0xf2dca0, transparent: true,
-    opacity: 0.85, depthTest: false, side: THREE.DoubleSide }));
+  pathRibbon = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: 0xffe1a0, transparent: true,
+    opacity: 0.7, depthTest: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));   // glowing dashes
   pathRibbon.frustumCulled = false; pathRibbon.renderOrder = 5; scene.add(pathRibbon);
 
   // target glow: a soft warm pulsing halo on the sea around the target island
@@ -1287,8 +1287,8 @@ function updatePathLine() {
     const a=pts[i], b=pts[Math.min(i+1,pts.length-1)], segl=Math.max(segS[i+1]-segS[i],1e-6), tt=(s-segS[i])/segl;
     let dx=b.x-a.x, dz=b.z-a.z, dl=Math.hypot(dx,dz)||1; return { x:a.x+dx*tt, z:a.z+dz*tt, dx:dx/dl, dz:dz/dl }; };
   const arr = pathRibbon.geometry.attributes.position.array;
-  const dash=10, gap=7, wB=4.6, wF=1.4, y=2.6, DASHMAX=96;
-  let s = bestS + 4, di = 0;                                  // begin just ahead of the boat
+  const dash=10, gap=7, wB=4.6, wF=1.4, y=0.45, DASHMAX=96;  // sit low at the water surface (sunken)
+  let s = bestS + 20, di = 0;                                 // begin well ahead of the bow → boat eats dashes earlier
   while (s < total && di < DASHMAX){
     const p0=at(s), p1=at(s+dash), nx=-p0.dz, nz=p0.dx, b=di*12;
     arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y; arr[b+2 ]=p0.z-nz*wB*0.5;   // back-left  (wide)
@@ -1337,9 +1337,9 @@ function buildWake() {
   const idx = [];
   for (let i=0;i<WAKE_N-1;i++){ const a=i*2,b=i*2+1,c=(i+1)*2,d=(i+1)*2+1; idx.push(a,b,c, b,d,c); }
   geo.setIndex(idx);
-  wakeMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xdceefc, transparent: true,
-    opacity: 0.16, blending: THREE.NormalBlending, depthWrite: false, side: THREE.DoubleSide }));
-  wakeMesh.frustumCulled = false; scene.add(wakeMesh);
+  wakeMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xeaf4ff, transparent: true,
+    opacity: 0.3, blending: THREE.NormalBlending, depthWrite: false, side: THREE.DoubleSide }));
+  wakeMesh.frustumCulled = false; wakeMesh.renderOrder = 2; scene.add(wakeMesh);
 }
 function updateWake(s, t) {
   if (!wakeMesh) return;
@@ -1360,13 +1360,13 @@ function updateWake(s, t) {
     const frac = i/(WAKE_N-1);
     // proper V-wake: a point at the stern, widening behind, tapering away at the tail
     let halfW = Math.min(frac*10, 3.4); if (frac>0.65) halfW *= (1-(frac-0.65)/0.35);
-    const yy = waveHeightJS(p.x, p.z, t) + 0.2;   // sit on the swell
+    const yy = waveHeightJS(p.x, p.z, t) + 0.6;   // ride just clear of the crests so it isn't occluded
     const li=i*6, ri=li+3;
     arr[li]=p.x + (-dz)*halfW; arr[li+1]=yy; arr[li+2]=p.z + (dx)*halfW;
     arr[ri]=p.x - (-dz)*halfW; arr[ri+1]=yy; arr[ri+2]=p.z - (dx)*halfW;
   }
   wakeMesh.geometry.attributes.position.needsUpdate = true;
-  wakeMesh.material.opacity = 0.05 + 0.16 * clampJS(Math.abs(s.speedWater)/20, 0, 1);  // subtle, fades when slow
+  wakeMesh.material.opacity = 0.12 + 0.40 * clampJS(Math.abs(s.speedWater)/20, 0, 1);  // visible foam wake, fades when slow
 }
 
 // ---- island name labels (HTML, projected from world space) ----
