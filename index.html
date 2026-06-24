@@ -775,9 +775,10 @@ function buildLights() {
   sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
   sunLight.position.set(420, 620, 360);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(2048, 2048);
+  sunLight.shadow.mapSize.set(4096, 4096);   // higher res so thin palm fronds don't shimmer
   const sc = sunLight.shadow.camera;
-  sc.left=-480; sc.right=480; sc.top=480; sc.bottom=-480; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();
+  // tighter frustum (follows the boat) → smaller texels → steadier, sharper frond shadows.
+  sc.left=-340; sc.right=340; sc.top=340; sc.bottom=-340; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();
   sunLight.shadow.bias = -0.0005; sunLight.shadow.normalBias = 1.4;
   scene.add(sunLight); scene.add(sunLight.target);
   hemiLight = new THREE.HemisphereLight(0xbfe6ff, 0x35506b, 0.9); scene.add(hemiLight);
@@ -841,7 +842,10 @@ function updateEnvironment(dt) {
         b = Math.round(_shCtr.dot(_shUp)/texel)*texel,
         f = _shCtr.dot(_shFwd);                                     // keep depth-along-ray unchanged
   _shCtr.copy(_shRight).multiplyScalar(a).addScaledVector(_shUp, b).addScaledVector(_shFwd, f);
-  sunLight.position.set(_shCtr.x + _sun.x*D, Math.max(e,0.06)*D + 80, _shCtr.z + _sun.z*D);
+  // Position the light EXACTLY along the sun ray from the snapped centre, so the shadow camera's
+  // view direction is precisely -_sun and its projection centre is the snapped centre. (Overriding
+  // the Y independently — as before — tilted the frustum off-axis and re-broke the texel alignment.)
+  sunLight.position.copy(_shCtr).addScaledVector(_sun, D);
   sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
   sunLight.castShadow = day > 0.06;
 
