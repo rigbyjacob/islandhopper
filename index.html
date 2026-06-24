@@ -640,6 +640,7 @@ async function init() {
   document.getElementById('app').appendChild(renderer.domElement);
   await renderer.init();
 
+  loadSettings();   // restore saved panel settings before building the scene
   scene = new THREE.Scene();
   buildTerrainField();
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain();
@@ -649,6 +650,7 @@ async function init() {
   buildWake();
   buildLabels();
   buildPanel();
+  applyHud();        // reflect any restored HUD-visibility settings
   initInput();
 
   BLOCKED = buildBlocked();
@@ -1599,12 +1601,19 @@ async function enableAO(){
     const col = scenePass.getTextureNode('output'), nrm = scenePass.getTextureNode('normal'), dep = scenePass.getTextureNode('depth');
     const aoPass = mod.ao(dep, nrm, camera); aoPass.resolutionScale = 1.0;
     const pp = new THREE.PostProcessing(renderer);
-    pp.outputNode = aoPass.getTextureNode().mul(col);
+    // blend so AO darkens at most ~45% — it can never wash the whole frame to black
+    pp.outputNode = col.mul(aoPass.getTextureNode().mul(0.55).add(0.45));
     aoPost = pp; aoActive = true; console.log('AO enabled');
   } catch(e){ console.warn('AO setup failed — reverting', e); aoActive=false; aoPost=null;
     P.ao=false; if (ui.aoTog) ui.aoTog.classList.remove('on'); }
 }
 function disableAO(){ aoActive = false; }
+
+// persist all panel settings between refreshes
+const SETTINGS_KEY = 'pidHelmsman.v1';
+function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
+function loadSettings(){ try { const s = localStorage.getItem(SETTINGS_KEY);
+  if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; P.ao = false; } } catch(_){ } }   // don't auto-restore pause / experimental AO
 
 function applyHud(){
   const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display = on?'':'none'; };
@@ -1741,7 +1750,7 @@ function setMode(m) {
   P.mode = m;
   for (const k in ui.modeBtns) ui.modeBtns[k].classList.toggle('active', k===m);
   if (ui.holdWrap) ui.holdWrap.style.display = (m==='hold') ? '' : 'none';
-  headingPID.reset();
+  headingPID.reset(); saveSettings();
 }
 
 // --- small UI factory ---
@@ -1753,14 +1762,14 @@ function addSlider(parent, label, obj, key, min, max, step, fmt, onChange){
   const lab=el('label','',row); lab.textContent=label;
   const val=el('div','val',row); val.textContent=fmt?fmt(obj[key]):obj[key];
   const inp=el('input','',row); inp.type='range'; inp.min=min; inp.max=max; inp.step=step; inp.value=obj[key];
-  inp.oninput=()=>{ obj[key]=parseFloat(inp.value); val.textContent=fmt?fmt(obj[key]):obj[key]; if(onChange) onChange(obj[key]); };
+  inp.oninput=()=>{ obj[key]=parseFloat(inp.value); val.textContent=fmt?fmt(obj[key]):obj[key]; if(onChange) onChange(obj[key]); saveSettings(); };
   sliderRefs[key]={inp,val,fmt};
 }
 function syncSlider(key){ const r=sliderRefs[key]; if(!r)return; r.inp.value=P[key]; r.val.textContent=r.fmt?r.fmt(P[key]):P[key]; }
 function addToggle(parent, label, obj, key, onChange){
   const t=el('div','tg'+(obj[key]?' on':''),parent);
   el('div','box',t); const l=el('div','lab',t); l.textContent=label;
-  t.onclick=()=>{ obj[key]=!obj[key]; t.classList.toggle('on',obj[key]); if(onChange) onChange(obj[key]); };
+  t.onclick=()=>{ obj[key]=!obj[key]; t.classList.toggle('on',obj[key]); if(onChange) onChange(obj[key]); saveSettings(); };
   return t;
 }
 
