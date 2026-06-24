@@ -253,21 +253,26 @@ const lerp = (a,b,t)=>a+(b-a)*t;
 // (137.5°) so none line up, with geometric wavelengths, gravity-wave dispersion
 // speeds, and a flattened amplitude spectrum so no single swell forms "corduroy"
 // rows. The same params drive the GPU surface and the CPU sampler that floats the boat.
+// BAND-LIMITED: the ocean mesh quad is ~10u, so any wavelength under ~25u can't be represented by
+// the geometry and makes the normals strobe (view-dependent specular flicker, worst on turns). Start
+// long (200u) and keep the smallest swell ~50u — comfortably above the mesh resolution — so every
+// wavelet is well-sampled. Micro-detail comes from the noise-gated sparkle term, not sub-quad sines.
 const WAVES = (() => {
-  const out = []; let dirDeg = 18, len = 112;
-  for (let i=0;i<11;i++){
+  const out = []; let dirDeg = 18, len = 200;
+  for (let i=0;i<8;i++){
     const a = dirDeg*Math.PI/180, freq = (2*Math.PI)/len;
     out.push({ nx: Math.cos(a), ny: Math.sin(a), freq,
-               amp: Math.sqrt(len)*0.026, speed: Math.sqrt(3.0*freq) });   // calmer sea so islands aren't swamped
-    dirDeg = (dirDeg + 137.5) % 360; len *= 0.80;
+               amp: Math.sqrt(len)*0.026, speed: Math.sqrt(3.0*freq) });
+    dirDeg = (dirDeg + 137.5) % 360; len *= 0.82;
   }
   return out;
 })();
+let seaAmp = 1.0;   // storm-reactive global wave-amplitude multiplier (mirrors GPU uSea)
 
 function waveHeightJS(x, z, t) {
   let h = 0;
   for (const w of WAVES) h += Math.sin((x*w.nx + z*w.ny)*w.freq + t*w.speed) * w.amp;
-  return h;
+  return h * seaAmp;
 }
 
 const K = 220;
@@ -773,6 +778,7 @@ const uZenith  = uniform(new THREE.Vector3(0.12, 0.43, 0.78));
 const uHorizon = uniform(new THREE.Vector3(0.76, 0.88, 0.96));
 const uDayBright = uniform(1.0);
 const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
+const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reactive); mirrors CPU seaAmp
 
 let skyMat, skyMesh, fog, sunLight, hemiLight, seaSkirt;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3);
@@ -825,6 +831,10 @@ function updateEnvironment(dt) {
   const stormTarget = P.stormOn ? P.stormIntensity : 0;
   stormFactor += (stormTarget - stormFactor) * Math.min(1, dt*0.6);
   const sf = stormFactor;
+  // storm-reactive sea state: gentle swell in fair weather, big rolling seas in a storm.
+  // Drives both the GPU surface (uSea) and the CPU sampler that floats the boat (seaAmp).
+  seaAmp = lerp(1.3, 4.2, sf);
+  uSea.value = seaAmp;
 
   if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
   const phi = (P.timeOfDay/24)*Math.PI*2;
@@ -1337,7 +1347,7 @@ function buildOcean() {
 
   const waveH = Fn(([p]) => { const h = float(0).toVar();
     for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed))).mul(w.amp));
-    return h; });
+    return h.mul(uSea); });   // storm-reactive global amplitude
   const waveN = Fn(([p]) => { const e = 0.9;
     const hL = waveH(p.add(vec2(-e,0))), hR = waveH(p.add(vec2(e,0)));
     const hD = waveH(p.add(vec2(0,-e))), hU = waveH(p.add(vec2(0,e)));
@@ -1381,22 +1391,16 @@ function buildOcean() {
   const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 4.0);
   col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.85), 0.0, 0.85)));
 
-  // sun reflection: three lobes (sharp glint + mid glitter + broad sheen) form a shimmering sun path.
-  // Distance-aware: far from the camera each pixel spans many wave periods, so the sharp lobes
-  // alias into a flicker — fade the sharpest ones and flatten the normal with distance (LOD), so
-  // crisp glints stay only where the surface is well-resolved up close.
-  const vdist = length(cameraPosition.sub(positionWorld));
-  const sharp = smoothstep(1200.0, 200.0, vdist);                  // 1 near → 0 far
-  const nSpec = normalize(mix(vec3(0,1,0), n, sharp.mul(0.8).add(0.2)));
+  // sun reflection: three lobes (sharp glint + mid glitter + broad sheen) form a shimmering sun path
   const halfv = normalize(viewDir.add(sunDir));
-  const hN = max(dot(nSpec, halfv), 0.0);
-  col.addAssign(uSunCol.mul(pow(hN, 220.0).mul(2.6).mul(uSunInt).mul(mix(0.3,1.0,sharp))));
+  const hN = max(dot(n, halfv), 0.0);
+  col.addAssign(uSunCol.mul(pow(hN, 220.0).mul(2.6).mul(uSunInt)));
   col.addAssign(uSunCol.mul(pow(hN,  55.0).mul(0.6).mul(uSunInt)));
   col.addAssign(uSunCol.mul(pow(hN,  14.0).mul(0.13).mul(uSunInt)));
   // sun sparkle — tiny ultra-sharp glints in the glint zone, gated by aperiodic noise so they
-  // twinkle like the real tropics (sea of diamonds); faded with distance so they don't strobe.
+  // twinkle like the real tropics (sea of diamonds), not a smooth highlight
   const spk = vnoise(xz.mul(0.9).add(vec2(time.mul(0.7), time.mul(-0.5))));
-  col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 360.0).mul(smoothstep(0.82,0.97,spk)).mul(uSunInt).mul(4.0).mul(sharp)));
+  col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 700.0).mul(smoothstep(0.82,0.97,spk)).mul(uSunInt).mul(4.5)));
   // fake wave self-shadowing — darken points blocked from the sun by a crest toward the sun
   // (adds depth/contrast and helps break up the wave pattern)
   const sunH = normalize(vec2(uSunDir.x, uSunDir.z));
