@@ -236,6 +236,7 @@ const P = {
   tourPace: false,    // stretch/compress boat speed so the whole route takes ~tourMinutes
   tourMinutes: 6,     // target duration for the full route (soft deadline; PID stays in control)
   cineStyle: 0.5,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
+  cineView: 'follow', // director camera mode: 'follow' (slider) | 'side' | 'race'
   bathy: false,       // bathymetric overlay — show underwater depth + contours
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
 };
@@ -1737,7 +1738,7 @@ function followCamera(s, dt) {
 // critically-damped springs on both the camera position and the look-at point.
 // ============================================================================
 let cineMode = false, cineCam, cineInit = false;
-let cineShowcase = 0, cineShowcaseIsl = null, cineShowcaseAng = 0, cineShowcaseArmed = true;   // helicopter orbit at final island
+let cineShowcase = 0, cineShowcaseIsl = null, cineShowcaseAng = 0, cineShowcaseLast = -1, tourLapDone = false;   // helicopter orbit at final + returning-first island
 const _cP=new THREE.Vector3(), _cPv=new THREE.Vector3(),     // camera-position spring state + velocity
       _cL=new THREE.Vector3(), _cLv=new THREE.Vector3(),     // look-at spring state + velocity
       _cDesP=new THREE.Vector3(), _cDesL=new THREE.Vector3();
@@ -1755,6 +1756,23 @@ function cineDesired(){
   const bx = boat3.x, bz = boat3.z, by = waveHeightJS(bx, bz, t);
   const ch = Math.cos(boat3.psi), sh = Math.sin(boat3.psi);   // heading unit
   const rx = sh, rz = -ch;                                    // starboard (right of heading)
+  // ---- SIDE: profile the boat from the side as it passes the islands ----
+  if (P.cineView === 'side'){
+    const sgn = (wpIdx % 2 === 0) ? 1 : -1;                  // alternate side each island                                 // which side (toggles each island pass)
+    _cDesP.set(bx + rx*128*sgn, by + 46, bz + rz*128*sgn);
+    const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+26)_cDesP.y=tH+26;
+    _cDesL.set(bx + ch*8, by + 7, bz + sh*8);
+    return;
+  }
+  // ---- RACE: tucked in close behind & to one side, low, zoomed — feel the action ----
+  if (P.cineView === 'race'){
+    const sgn = (wpIdx % 2 === 0) ? 1 : -1;                  // alternate side each island
+    _cDesP.set(bx - ch*46 + rx*20*sgn, by + 17, bz - sh*46 + rz*20*sgn);
+    const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+12)_cDesP.y=tH+12;
+    _cDesL.set(bx + ch*34, by + 9, bz + sh*34);              // look ahead down the course
+    return;
+  }
+  // ---- FOLLOW (Adams↔Bresson slider) ----
   // --- upcoming turn (signed: + left, − right) by sampling the planned path ahead of the boat ---
   let turn = 0;
   if (path && path.length>1){
@@ -1787,13 +1805,20 @@ function updateCineCam(dt){
   // ---- helicopter showcase: when the boat reaches the FINAL island of the route, orbit the island
   // while keeping the boat in focus for a few seconds, then resume normal follow ----
   if (P.mode==='tour' && route.length){
-    const lastIsl = route[route.length-1], atLast = (wpIdx === route.length-1);
-    const dIsl = Math.hypot(boat3.x-lastIsl.x, boat3.z-lastIsl.z);
-    if (atLast && dIsl < lastIsl.r + 80 && cineShowcase <= 0 && cineShowcaseArmed){
-      cineShowcase = 9.0; cineShowcaseIsl = lastIsl; cineShowcaseArmed = false;
-      cineShowcaseAng = Math.atan2(_cP.z-lastIsl.z, _cP.x-lastIsl.x);   // start from current camera bearing
+    const lastIdx = route.length-1;
+    // fire at the FINAL island, and on the RETURN to the first island (after a lap) — but not at the
+    // tour's very start. Requiring a different island than the last showcase lets it alternate last↔first.
+    let trigIdx = -1, trigIsl = null;
+    if (wpIdx === lastIdx){ trigIdx = lastIdx; trigIsl = route[lastIdx]; }
+    else if (wpIdx === 0 && tourLapDone){ trigIdx = 0; trigIsl = route[0]; }
+    if (trigIsl && trigIdx !== cineShowcaseLast && cineShowcase <= 0){
+      const dIsl = Math.hypot(boat3.x-trigIsl.x, boat3.z-trigIsl.z);
+      if (dIsl < trigIsl.r + 80){
+        cineShowcase = 9.0; cineShowcaseIsl = trigIsl; cineShowcaseLast = trigIdx;
+        if (trigIdx === lastIdx) tourLapDone = true;   // completed a lap → enable the return-to-first showcase
+        cineShowcaseAng = Math.atan2(_cP.z-trigIsl.z, _cP.x-trigIsl.x);
+      }
     }
-    if (!atLast) cineShowcaseArmed = true;        // re-arm for the next lap
   } else cineShowcase = 0;
   if (cineShowcase > 0 && cineShowcaseIsl){
     cineShowcase -= dt;
@@ -1812,10 +1837,24 @@ function updateCineCam(dt){
     _cP.set(boat3.x - ch*520, _cDesP.y + 470, boat3.z - sh*520);
     _cL.copy(_cDesL); _cPv.set(0,0,0); _cLv.set(0,0,0); cineInit = true;
   }
-  springVec(_cP, _cPv, _cDesP, 0.95, dt);   // position spring — gentle, swoopy
-  springVec(_cL, _cLv, _cDesL, 1.7,  dt);   // look-at spring — snappier so framing keeps the boat held
+  // race tucks in and zooms; side/follow are wider. Spring the FOV so mode changes ease.
+  const fovTarget = (cineShowcase>0) ? 46 : (P.cineView==='race' ? 34 : P.cineView==='side' ? 44 : 50);
+  cineCam.fov += (fovTarget - cineCam.fov) * Math.min(1, dt*3); cineCam.updateProjectionMatrix();
+  // race/side track tighter; follow & showcase are swoopier
+  const tight = (P.cineView==='race');
+  springVec(_cP, _cPv, _cDesP, tight?2.2:0.95, dt);
+  springVec(_cL, _cLv, _cDesL, tight?3.0:1.7,  dt);
   cineCam.position.copy(_cP); cineCam.lookAt(_cL);
 }
+function triggerHelicopter(){   // manual: orbit the current/next target island
+  const isl = (P.mode==='tour' && route[wpIdx]) ? route[wpIdx] : ISLANDS.reduce((a,b)=>
+    Math.hypot(boat3.x-b.x,boat3.z-b.z)<Math.hypot(boat3.x-a.x,boat3.z-a.z)?b:a);
+  if (!isl) return;
+  if (!cineMode){ setCine(true); }
+  cineShowcase = 10.0; cineShowcaseIsl = isl;
+  cineShowcaseAng = Math.atan2(_cP.z-isl.z, _cP.x-isl.x);
+}
+function setCineView(v){ P.cineView = v; for (const k in ui.cineViewBtns) ui.cineViewBtns[k].classList.toggle('active', k===v); saveSettings(); }
 function setCine(on){
   cineMode = on;
   if (on){ if (fpsMode) setView(false); cineInit = false; }
@@ -2070,6 +2109,13 @@ function buildPanel() {
   // Cinematic tour director
   s = section(panel, 'Cinematic tour');
   ui.cineTog = addToggle(s, 'Director camera', P, 'cine', (on)=>setCine(on));
+  // view-mode buttons
+  const cvRow = el('div','btns',s); ui.cineViewBtns = {};
+  for (const [v,lbl] of [['follow','Follow'],['side','Side'],['race','Race']]){
+    const b=el('div','btn'+(v===P.cineView?' active':''),cvRow); b.textContent=lbl; b.onclick=()=>setCineView(v); ui.cineViewBtns[v]=b;
+  }
+  const cvRow2 = el('div','btns',s);
+  const heli=el('div','btn',cvRow2); heli.textContent='🚁 Helicopter (this island)'; heli.onclick=()=>triggerHelicopter();
   addSlider(s, 'Composition: Adams→Bresson', P, 'cineStyle', 0, 1, 0.05, v=>v.toFixed(2));
   addToggle(s, 'Pace to duration', P, 'tourPace', ()=>applyTourPacing());
   addSlider(s, 'Tour duration', P, 'tourMinutes', 1, 30, 0.5, v=>v.toFixed(1)+' min', ()=>applyTourPacing());
