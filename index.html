@@ -160,7 +160,8 @@
 import * as THREE from 'three';
 import {
   Fn, float, vec2, vec3, sin, dot, max, mix, clamp, smoothstep, pow,
-  normalize, length, positionLocal, time, positionWorld, cameraPosition, oneMinus, attribute, uniform, uv, floor, fract
+  normalize, length, positionLocal, time, positionWorld, cameraPosition, oneMinus, attribute, uniform, uv, floor, fract,
+  pass, mrt, output, normalView
 } from 'three/tsl';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -213,6 +214,7 @@ const P = {
   autoDay: true, timeOfDay: 9.5, dayLength: 120,   // hours; dayLength = real seconds per full day
   // HUD visibility
   showTitle: true, showHints: true, showTelemetry: true, showCompass: true, showLabels: true,
+  ao: false,   // ambient occlusion post-process (experimental, orbit view)
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
@@ -691,8 +693,10 @@ async function init() {
     controls.update();
     if (fpsMode) updateFpsCam(t);
     activeCam = fpsMode ? fpsCam : camera;
-    try { renderer.render(scene, activeCam); }
-    catch (err) { console.warn('render failed', err); if (fpsMode) setView(false); }
+    try {
+      if (aoActive && aoPost && !fpsMode) aoPost.render();
+      else renderer.render(scene, activeCam);
+    } catch (err) { console.warn('render failed', err); aoActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
     if (P.showLabels) updateLabels();
@@ -1583,6 +1587,25 @@ function updateRecUI(){
   ui.segBtn.classList.toggle('active', recState !== 'recording' && rec);
 }
 
+// Ambient occlusion (GTAO) post-process — built lazily on first enable (dynamic import keeps
+// boot safe), orbit-view only, fully guarded so a failure reverts instead of breaking the app.
+let aoPost = null, aoActive = false;
+async function enableAO(){
+  if (aoPost){ aoActive = true; return; }
+  try {
+    const mod = await import('three/addons/tsl/display/GTAONode.js');
+    const scenePass = pass(scene, camera);
+    scenePass.setMRT(mrt({ output, normal: normalView }));
+    const col = scenePass.getTextureNode('output'), nrm = scenePass.getTextureNode('normal'), dep = scenePass.getTextureNode('depth');
+    const aoPass = mod.ao(dep, nrm, camera); aoPass.resolutionScale = 1.0;
+    const pp = new THREE.PostProcessing(renderer);
+    pp.outputNode = aoPass.getTextureNode().mul(col);
+    aoPost = pp; aoActive = true; console.log('AO enabled');
+  } catch(e){ console.warn('AO setup failed — reverting', e); aoActive=false; aoPost=null;
+    P.ao=false; if (ui.aoTog) ui.aoTog.classList.remove('on'); }
+}
+function disableAO(){ aoActive = false; }
+
 function applyHud(){
   const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display = on?'':'none'; };
   set('title',P.showTitle); set('hint',P.showHints); set('telemetry',P.showTelemetry);
@@ -1632,6 +1655,11 @@ function buildPanel() {
   ui.segBtn = el('div','btn',crow); ui.segBtn.textContent = '❚❚ Pause seg'; ui.segBtn.style.display = 'none';
   ui.segBtn.onclick = () => { if (recState==='recording') pauseSegment(); else if (recState==='paused') resumeSegment(); };
   el('div','read',cap).innerHTML = 'record → pause seg → reposition → resume';
+
+  // Effects (experimental)
+  const fx = section(panel, 'Effects');
+  ui.aoTog = addToggle(fx, 'Ambient occlusion (beta)', P, 'ao', (on)=>{ if (on) enableAO(); else disableAO(); });
+  el('div','read',fx).innerHTML = 'GTAO · orbit view only · experimental';
 
   // Modes
   s = section(panel, 'Mode');
