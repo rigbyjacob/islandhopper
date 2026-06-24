@@ -68,6 +68,11 @@
   .btn.active { background: #2f7fc8; border-color: #5fb0ff; color: #fff; }
   .btn.danger { background: rgba(230,120,60,.16); border-color: rgba(255,150,90,.4); color: #ffd9c2; }
   .btn.danger:hover { background: rgba(230,120,60,.32); }
+  .routebox { width: 100%; box-sizing: border-box; margin: 4px 0; resize: vertical;
+    background: rgba(10,24,40,.6); color: #dceefb; border: 1px solid rgba(140,200,255,.22);
+    border-radius: 7px; padding: 5px 7px; font-size: 10.5px; font-family: ui-monospace, monospace; }
+  .routesel { flex: 1 1 auto; background: rgba(10,24,40,.6); color: #dceefb;
+    border: 1px solid rgba(140,200,255,.22); border-radius: 7px; padding: 5px 7px; font-size: 11px; }
   .tg { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; margin: 5px 0; }
   .tg .box { width: 30px; height: 17px; border-radius: 9px; background: rgba(255,255,255,.16); position: relative; transition: background .15s; flex: 0 0 auto; }
   .tg .box::after { content:""; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:#cfe6f6; transition: left .15s; }
@@ -225,6 +230,11 @@ const P = {
   // lighting
   shadowDepth: 0.6,   // 0 = flat (lots of sky fill) … 1 = deep contrast (little fill, dark shaded sides)
   bloom: false,       // HDR-ish glow post-process (guarded toggle)
+  // cinematic tour director
+  cine: false,        // drive a perspective "director" camera that frames the boat cinematically
+  tourPace: false,    // stretch/compress boat speed so the whole route takes ~tourMinutes
+  tourMinutes: 6,     // target duration for the full route (soft deadline; PID stays in control)
+  cineStyle: 0.5,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
@@ -527,8 +537,32 @@ function stepDynamics(s, dt, t) {
 // ============================================================================
 const tourNames = ['Culebra','St. Thomas','Tortola','Virgin Gorda','St. Martin',
                    'St. Barths','St. Kitts','Nevis','Antigua','Barbuda','Anegada'];
-const route = tourNames.map(n => BYNAME[n]).filter(Boolean);
+let route = tourNames.map(n => BYNAME[n]).filter(Boolean);
 let wpIdx = 0;
+
+// ---- saved routes (localStorage) + apply a named island sequence as the live tour ----
+const ROUTES_KEY = 'pidHelmsman.routes.v1';
+function loadRoutes(){ try { return JSON.parse(localStorage.getItem(ROUTES_KEY)) || {}; } catch(_){ return {}; } }
+function saveRoutes(o){ try { localStorage.setItem(ROUTES_KEY, JSON.stringify(o)); } catch(_){ } }
+function currentRouteNames(){ return route.map(i => i.name); }
+function setRoute(names){
+  const r = names.map(n => BYNAME[n]).filter(Boolean);
+  if (!r.length) return false;
+  route = r; wpIdx = 0; path = null; planKey = '';
+  if (typeof boat3 !== 'undefined' && boat3) replan(boat3);
+  return true;
+}
+// Total route length (straight-line island-to-island) → used to pace the tour to a target duration.
+function routeLengthApprox(){
+  let d = 0; for (let i=0;i<route.length;i++){ const a=route[i], b=route[(i+1)%route.length]; d += Math.hypot(b.x-a.x, b.z-a.z); }
+  return d;
+}
+function applyTourPacing(){
+  if (!P.tourPace) return;
+  const target = routeLengthApprox() / Math.max(30, P.tourMinutes*60);   // world-units per second
+  P.desiredSpeed = clampJS(target, 4, 30);
+  syncSlider('desiredSpeed');
+}
 let gotoTarget = null;            // {x,z} from double-click
 let path = null;                  // current planned waypoint list
 let planKey = '';                 // change-detection for replanning
@@ -671,6 +705,7 @@ async function init() {
   const t0 = activeTarget();
   boat3.psi = Math.atan2(t0.z - boat3.z, t0.x - boat3.x);
   replan(boat3);
+  applyTourPacing();   // if the user had pacing enabled, set the speed for the route now
 
   let firstFrame = true, fpsT = 0, fpsN = 0;
 
@@ -704,9 +739,10 @@ async function init() {
     updateFireworks(dt);
     controls.update();
     if (fpsMode) updateFpsCam(t);
-    activeCam = fpsMode ? fpsCam : camera;
+    else if (cineMode) updateCineCam(dt);
+    activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : camera);
     try {
-      if (bloomActive && bloomPost && !fpsMode) bloomPost.render();
+      if (bloomActive && bloomPost && !fpsMode && !cineMode) bloomPost.render();
       else renderer.render(scene, activeCam);
     } catch (err) { console.warn('render failed', err); bloomActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
@@ -1532,10 +1568,11 @@ function buildCamera() {
   controls.minZoom = 0.4; controls.maxZoom = 6.0; controls.maxPolarAngle = Math.PI*0.49;
   controls.update();
   fpsCam = new THREE.PerspectiveCamera(72, aspect, 0.5, 16000);
+  cineCam = new THREE.PerspectiveCamera(50, aspect, 0.5, 20000);   // cinematic director camera
   activeCam = camera;
 }
 function setView(fps) {
-  fpsMode = fps; controls.enabled = !fps;
+  fpsMode = fps; controls.enabled = !fps && !cineMode;
   document.getElementById('app').style.cursor = fps ? 'grab' : '';
   if (ui.viewBtn) ui.viewBtn.textContent = fps ? 'View: Crow’s nest ⚓' : 'View: Orbit 🗺';
 }
@@ -1553,11 +1590,83 @@ function followCamera(s, dt) {
   controls.target.x += (s.x - controls.target.x)*k*0.7;
   controls.target.z += (s.z - controls.target.z)*k*0.7;
 }
+
+// ============================================================================
+// Cinematic tour director — a perspective "director" camera that frames the boat
+// using classical composition (rule of thirds, lead room, horizon on a third),
+// blending Ansel-Adams wide grandeur ↔ Cartier-Bresson decisive-moment tightness
+// based on what's happening (turns, island proximity). C2-continuous via
+// critically-damped springs on both the camera position and the look-at point.
+// ============================================================================
+let cineMode = false, cineCam, cineInit = false;
+const _cP=new THREE.Vector3(), _cPv=new THREE.Vector3(),     // camera-position spring state + velocity
+      _cL=new THREE.Vector3(), _cLv=new THREE.Vector3(),     // look-at spring state + velocity
+      _cDesP=new THREE.Vector3(), _cDesL=new THREE.Vector3();
+// critically-damped spring (analytic, unconditionally stable): advance pos & vel toward target
+function springVec(pos, vel, target, omega, dt){
+  const e = Math.exp(-omega*dt);
+  for (const k of ['x','y','z']){
+    const x = pos[k]-target[k], tmp = vel[k] + omega*x;
+    pos[k] = target[k] + (x + tmp*dt)*e;
+    vel[k] = (vel[k] - tmp*omega*dt)*e;
+  }
+}
+function cineDesired(){
+  const t = clock.elapsedTime;
+  const bx = boat3.x, bz = boat3.z, by = waveHeightJS(bx, bz, t);
+  const ch = Math.cos(boat3.psi), sh = Math.sin(boat3.psi);   // heading unit
+  const rx = sh, rz = -ch;                                    // starboard (right of heading)
+  // --- upcoming turn (signed: + left, − right) by sampling the planned path ahead of the boat ---
+  let turn = 0;
+  if (path && path.length>1){
+    const a1 = pursuit(path, {x:bx,z:bz}, 35), a2 = pursuit(path, {x:bx,z:bz}, 110);
+    const h1 = Math.atan2(a1.z-bz, a1.x-bx), h2 = Math.atan2(a2.z-a1.z, a2.x-a1.x);
+    turn = wrap(h2 - h1);
+  }
+  // --- event intensity → composition lean (0 Adams … 1 Bresson) ---
+  const tgt = route[wpIdx] || activeTarget();
+  const distIsl = Math.hypot(bx-tgt.x, bz-tgt.z);
+  const near = clampJS(1 - (distIsl-(tgt.r||40))/220, 0, 1);  // approaching/at the target island
+  const turnInt = clampJS(Math.abs(turn)/0.6, 0, 1);
+  const intensity = clampJS(Math.max(near, turnInt), 0, 1);
+  const blend = clampJS(P.cineStyle*0.55 + intensity*0.6, 0, 1);
+  // --- framing params interpolated by blend ---
+  const back   = lerp(235, 120, blend);     // Adams further back, Bresson closer
+  const height = lerp(155,  58, blend);     // Adams higher, Bresson lower
+  const lead   = lerp( 25, 120, blend);     // lead room ahead of the boat (Bresson larger)
+  const hgt    = height * lerp(1.0, 0.82, (1-turnInt)*0.5);   // long straights → ride a little lower
+  // turn anticipation: swing to the OUTSIDE of the upcoming turn to open the sightline into it
+  const swing  = clampJS(turn/0.6, -1, 1) * 95;
+  // rule-of-thirds: push the look target sideways so the boat sits ~a third off-centre
+  const thirdOff = lerp(42, 82, blend) * (turn>=0?1:-1);
+  _cDesP.set(bx - ch*back + rx*swing, by + hgt, bz - sh*back + rz*swing);
+  const tH = terrainHeight(_cDesP.x, _cDesP.z); if (_cDesP.y < tH+30) _cDesP.y = tH+30;   // don't clip an island
+  // horizon-on-a-third: aim the look point low (boat + a touch up) and lead it ahead
+  _cDesL.set(bx + ch*lead + rx*thirdOff, by + 8, bz + sh*lead + rz*thirdOff);
+}
+function updateCineCam(dt){
+  cineDesired();
+  if (!cineInit){   // swoop-in: start high & pulled back, springs glide down into the follow pose
+    const ch=Math.cos(boat3.psi), sh=Math.sin(boat3.psi);
+    _cP.set(boat3.x - ch*520, _cDesP.y + 470, boat3.z - sh*520);
+    _cL.copy(_cDesL); _cPv.set(0,0,0); _cLv.set(0,0,0); cineInit = true;
+  }
+  springVec(_cP, _cPv, _cDesP, 0.95, dt);   // position spring — gentle, swoopy
+  springVec(_cL, _cLv, _cDesL, 1.7,  dt);   // look-at spring — snappier so framing keeps the boat held
+  cineCam.position.copy(_cP); cineCam.lookAt(_cL);
+}
+function setCine(on){
+  cineMode = on;
+  if (on){ if (fpsMode) setView(false); cineInit = false; }
+  controls.enabled = !cineMode && !fpsMode;
+  if (ui.cineTog) ui.cineTog.classList.toggle('on', on);
+}
 function onResize() {
   const aspect = window.innerWidth/window.innerHeight, view = 380;
   camera.left=-view*aspect; camera.right=view*aspect; camera.top=view; camera.bottom=-view;
   camera.updateProjectionMatrix();
   if (fpsCam) { fpsCam.aspect = aspect; fpsCam.updateProjectionMatrix(); }
+  if (cineCam) { cineCam.aspect = aspect; cineCam.updateProjectionMatrix(); }
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
@@ -1713,7 +1822,7 @@ function disableBloom(){ bloomActive = false; }
 const SETTINGS_KEY = 'pidHelmsman.v1';
 function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
 function loadSettings(){ try { const s = localStorage.getItem(SETTINGS_KEY);
-  if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; } } catch(_){ } }   // don't auto-restore pause state
+  if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; P.cine = false; } } catch(_){ } }   // don't auto-restore pause / director cam
 
 function applyHud(){
   const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display = on?'':'none'; };
@@ -1748,6 +1857,44 @@ function buildPanel() {
   ui.viewBtn = el('div','btn', el('div','btns',s)); ui.viewBtn.textContent = 'View: Orbit 🗺';
   ui.viewBtn.onclick = () => setView(!fpsMode);
   const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
+
+  // Cinematic tour director
+  s = section(panel, 'Cinematic tour');
+  ui.cineTog = addToggle(s, 'Director camera', P, 'cine', (on)=>setCine(on));
+  addSlider(s, 'Composition: Adams→Bresson', P, 'cineStyle', 0, 1, 0.05, v=>v.toFixed(2));
+  addToggle(s, 'Pace to duration', P, 'tourPace', ()=>applyTourPacing());
+  addSlider(s, 'Tour duration', P, 'tourMinutes', 1, 30, 0.5, v=>v.toFixed(1)+' min', ()=>applyTourPacing());
+  // route editor: comma-separated island names
+  el('div','read',s).innerHTML = 'Route (island names, in order):';
+  ui.routeInput = el('textarea','routebox',s);
+  ui.routeInput.value = currentRouteNames().join(', ');
+  ui.routeInput.rows = 3;
+  const rbtns = el('div','btns',s);
+  const applyBtn = el('div','btn',rbtns); applyBtn.textContent='Apply route';
+  applyBtn.onclick = ()=>{
+    const names = ui.routeInput.value.split(',').map(x=>x.trim()).filter(Boolean);
+    const unknown = names.filter(n=>!BYNAME[n]);
+    if (unknown.length){ alert('Unknown island(s): '+unknown.join(', ')+'\nValid: '+Object.keys(BYNAME).join(', ')); return; }
+    if (setRoute(names)) applyTourPacing();
+  };
+  // saved routes
+  el('div','read',s).innerHTML = 'Saved routes:';
+  const srow = el('div','btns',s);
+  ui.routeSel = el('select','routesel',srow);
+  const refreshRouteSel = ()=>{
+    const saved = loadRoutes(); ui.routeSel.innerHTML='';
+    const ph = el('option','',ui.routeSel); ph.value=''; ph.textContent = Object.keys(saved).length?'— load saved —':'(none saved)';
+    for (const name in saved){ const o=el('option','',ui.routeSel); o.value=name; o.textContent=name; }
+  };
+  refreshRouteSel();
+  ui.routeSel.onchange = ()=>{ const n=ui.routeSel.value; if(!n) return; const saved=loadRoutes();
+    if (saved[n]){ ui.routeInput.value = saved[n].join(', '); if (setRoute(saved[n])) applyTourPacing(); } };
+  const srow2 = el('div','btns',s);
+  const saveBtn = el('div','btn',srow2); saveBtn.textContent='Save current…';
+  saveBtn.onclick = ()=>{ const n=(prompt('Name this route:')||'').trim(); if(!n) return;
+    const saved=loadRoutes(); saved[n]=currentRouteNames(); saveRoutes(saved); refreshRouteSel(); ui.routeSel.value=n; };
+  const delBtn = el('div','btn danger',srow2); delBtn.textContent='Delete';
+  delBtn.onclick = ()=>{ const n=ui.routeSel.value; if(!n) return; const saved=loadRoutes(); delete saved[n]; saveRoutes(saved); refreshRouteSel(); };
 
   // Capture — segmented video recording with transitions between segments
   const cap = section(panel, 'Capture');
