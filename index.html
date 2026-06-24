@@ -917,10 +917,13 @@ function buildFarSeabed() {
   geo.translate((m.x0+m.x1)/2, 0, (m.zN+m.zS)/2);
   const pos = geo.attributes.position;
   for (let i=0;i<pos.count;i++){ const x=pos.getX(i), z=pos.getZ(i);
-    pos.setY(i, Math.min(seabedHeight(x,z)-1.5, -2)); }   // always underwater (clamp so it never pokes up over islands)
+    const mt = gebcoMetres(x,z);                           // metres (>=0 = land)
+    let d = mt>=0 ? 58 : compressM(-mt);                   // land → treat as deep so it stays dark and hidden under islands
+    d = Math.max(9, Math.min(59, d));                      // never a bright shallow plate, never below the sea-skirt
+    pos.setY(i, -d - 1.5); }                               // 1.5u under the detailed mesh, always deep underwater
   geo.computeVertexNormals();
-  const mat = new THREE.MeshStandardNodeMaterial({ roughness:0.96, metalness:0.0 });
-  mat.colorNode = vec3(0.055, 0.27, 0.40);                 // seabed blue (matches the detailed mesh)
+  const mat = new THREE.MeshStandardNodeMaterial({ roughness:0.97, metalness:0.0 });
+  mat.colorNode = vec3(0.078, 0.31, 0.42);                 // EXACT detailed-seabed colour, so the two meshes match
   const mesh = new THREE.Mesh(geo, mat); mesh.renderOrder = -4; scene.add(mesh);
 }
 function buildLights() {
@@ -1540,9 +1543,10 @@ function buildOcean() {
   const geo = new THREE.PlaneGeometry(5600, 4000, 540, 380);   // wide enough to cover past Puerto Rico
   geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
   const bathyTex = buildBathyTexture();
-  // circular bathymetry border: centre on the island centroid, full out to BR0, fading to nothing at BR1
-  let _icx=0,_icz=0; for(const isl of ISLANDS){ _icx+=isl.x; _icz+=isl.z; } _icx/=ISLANDS.length; _icz/=ISLANDS.length;
-  let _irm=0; for(const isl of ISLANDS){ _irm=Math.max(_irm, Math.hypot(isl.x-_icx, isl.z-_icz)+isl.r); }
+  // circular bathymetry border: centre on the TOUR chain (not all islands — Puerto Rico would drag it west)
+  const _chain = route.length ? route : ISLANDS;
+  let _icx=0,_icz=0,_n=0; for(const isl of _chain){ if(!isl)continue; _icx+=isl.x; _icz+=isl.z; _n++; } _icx/=_n; _icz/=_n;
+  let _irm=0; for(const isl of _chain){ if(isl) _irm=Math.max(_irm, Math.hypot(isl.x-_icx, isl.z-_icz)+isl.r); }
   // push the circular fade WAY out into the deep open ocean (real seabed all around now) so the boundary
   // lands in featureless abyss far past the islands — no visible map edge, a true circle.
   const BCX=_icx, BCZ=_icz, BR0=_irm+650, BR1=_irm+1150;
