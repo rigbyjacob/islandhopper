@@ -489,11 +489,13 @@ function ensureAStarBuffers(){ const N=GRID.cols*GRID.rows; if(_AN!==N){ _AN=N; 
 function catmull(p0,p1,p2,p3,t){ const t2=t*t, t3=t2*t;
   return { x:0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
            z:0.5*((2*p1.z)+(-p0.z+p2.z)*t+(2*p0.z-5*p1.z+4*p2.z-p3.z)*t2+(-p0.z+3*p1.z-3*p2.z+p3.z)*t3) }; }
-function smoothPath(wp){
+function smoothPath(wp, closed=false){
   if (wp.length < 3) return wp;
+  const n=wp.length, at=(k)=> closed ? wp[(k%n+n)%n] : wp[clampJS(k,0,n-1)];
   const out=[{x:wp[0].x,z:wp[0].z}];
-  for (let i=0;i<wp.length-1;i++){
-    const p0=wp[i-1]||wp[i], p1=wp[i], p2=wp[i+1], p3=wp[i+2]||wp[i+1];
+  const last = closed ? n : n-1;
+  for (let i=0;i<last;i++){
+    const p0=at(i-1), p1=at(i), p2=at(i+1), p3=at(i+2);
     const seg=Math.max(2, Math.min(14, Math.round(Math.hypot(p2.x-p1.x,p2.z-p1.z)/(GRID.dx*2))));   // samples ∝ segment length
     for (let s=1;s<=seg;s++){ const pt=catmull(p0,p1,p2,p3,s/seg);
       const wc=worldToCell(pt.x,pt.z);
@@ -502,14 +504,25 @@ function smoothPath(wp){
   }
   return out;
 }
-function planPath(sx, sz, gx, gz) {
-  if (!BLOCKED) return [{x:sx,z:sz},{x:gx,z:gz}];
+function clearLOSseg(a,b){ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.dx*0.8));
+  for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
+    const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>NAV_BLOCK_H)return false; } return true; }
+function simplifyPath(pts){   // line-of-sight string-pull (decimated first so it stays cheap on the fine grid)
+  if(pts.length<=2) return pts.slice();
+  if(pts.length>80){ const dec=[]; for(let k=0;k<pts.length;k+=4) dec.push(pts[k]); if(dec[dec.length-1]!==pts[pts.length-1]) dec.push(pts[pts.length-1]); pts=dec; }
+  const simp=[pts[0]]; let i=0;
+  while(i<pts.length-1){ let j=pts.length-1; while(j>i+1&&!clearLOSseg(pts[i],pts[j]))j--; simp.push(pts[j]); i=j; }
+  return simp;
+}
+// A* on the hex grid → raw cell-centre path (before simplification). Returns {pts, found}.
+function planRaw(sx, sz, gx, gz) {
+  if (!BLOCKED) return { pts:[{x:sx,z:sz},{x:gx,z:gz}], found:true };
   ensureAStarBuffers();
   const sC=worldToCell(sx,sz), gC=worldToCell(gx,gz);
   const s=nearestFree(sC.c,sC.r), g=nearestFree(gC.c,gC.r);
   _gScore.fill(Infinity); _came.fill(-1); _closed.fill(0);
   const gp=cellCenter(g.c,g.r), h=(c,r)=>{ const p=cellCenter(c,r); return Math.hypot(p.x-gp.x,p.z-gp.z); };
-  const WA=1.18;   // weighted A* — slightly greedy heuristic: explores far fewer cells (~6x faster) for near-optimal paths
+  const WA=1.18;   // weighted A* — slightly greedy heuristic explores far fewer cells (~6x faster) for near-optimal paths
   const open=new Heap(), sI=gIdx(s.c,s.r); _gScore[sI]=0; open.push({c:s.c,r:s.r,f:h(s.c,s.r)*WA});
   let cu=null;
   if (P.curOn && P.curStrength>0) { const dir=d2r(P.curDirDeg); cu={x:Math.cos(dir),z:Math.sin(dir),mag:P.curStrength}; }
@@ -522,27 +535,43 @@ function planPath(sx, sz, gx, gz) {
       let pen=1;
       if(cu){ const p=cellCenter(cc,rr), dxn=(p.x-np0.x)/spacing, dzn=(p.z-np0.z)/spacing;
         const against=clampJS(-(dxn*cu.x+dzn*cu.z),0,1); pen += 1.4*against*(cu.mag/8); }
-      if(DLAND){ const near=clampJS((4-DLAND[ci])/4,0,1); pen += 1.3*near*near; }   // gentle open-water preference (relaxed)
+      if(DLAND){ const near=clampJS((4-DLAND[ci])/4,0,1); pen += 1.3*near*near; }   // gentle open-water preference
       const tg=_gScore[ni]+spacing*pen;
-      if(tg<_gScore[ci]){ _gScore[ci]=tg; _came[ci]=ni; open.push({c:cc,r:rr,f:tg+h(cc,rr)}); } } }
-  // ROBUST: never a straight line through land — route to the closest reachable cell; the boat re-plans
+      if(tg<_gScore[ci]){ _gScore[ci]=tg; _came[ci]=ni; open.push({c:cc,r:rr,f:tg+h(cc,rr)*WA}); } } }   // WA on the neighbour push (the real speedup)
   const endCell = found ? gI : bestCell;
-  if (endCell === sI) return [{x:sx,z:sz}];
+  if (endCell === sI) return { pts:[{x:sx,z:sz}], found:false };
   const cells=[]; let cur=endCell; while(cur!==-1){ const r=Math.floor(cur/GRID.cols),c=cur-r*GRID.cols; cells.push({c,r}); cur=_came[cur]; }
   cells.reverse();
   let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz}; if(found) pts[pts.length-1]={x:gx,z:gz};
-  const clearLOS=(a,b)=>{ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.dx*0.8));
-    for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
-      const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>NAV_BLOCK_H)return false; } return true; };
-  // decimate the dense hex path before string-pulling (keeps the simplifier O(n²) cheap on the fine grid)
-  if (pts.length > 80){ const dec=[]; for(let k=0;k<pts.length;k+=4) dec.push(pts[k]); if(dec[dec.length-1]!==pts[pts.length-1]) dec.push(pts[pts.length-1]); pts=dec; }
-  const simp=[pts[0]]; let i=0;
-  while(i<pts.length-1){ let j=pts.length-1; while(j>i+1&&!clearLOS(pts[i],pts[j]))j--; simp.push(pts[j]); i=j; }
-  const smooth = smoothPath(simp);                            // Catmull-Rom curve the boat actually follows
+  return { pts, found };
+}
+function planPath(sx, sz, gx, gz) {
+  const r = planRaw(sx,sz,gx,gz);
+  if (r.pts.length < 2) return [{x:sx,z:sz}];
+  const simp = simplifyPath(r.pts), smooth = smoothPath(simp);
   navDebug = { raw: simp.map(p=>({x:p.x,z:p.z})), simp: smooth.map(p=>({x:p.x,z:p.z})),
-               gate:{x:gx,z:gz}, start:{x:sx,z:sz}, found };   // yellow = string-pulled waypoints, green = smooth path
+               gate:{x:gx,z:gz}, start:{x:sx,z:sz}, found:r.found };
   return smooth;
 }
+// ---- GLOBAL tour route: plan the whole loop (gate→gate→…→gate→gate) as one continuous A* path, string-pull
+//      and smooth it end-to-end, so inter-island transitions are optimised globally rather than leg-by-leg ----
+let tourPath = null, tourGateAt = [], tourKey = '';
+function buildTourLoop(){
+  if (!BLOCKED || route.length < 2){ tourPath=null; tourGateAt=[]; return; }
+  const gates = route.map((_,i)=>routeGate(i));
+  let wp=[];
+  for (let i=0;i<gates.length;i++){
+    const a=gates[i], b=gates[(i+1)%gates.length];
+    const legSimp=simplifyPath(planRaw(a.x,a.z,b.x,b.z).pts);   // straighten each leg, keep gates as via-points
+    if (i>0 && legSimp.length) legSimp.shift();                // drop the duplicated junction gate
+    wp=wp.concat(legSimp);
+  }
+  tourPath = smoothPath(wp, true);                             // closed-loop Catmull-Rom (wraps at the seam)
+  tourGateAt = gates.map(g=>{ let bi=0,bd=1e18; for(let k=0;k<tourPath.length;k++){ const dx=tourPath[k].x-g.x,dz=tourPath[k].z-g.z,d=dx*dx+dz*dz; if(d<bd){bd=d;bi=k;} } return bi; });
+  navDebug = { raw: gates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),   // overlay: yellow=gates, green=global loop
+               gate: gates[0], start: gates[0], found:true };
+}
+function nearestPathIndex(pp, x, z){ let bi=0,bd=1e18; for(let k=0;k<pp.length;k++){ const dx=pp[k].x-x,dz=pp[k].z-z,d=dx*dx+dz*dz; if(d<bd){bd=d;bi=k;} } return bi; }
 // ---- navigation debug overlay: the A* grid (blocked = red, open water shaded by distance-to-land),
 //      the raw grid path (yellow, angular) vs the simplified path (green), and start/gate markers ----
 let navOverlay=null, navRawLine=null, navSimpLine=null, navMarkStart=null, navMarkGate=null, navMarkTgt=null;
@@ -733,12 +762,18 @@ function replan(s) {
   updatePathLine();
 }
 function maybeReplan(s, dt) {
+  // TOUR: one global loop, rebuilt only when the route or the current changes (the boat follows it forever)
+  if (P.mode === 'tour' && P.usePlanner) {
+    const key = route.map(r=>r.name).join(',') + '|' + (P.curOn ? P.curStrength.toFixed(1)+','+P.curDirDeg.toFixed(0) : '0');
+    if (key !== tourKey || !tourPath) { tourKey = key; buildTourLoop(); path = tourPath; updatePathLine(); }
+    else if (path !== tourPath) { path = tourPath; updatePathLine(); }
+    return;
+  }
+  // GOTO / approach: per-target replan
   const key = `${P.mode}|${wpIdx}|${P.usePlanner}|${gotoTarget?(gotoTarget.x|0)+','+(gotoTarget.z|0):'-'}`;
   replanTimer -= dt;
   if (key !== planKey || replanTimer <= 0 || !path) {
     planKey = key; replan(s);
-    // if the route stops short of the gate (partial path around an obstacle), refresh sooner so the boat
-    // keeps discovering the way around instead of idling at the path end
     const tgt = activeTarget(navPosition(s)), end = (path && path.length) ? path[path.length-1] : null;
     const partial = end ? Math.hypot(end.x-tgt.x, end.z-tgt.z) > 28 : false;
     replanTimer = partial ? 1.0 : 3.0;
@@ -778,6 +813,19 @@ function guidance(s, t) {
     return { desPsi: d2r(P.desiredHeadingDeg), desSpeed: P.desiredSpeed, course: d2r(P.desiredHeadingDeg), name: '(holding heading)', xte: 0 };
 
   const nav = navPosition(s);
+  // ---- GLOBAL TOUR: follow the one continuous loop; derive the "current island" (wpIdx) from progress ----
+  if (P.mode === 'tour' && P.usePlanner && tourPath && tourPath.length > 2) {
+    const pi = nearestPathIndex(tourPath, nav.x, nav.z);
+    let next = wpIdx, bestD = Infinity;                       // the next gate ahead along the loop
+    for (let i=0;i<tourGateAt.length;i++){ let d = tourGateAt[i]-pi; if (d < 0) d += tourPath.length; if (d > 1 && d < bestD){ bestD=d; next=i; } }
+    wpIdx = next;
+    const aim = pursuit(tourPath, nav, P.lookahead);
+    let course = Math.atan2(aim.z-nav.z, aim.x-nav.x) + clampJS(P.xteGain*aim.xteSigned, -0.7, 0.7);
+    let desPsi = course;
+    if (P.feedForward && kf){ const e=kf.est, spd=Math.max(P.desiredSpeed,6); const wx=Math.cos(course)*spd-e.cx, wz=Math.sin(course)*spd-e.cz; desPsi=Math.atan2(wz,wx); }
+    const desSpeed = P.desiredSpeed * clampJS(1 - Math.abs(wrap(course - s.psi))*0.5, 0.4, 1);
+    return { desPsi, desSpeed, course, dist: aim.xte, name: route[wpIdx] ? route[wpIdx].name : '', xte: aim.xte };
+  }
   const gate = activeTarget(nav);                   // steering target (smooth-flow gate beside the island)
   if (!path) replan(s);
   // ARRIVAL: within ~1 cell of the target's navigable perimeter. Targets often sit inside their own blocked
