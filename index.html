@@ -433,6 +433,7 @@ function sampleDisturb(x, z, t) {
 // A* planner (current-aware) — grid over the map, land inflated as obstacles
 // ============================================================================
 const GRID = { minX:-420, maxX:1240, minZ:-540, maxZ:400, cell:12 };   // covers all islands, the SE islets, AND the boat start at (1080,300)
+const NAV_BLOCK_H = -1.6;   // only block water shallower than this (near-land); deeper than draft so channels stay open (we accept slight island clipping over no path)
 GRID.cols = Math.ceil((GRID.maxX-GRID.minX)/GRID.cell);
 GRID.rows = Math.ceil((GRID.maxZ-GRID.minZ)/GRID.cell);
 const gIdx = (c,r)=> r*GRID.cols + c;
@@ -441,10 +442,10 @@ const worldToCell = (x,z)=> ({ c: clampJS(Math.floor((x-GRID.minX)/GRID.cell),0,
                                r: clampJS(Math.floor((z-GRID.minZ)/GRID.cell),0,GRID.rows-1) });
 let BLOCKED = null, DLAND = null;
 let navDebug = null;   // last A* result {raw cell-path, simplified path, gate, start, found} for the debug overlay
-function buildBlocked(inflate=2) {            // ~24u margin — clear of shoals but still lets the boat reach islands
+function buildBlocked(inflate=1) {            // ~12u margin — tight, so inter-island channels stay open
   const raw = new Uint8Array(GRID.cols*GRID.rows);
   for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++){ const p=cellCenter(c,r);
-    raw[gIdx(c,r)] = terrainHeight(p.x,p.z) > -3.2 ? 1 : 0; }   // block water shallower than ~3.2 deep (draft 2.6 + small margin)
+    raw[gIdx(c,r)] = terrainHeight(p.x,p.z) > NAV_BLOCK_H ? 1 : 0; }   // block only near-land shallows
   const blk = new Uint8Array(GRID.cols*GRID.rows);
   for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++){ if(!raw[gIdx(c,r)]) continue;
     for (let dr=-inflate;dr<=inflate;dr++) for (let dc=-inflate;dc<=inflate;dc++){ const rr=r+dr,cc=c+dc;
@@ -499,7 +500,7 @@ function planPath(sx, sz, gx, gz) {
   let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz}; if(found) pts[pts.length-1]={x:gx,z:gz};
   const clearLOS=(a,b)=>{ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.cell*0.5));
     for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
-      const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>-3.2)return false; } return true; };
+      const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>NAV_BLOCK_H)return false; } return true; };
   const simp=[pts[0]]; let i=0;
   while(i<pts.length-1){ let j=pts.length-1; while(j>i+1&&!clearLOS(pts[i],pts[j]))j--; simp.push(pts[j]); i=j; }
   navDebug = { raw: pts.map(p=>({x:p.x,z:p.z})), simp: simp.map(p=>({x:p.x,z:p.z})),
@@ -658,7 +659,7 @@ let path = null;                  // current planned waypoint list
 let planKey = '';                 // change-detection for replanning
 
 function snapToWater(p){
-  if (BLOCKED && terrainHeight(p.x, p.z) > -3.2){ const wc=worldToCell(p.x,p.z), fr=nearestFree(wc.c,wc.r); p=cellCenter(fr.c,fr.r); }
+  if (BLOCKED && terrainHeight(p.x, p.z) > NAV_BLOCK_H){ const wc=worldToCell(p.x,p.z), fr=nearestFree(wc.c,wc.r); p=cellCenter(fr.c,fr.r); }
   return p;
 }
 function approachPoint(isl, from) {     // goto mode: aim for the nearest point of the island facing the boat
