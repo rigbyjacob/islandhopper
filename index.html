@@ -334,7 +334,11 @@ function buildTerrainField(){
       const base = ELEV[li++] / 10;                         // real SRTM/GEBCO elevation (metres→world units), baked
       Hh[i] = 2.8 + base + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift land clear of the wave crests + micro-relief
     }
-    else Hh[i]=Math.max(-6, -dOut[i]*CELL*0.45); }
+    else { const d=dOut[i]*CELL, shelf=d*0.45;                       // coastal shelf slope from the shore
+      const relief = fbm(wx*0.022, wz*0.022)*30 + fbm(wx*0.07, wz*0.06)*9;   // undersea hills / ridges / seamounts
+      const k = clampJS((d-10)/30, 0, 1);                            // 0 at coast → 1 offshore
+      Hh[i] = -Math.min(lerp(shelf, 8 + (39-relief)*0.7, k), 55); }  // shelf near coast, varied seabed offshore (never breaches)
+  }
   TF={GX0,GZ0,GW,GH,CELL,H:Hh};
 }
 function terrainHeight(x,z){ if(!TF) return -6;
@@ -809,7 +813,7 @@ const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
 const uBathy   = uniform(0.0);   // bathymetry overlay strength (0 off → 1 on)
 
-let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt;
+let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt, oceanMat;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
 const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3();
 const C = {
@@ -1428,7 +1432,7 @@ function buildBathyTexture(){
   const W=384, H=240, data=new Uint8Array(W*H*4);
   for (let j=0;j<H;j++) for (let i=0;i<W;i++){
     const x=lerp(MAP.minX,MAP.maxX,i/(W-1)), z=lerp(MAP.minZ,MAP.maxZ,j/(H-1));
-    const depth=clampJS(-terrainHeight(x,z), 0, 8), v=Math.round(depth/8*255), k=(j*W+i)*4;   // seabed only ranges 0–6u (coastal shelf), then flat
+    const depth=clampJS(-terrainHeight(x,z), 0, 45), v=Math.round(depth/45*255), k=(j*W+i)*4;   // full undersea depth range
     data[k]=v; data[k+1]=v; data[k+2]=v; data[k+3]=255;
   }
   const t=new THREE.DataTexture(data,W,H,THREE.RGBAFormat); t.needsUpdate=true;
@@ -1527,20 +1531,23 @@ function buildOcean() {
     // ---- bathymetry overlay (toggle): seabed depth ramp + iso-depth contour lines ----
     const bUv = vec2( positionWorld.x.sub(MAP.minX).div(MAP.maxX-MAP.minX),
                       positionWorld.z.sub(MAP.minZ).div(MAP.maxZ-MAP.minZ) );
-    const depthN = texture(bathyTex, bUv).r;                                   // 0 surface → 1 deep(~8u)
-    const depthCol = mix(vec3(0.34,0.90,0.92), vec3(0.01,0.07,0.26), clamp(depthN, 0.0, 1.0));   // shallow cyan → deep navy
-    const cband = depthN.mul(7.0);                                             // ~7 iso-depth contour bands across the shelf
-    const cline = oneMinus(smoothstep(0.0, 0.16, abs(sin(cband.mul(3.14159265)))));
-    const blended = mix(col, depthCol, float(0.74)).add(vec3(0.85,0.95,1.0).mul(cline).mul(0.4));
+    const depthN = texture(bathyTex, bUv).r;                                   // 0 surface → 1 deep(~45u)
+    const depthCol = mix(vec3(0.30,0.78,0.86), vec3(0.02,0.10,0.30), clamp(depthN, 0.0, 1.0));   // shallow cyan → deep navy
+    const cband = depthN.mul(11.0);                                            // iso-depth contour bands across the undersea relief
+    const cline = oneMinus(smoothstep(0.0, 0.18, abs(sin(cband.mul(3.14159265)))));
+    // light translucent tint + contour lines on the surface; the translucent ocean reveals the seabed below
+    const blended = mix(col, depthCol, float(0.28)).add(vec3(0.7,0.9,1.0).mul(cline).mul(0.5));
     col.assign(mix(col, blended, uBathy));
 
     return col.mul(uDayBright);   // darken the sea at night
   });
 
-  const mat = new THREE.MeshBasicNodeMaterial();
-  mat.positionNode = positionLocal.add(vec3(0, waveH(positionLocal.xz), 0));
-  mat.colorNode = oceanColor();
-  scene.add(new THREE.Mesh(geo, mat));
+  oceanMat = new THREE.MeshBasicNodeMaterial();
+  oceanMat.positionNode = positionLocal.add(vec3(0, waveH(positionLocal.xz), 0));
+  oceanMat.colorNode = oceanColor();
+  oceanMat.opacityNode = oneMinus(uBathy.mul(0.62));   // translucent when bathymetry is on → seabed shows through
+  oceanMat.transparent = true; oceanMat.depthWrite = true;
+  scene.add(new THREE.Mesh(geo, oceanMat));
 }
 
 function buildTerrain() {
