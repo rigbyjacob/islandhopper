@@ -1387,34 +1387,32 @@ function buildOcean() {
   const drift = vec2(time.mul(0.5), time.mul(-0.35));
   const patch  = fbm2(xz.mul(0.018).add(drift.mul(0.02)));
   const patch2 = fbm2(xz.mul(0.075).add(drift.mul(0.05)));
-  col.assign(col.mul(float(0.80).add(patch.mul(0.34)).add(patch2.mul(0.12))));
+  col.assign(col.mul(float(0.74).add(patch.mul(0.50)).add(patch2.mul(0.16))));   // stronger organic light/dark
 
-  // VISIBLE wave differentiation, keyed to (normalised) wave height so it reads at any wave-height
-  // setting. Troughs sink to a colour DARKER than the deep base (the previous dapple used a colour
-  // lighter than the base, so it did nothing). Crests lift to a lighter sun-lit cap.
   const whN = wh.div(uSea.max(0.001));               // wave height in base units (~ -2.1 … +2.1)
-  const troughs = smoothstep(-0.10, -0.70, whN);
-  col.assign(mix(col, vec3(0.006,0.045,0.13), troughs.mul(0.70)));        // darker than deep → real dark mottle
-  const caps = smoothstep(0.40, 1.25, whN);
-  col.assign(mix(col, vec3(0.42,0.74,0.86), caps.mul(0.42)));             // lighter sun-lit wave caps
+  // Big LOW-FREQUENCY dark mottle field — computed here but applied as a MULTIPLY at the very end, so
+  // it survives bright sun/fresnel. (Before, the dapple washed out in sun and only showed inside cloud
+  // shadows; low-freq also keeps it visible at distance and stops it strobing when a high camera pans.)
+  const mottle = smoothstep(0.56, 0.28, fbm2(xz.mul(0.011).add(drift.mul(0.03))));
 
-  // subsurface scattering — translucent teal glow through backlit wave crests
-  const sss = smoothstep(-0.2,1.3,whN).mul(clamp(dot(viewDir, sunDir), 0.0, 1.0));
-  col.addAssign(vec3(0.0,0.26,0.20).mul(sss).mul(uSunInt).mul(0.55));
+  // subsurface scattering — translucent teal glow through backlit crests (boosted for translucency)
+  const sss = smoothstep(-0.3,1.3,whN).mul(clamp(dot(viewDir, sunDir), 0.0, 1.0));
+  col.addAssign(vec3(0.0,0.30,0.24).mul(sss).mul(uSunInt).mul(0.80));
 
   // fresnel reflection of the sky (toward a horizon/zenith blend), capped so it isn't a hard mirror
   const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 4.0);
   col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.85), 0.0, 0.85)));
 
-  // sun reflection: three lobes (sharp glint + mid glitter + broad sheen) form a shimmering sun path
+  // SUN SPECULAR — BROAD lobes so the shiny sun-glitter path actually reads at distance, plus a
+  // tighter glint on top. (The old pow-700 sparkle was sub-pixel: invisible AND the worst aliaser.)
   const halfv = normalize(viewDir.add(sunDir));
   const hN = max(dot(n, halfv), 0.0);
-  col.addAssign(uSunCol.mul(pow(hN, 220.0).mul(2.6).mul(uSunInt)));
-  col.addAssign(uSunCol.mul(pow(hN,  55.0).mul(0.6).mul(uSunInt)));
-  col.addAssign(uSunCol.mul(pow(hN,  14.0).mul(0.13).mul(uSunInt)));
-  // sun sparkle — tiny ultra-sharp glints in the glint zone, gated by aperiodic noise (sea of diamonds)
-  const spk = vnoise(xz.mul(0.9).add(vec2(time.mul(0.7), time.mul(-0.5))));
-  col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 700.0).mul(smoothstep(0.82,0.97,spk)).mul(uSunInt).mul(4.5)));
+  col.addAssign(uSunCol.mul(pow(hN,  26.0).mul(1.1).mul(uSunInt)));     // broad shiny sheen
+  col.addAssign(uSunCol.mul(pow(hN,  90.0).mul(1.7).mul(uSunInt)));     // bright glitter band
+  col.addAssign(uSunCol.mul(pow(hN, 320.0).mul(3.2).mul(uSunInt)));     // sharp glint highlight
+  // sea-of-diamonds sparkle — noise-gated glints (moderate exponent + lower-freq noise = actually visible)
+  const spk = vnoise(xz.mul(0.45).add(vec2(time.mul(0.7), time.mul(-0.5))));
+  col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 120.0).mul(smoothstep(0.58,0.90,spk)).mul(uSunInt).mul(2.4)));
   // fake wave self-shadowing — darken points blocked from the sun by a crest toward the sun
   const sunH = normalize(vec2(uSunDir.x, uSunDir.z));
   col.assign(col.mul(oneMinus(smoothstep(0.5,1.9, waveH(xz.add(sunH.mul(7.0))).sub(wh)).mul(uSunInt).mul(0.32))));
@@ -1423,15 +1421,19 @@ function buildOcean() {
   const landRefl = smoothstep(0.5,1.0,sp).mul(smoothstep(0.62,0.95,n.y)).mul(0.20);
   col.assign(mix(col, vec3(0.05,0.13,0.10), landRefl.mul(uDayBright)));
 
-  // foam / whitecaps: only on the higher, steeper crests, broken up by LAYERED incommensurate
-  // noise and gathered into large drifting patches — so it never tiles like a grid.
+  // foam / whitecaps on the crest tops, broken up by aperiodic noise so it never tiles like a grid.
   const fnoise = fbm2(xz.mul(0.09).add(drift.mul(0.6)));            // 0..1, aperiodic foam breakup
   const clump  = smoothstep(0.34, 0.7, fbm2(xz.mul(0.022)));        // big aperiodic whitecap patches
-  const crest = smoothstep(0.80,1.45,whN);          // lower threshold + no steep-normal gate → foam actually shows
+  const crest = smoothstep(0.75, 1.35, whN);
   const whitecap = clamp(crest.mul(smoothstep(0.45,0.80, fnoise)).mul(clump), 0.0, 1.0);
   const shoreFoam = smoothstep(0.8,0.98,sp).mul(smoothstep(0.32,0.7, fnoise));
   const foam = clamp(max(whitecap, shoreFoam), 0.0, 1.0);
   col.assign(mix(col, vec3(0.93,0.97,1.0), foam));
+
+  // FINAL multiplicative wave shade — the key fix. Darkens troughs + the low-frequency mottle on the
+  // FINISHED colour (after all the bright reflection terms), so the light/dark wave structure reads in
+  // full sun, not only inside cloud shadows. Crests lift slightly; troughs sink; mottle adds big patches.
+  col.assign(col.mul(mix(float(0.55), float(1.10), smoothstep(-1.0, 0.9, whN)).mul(oneMinus(mottle.mul(0.45)))));
 
   const mat = new THREE.MeshBasicNodeMaterial();
   mat.positionNode = positionLocal.add(vec3(0, waveH(positionLocal.xz), 0));
