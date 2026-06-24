@@ -704,9 +704,8 @@ async function init() {
     if (fpsMode) updateFpsCam(t);
     activeCam = fpsMode ? fpsCam : camera;
     try {
-      if (aoActive && aoPost && !fpsMode) aoPost.render();
-      else renderer.render(scene, activeCam);
-    } catch (err) { console.warn('render failed', err); aoActive = false; if (fpsMode) setView(false); }
+      renderer.render(scene, activeCam);
+    } catch (err) { console.warn('render failed', err); if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
     if (P.showLabels) updateLabels();
@@ -832,7 +831,7 @@ function updateEnvironment(dt) {
 }
 
 // ---- puffy clouds (white → gray with storms, dimmer at night) ----
-let cloudGroups=[], cloudMats=[], cloudBounds, cloudShadows=[], cloudShadowMat;
+let cloudGroups=[], cloudMats=[], cloudSprites=[], cloudBounds, cloudShadows=[], cloudShadowMat;
 // cel-shaded puff: a soft round blob whose RGB is split into discrete light/mid/shadow
 // bands (light from top-left), so each sprite reads as a rounded cartoon puff.
 function makeCloudTexture(){
@@ -857,23 +856,39 @@ function makeCloudTexture(){
 }
 function buildClouds(){
   const tex=makeCloudTexture();
-  // 3 shading tiers: bright sunlit tops → shaded blue-grey bases (gives clouds volume)
-  cloudMats = [0xffffff, 0xeaf0f6, 0xb9c6d6].map(col => new THREE.SpriteMaterial({
-    map:tex, color:new THREE.Color(col), transparent:true, opacity:0.92, depthWrite:false, fog:true }));
+  // 3 shading tiers (kept as colour reference; each sprite now owns its own tinted material so
+  // we can bake per-puff ambient occlusion on top of the tier colour)
+  const tierCols=[0xffffff, 0xeaf0f6, 0xb9c6d6];
+  cloudMats=[]; cloudSprites=[];
+  const mkSprite=(tier)=>{ const m=new THREE.SpriteMaterial({ map:tex, color:new THREE.Color(tierCols[tier]),
+      transparent:true, opacity:0.92, depthWrite:false, fog:true }); const s=new THREE.Sprite(m);
+    s.userData.tier=tier; s.userData.ao=1; return s; };
   cloudBounds={ minX:MAP.minX-700, maxX:MAP.maxX+700, minZ:MAP.minZ-700, maxZ:MAP.maxZ+700 };
   for (let i=0;i<20;i++){
-    const grp=new THREE.Group();
+    const grp=new THREE.Group(); const puffs=[];
     const w=130+Math.random()*120, baseY=300+Math.random()*170;
     // flatter shaded base row
     const nb=3+Math.floor(Math.random()*3);
-    for (let j=0;j<nb;j++){ const s=new THREE.Sprite(cloudMats[Math.random()<0.5?2:1]);
+    for (let j=0;j<nb;j++){ const s=mkSprite(Math.random()<0.5?2:1);
       const sc=w*(0.45+Math.random()*0.4); s.scale.set(sc, sc*0.52, 1);
-      s.position.set((j/(nb-1||1)-0.5)*w*1.1 + (Math.random()-0.5)*20, (Math.random()-0.5)*8, (Math.random()-0.5)*w*0.5); grp.add(s); }
+      s.position.set((j/(nb-1||1)-0.5)*w*1.1 + (Math.random()-0.5)*20, (Math.random()-0.5)*8, (Math.random()-0.5)*w*0.5); grp.add(s); puffs.push(s); }
     // bright domed top puffs
     const nt=3+Math.floor(Math.random()*4);
-    for (let j=0;j<nt;j++){ const s=new THREE.Sprite(cloudMats[Math.random()<0.6?0:1]);
+    for (let j=0;j<nt;j++){ const s=mkSprite(Math.random()<0.6?0:1);
       const sc=w*(0.35+Math.random()*0.45); s.scale.set(sc, sc*0.7, 1);
-      s.position.set((Math.random()-0.5)*w*0.8, 14+Math.random()*26, (Math.random()-0.5)*w*0.4); grp.add(s); }
+      s.position.set((Math.random()-0.5)*w*0.8, 14+Math.random()*26, (Math.random()-0.5)*w*0.4); grp.add(s); puffs.push(s); }
+    // ---- bake per-puff ambient occlusion: a puff is darkened by siblings sitting ABOVE & near it
+    // (they block skylight), so undersides and interior puffs go shadowy while the domed tops stay
+    // bright. This is the self-shadowing that gives the cloud volume — what the GTAO pass was for.
+    for (const a of puffs){ let occ=0;
+      for (const b of puffs){ if (a===b) continue;
+        const dy=b.position.y-a.position.y; if (dy<=0) continue;          // only puffs higher than me occlude
+        const dxz=Math.hypot(a.position.x-b.position.x, a.position.z-b.position.z);
+        const reach=(a.scale.x+b.scale.x)*0.45; if (dxz>=reach) continue;
+        occ += (1-dxz/reach) * clampJS(dy/30,0.2,1); }
+      a.userData.ao = 1 - clampJS(occ*0.5, 0, 0.5);                       // darken at most 50%
+    }
+    for (const s of puffs) cloudSprites.push(s);
     grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), baseY,
       cloudBounds.minZ+Math.random()*(cloudBounds.maxZ-cloudBounds.minZ));
     grp.userData.spd=0.5+Math.random()*0.8; grp.userData.w=w; scene.add(grp); cloudGroups.push(grp);
@@ -884,12 +899,12 @@ function buildClouds(){
   }
 }
 function updateClouds(dt, sf, day){
-  if(!cloudMats.length) return;
+  if(!cloudSprites.length) return;
   const tint=lerp(1.0,0.34,sf), bright=0.45+0.55*day, op=(0.82+0.18*day);   // opaque at night (no stacked-ellipse see-through)
   const cols=[[1,1,1],[0.90,0.94,1.0],[0.62,0.70,0.82]];   // brighter tops, darker shaded bases
-  for (let i=0;i<cloudMats.length;i++){ const b=cols[i];
-    cloudMats[i].color.setRGB(b[0]*tint*bright, b[1]*tint*bright, Math.min(1,b[2]*tint*bright*1.04));
-    cloudMats[i].opacity = op*0.95; }
+  for (const s of cloudSprites){ const b=cols[s.userData.tier], ao=s.userData.ao, m=s.material;
+    m.color.setRGB(b[0]*tint*bright*ao, b[1]*tint*bright*ao, Math.min(1,b[2]*tint*bright*ao*1.04));
+    m.opacity = op*0.95; }
   // drift with the wind — direction AND speed now respond to the wind controls
   const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=6 + P.windStrength*2.4 + 26*sf;
   const sy=Math.max(_sun.y, 0.16), shadowOp = clampJS(day*1.1,0,1)*(1-0.55*sf)*0.22;
@@ -1342,13 +1357,15 @@ function buildOcean() {
 
 function buildTerrain() {
   const W = MAP.maxX-MAP.minX+200, H = MAP.maxZ-MAP.minZ+200;
-  const geo = new THREE.PlaneGeometry(W, H, 760, 480);   // higher tessellation → crisper coastlines
+  const segX=760, segY=480, nx=segX+1, ny=segY+1;        // higher tessellation → crisper coastlines
+  const geo = new THREE.PlaneGeometry(W, H, segX, segY);
   geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
   const pos = geo.attributes.position, colors = new Float32Array(pos.count*3);
+  const hgt = new Float32Array(pos.count);               // cache heights for the AO pass
   const sand=new THREE.Color(0xe6d6a8), grass=new THREE.Color(0x4f8a3c), forest=new THREE.Color(0x2f6630),
         rock=new THREE.Color(0x7d756a), seabed=new THREE.Color(0x14506b), c=new THREE.Color();
   for (let i=0;i<pos.count;i++){
-    const x=pos.getX(i), z=pos.getZ(i); let y=terrainHeight(x,z); pos.setY(i,y);
+    const x=pos.getX(i), z=pos.getZ(i); let y=terrainHeight(x,z); pos.setY(i,y); hgt[i]=y;
     if (y<0.2) c.copy(seabed);
     else if (y<2.0) c.copy(seabed).lerp(sand, smooth01(clampJS((y-0.2)/1.8,0,1)));   // beach
     else if (y<5.0) c.copy(sand).lerp(grass, smooth01(clampJS((y-2.0)/3.0,0,1)));    // lowland
@@ -1356,6 +1373,29 @@ function buildTerrain() {
     else            c.copy(forest).lerp(rock, smooth01(clampJS((y-13)/6,0,1)));       // rocky peaks only
     const tn=(fbm(x*0.12,z*0.12)-0.5)*0.12;
     colors[i*3]=clampJS(c.r+tn,0,1); colors[i*3+1]=clampJS(c.g+tn,0,1); colors[i*3+2]=clampJS(c.b+tn,0,1);
+  }
+  // ---- baked horizon ambient occlusion (CPU, one-time) ----
+  // For each land vertex, march outward in 8 compass directions over the height grid; the
+  // steepest upward slope to a neighbour is that direction's "horizon". Vertices tucked at the
+  // base of hills / inside coves see more sky blocked → darker. Peaks stay bright. Replaces the
+  // GTAO post-process (which couldn't reproduce our custom-shader scene and read black by day).
+  const dx=W/segX, dz=H/segY, AO_R=16, DIRS=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  for (let r=0;r<ny;r++) for (let col=0;col<nx;col++){
+    const i=r*nx+col, y=hgt[i];
+    if (y<0.3) continue;                                  // skip open water/seabed (hidden under the ocean)
+    let horizon=0;
+    for (const [dc,dr] of DIRS){
+      let maxTan=0;
+      for (let s=1;s<=AO_R;s++){
+        const cc=col+dc*s, rr=r+dr*s; if (cc<0||cc>=nx||rr<0||rr>=ny) break;
+        const dh=hgt[rr*nx+cc]-y; if (dh<=0) continue;
+        const dist=Math.hypot(dc*dx*s, dr*dz*s); const t=dh/dist; if (t>maxTan) maxTan=t;
+      }
+      horizon+=maxTan;
+    }
+    horizon/=DIRS.length;                                 // 0 = open sky, larger = more enclosed
+    const aoF = 1 - clampJS(horizon*0.7, 0, 0.5);         // darken at most 50%
+    colors[i*3]*=aoF; colors[i*3+1]*=aoF; colors[i*3+2]*=aoF;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors,3)); geo.computeVertexNormals();
   const mat = new THREE.MeshStandardNodeMaterial({ roughness:0.95, metalness:0.0 });
@@ -1622,31 +1662,15 @@ function updateRecUI(){
   ui.segBtn.classList.toggle('active', recState !== 'recording' && rec);
 }
 
-// Ambient occlusion (GTAO) post-process — built lazily on first enable (dynamic import keeps
-// boot safe), orbit-view only, fully guarded so a failure reverts instead of breaking the app.
-let aoPost = null, aoActive = false;
-async function enableAO(){
-  if (aoPost){ aoActive = true; return; }
-  try {
-    const mod = await import('three/addons/tsl/display/GTAONode.js');
-    const scenePass = pass(scene, camera);
-    scenePass.setMRT(mrt({ output, normal: normalView }));
-    const col = scenePass.getTextureNode('output'), nrm = scenePass.getTextureNode('normal'), dep = scenePass.getTextureNode('depth');
-    const aoPass = mod.ao(dep, nrm, camera); aoPass.resolutionScale = 1.0;
-    const pp = new THREE.PostProcessing(renderer);
-    // blend so AO darkens at most ~45% — it can never wash the whole frame to black
-    pp.outputNode = col.mul(aoPass.getTextureNode().mul(0.55).add(0.45));
-    aoPost = pp; aoActive = true; console.log('AO enabled');
-  } catch(e){ console.warn('AO setup failed — reverting', e); aoActive=false; aoPost=null;
-    P.ao=false; if (ui.aoTog) ui.aoTog.classList.remove('on'); }
-}
-function disableAO(){ aoActive = false; }
+// Ambient occlusion is now BAKED at build time — into terrain vertex colours (buildTerrain) and
+// per-puff cloud shading (buildClouds) — so it's always on, free, and can't black out the frame.
+// The old GTAO post-process couldn't reproduce our custom-shader scene and was removed.
 
 // persist all panel settings between refreshes
 const SETTINGS_KEY = 'pidHelmsman.v1';
 function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
 function loadSettings(){ try { const s = localStorage.getItem(SETTINGS_KEY);
-  if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; P.ao = false; } } catch(_){ } }   // don't auto-restore pause / experimental AO
+  if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; } } catch(_){ } }   // don't auto-restore pause state
 
 function applyHud(){
   const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display = on?'':'none'; };
@@ -1702,11 +1726,6 @@ function buildPanel() {
   addSlider(cap, 'Hold',      P, 'transHold',    0,    2.5, 0.05, v=>v.toFixed(2)+'s');
   addSlider(cap, 'Fade-in',   P, 'transFadeIn',  0.05, 2.5, 0.05, v=>v.toFixed(2)+'s');
   addSlider(cap, 'Ease (lin→smooth)', P, 'transEase', 0, 1, 0.05, v=>v.toFixed(2));
-
-  // Effects (experimental)
-  const fx = section(panel, 'Effects');
-  ui.aoTog = addToggle(fx, 'Ambient occlusion (beta)', P, 'ao', (on)=>{ if (on) enableAO(); else disableAO(); });
-  el('div','read',fx).innerHTML = 'GTAO · orbit view only · experimental';
 
   // Modes
   s = section(panel, 'Mode');
