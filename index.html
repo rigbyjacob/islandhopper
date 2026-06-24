@@ -999,14 +999,16 @@ function buildFireworks(){
   }
 }
 function spawnBurst(x,y,z){
-  const base = new THREE.Color().setHSL(Math.random(), 1.0, 0.62);
-  const n = 30 + (Math.random()*26|0); let spawned=0;
+  const ncol = 2 + (Math.random()*2|0), cols = [];   // 2–3 colours per shot
+  for (let c=0;c<ncol;c++) cols.push(new THREE.Color().setHSL(Math.random(), 1.0, 0.5+Math.random()*0.22));
+  const n = 32 + (Math.random()*30|0); let spawned=0;
   for (let i=0;i<FW_MAX && spawned<n;i++){
     if (fwState[i].life>0) continue; const st=fwState[i], m=fwSprites[i];
-    const a=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1), spd=12+Math.random()*16;
-    st.vx=Math.sin(ph)*Math.cos(a)*spd; st.vz=Math.sin(ph)*Math.sin(a)*spd; st.vy=Math.cos(ph)*spd*0.8+5;
-    st.x=x; st.y=y; st.z=z; st.life=1.1+Math.random()*0.8;
-    m.material.color.copy(base); m.position.set(x,y,z); m.visible=true; spawned++;
+    // upper hemisphere only + strong upward bias → sparks erupt UP out of the island
+    const a=Math.random()*Math.PI*2, ph=Math.acos(Math.random()), spd=14+Math.random()*18;
+    st.vx=Math.sin(ph)*Math.cos(a)*spd; st.vz=Math.sin(ph)*Math.sin(a)*spd; st.vy=Math.cos(ph)*spd+12;
+    st.x=x; st.y=y; st.z=z; st.life=1.1+Math.random()*0.9;
+    m.material.color.copy(cols[(Math.random()*cols.length)|0]); m.position.set(x,y,z); m.visible=true; spawned++;
   }
 }
 function updateFireworks(dt){
@@ -1016,7 +1018,7 @@ function updateFireworks(dt){
     if (fwTimer<=0){ fwTimer = 1.0 + Math.random()*1.1;
       const isl=route[wpIdx], ang=Math.random()*Math.PI*2, rr=Math.random()*isl.r*0.7;
       const x=isl.x+Math.cos(ang)*rr, z=isl.z+Math.sin(ang)*rr;
-      const y=Math.max(terrainHeight(x,z),2)+14+Math.random()*12;
+      const y=Math.max(terrainHeight(x,z),2)+2.5;   // launch low, from the island itself
       spawnBurst(x,y,z);
     }
   }
@@ -1097,7 +1099,7 @@ function updatePathLine() {
   for (let i=0;i<n;i++){ arr[i*3]=pts[i].x; arr[i*3+1]=2.6; arr[i*3+2]=pts[i].z; }
   pathLine.geometry.setDrawRange(0, n);
   pathLine.geometry.attributes.position.needsUpdate = true;
-  if (n > 1) pathLine.geometry.computeLineDistances();   // required for the dashed (old-map) look
+  if (n > 1) pathLine.computeLineDistances();   // (method is on the Line, not the geometry) — for dashes
   pathLine.visible = P.showPath && n > 1;
 }
 function spawnGpsPing(x,z){ if(!P.showGps) return; const m = gpsPings[gpsPtr]; gpsPtr = (gpsPtr+1)%gpsPings.length;
