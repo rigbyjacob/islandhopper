@@ -811,6 +811,7 @@ function guidance(s, t) {
     desPsi = Math.atan2(wz, wx);
   }
   let desSpeed = Math.min(P.desiredSpeed, Math.max(5, dArrive*0.22));
+  desSpeed *= clampJS(1 - Math.abs(wrap(course - s.psi))*0.5, 0.4, 1);   // ease off for sharp turns so the hull can track the curve
 
   if (P.mode === 'tour' && arrived) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
   if (P.mode === 'goto' && arrived) { desSpeed = 0; }
@@ -822,24 +823,20 @@ function guidance(s, t) {
 // physics can't make the turn (tight corner into an island) or has touched land. It turns/accelerates
 // far harder than the rudder allows to glue the boat to the planned path, and slides off any shoal toward
 // deeper water — then hands back to the realistic PID once we're cruising open water again.
-const ASSIST_TURN = 1.7, ASSIST_ACC = 8;   // rad/s, units/s² (well beyond the hull's real limits)
 function deeperDir(x,z){ const e=GRID.dx;
   const gx=-(terrainHeight(x+e,z)-terrainHeight(x-e,z)), gz=-(terrainHeight(x,z+e)-terrainHeight(x,z-e));
   const m=Math.hypot(gx,gz)||1; return { x:gx/m, z:gz/m }; }   // unit vector toward deeper water
 function runAssist(s, dt, t, g){
-  const herr = wrap(g.course - s.psi);
-  s.psi = wrap(s.psi + clampJS(herr, -ASSIST_TURN*dt, ASSIST_TURN*dt));   // snap heading toward the path
-  s.r = clampJS(herr/Math.max(dt,1e-3), -ASSIST_TURN, ASSIST_TURN);
-  const bc = worldToCell(s.x,s.z), dland = DLAND ? DLAND[gIdx(bc.c,bc.r)] : 99;
-  let tgt = clampJS(g.desSpeed, 3, 10);
-  if (dland < 4) tgt *= 0.6; if (Math.abs(herr) > 0.7) tgt *= 0.6;        // ease off for tight turns / very near land
-  s.u += clampJS(tgt - s.u, -ASSIST_ACC*dt, ASSIST_ACC*dt); s.v = 0;
-  let nx = s.x + Math.cos(s.psi)*s.u*dt, nz = s.z + Math.sin(s.psi)*s.u*dt;
-  if (-terrainHeight(nx,nz) < P.draft + 0.4){                            // would touch bottom → glide toward open water
-    const dd = deeperDir(s.x,s.z), push = Math.max(s.u,4)*dt; nx = s.x + dd.x*push; nz = s.z + dd.z*push;
-    s.psi = wrap(s.psi + clampJS(wrap(Math.atan2(dd.z,dd.x)-s.psi), -ASSIST_TURN*dt, ASSIST_TURN*dt));
-  }
-  if (-terrainHeight(nx,nz) >= P.draft){ s.x = nx; s.z = nz; }            // only ever move into water
+  const clear = -terrainHeight(s.x,s.z) - P.draft;            // floating clearance (negative if pinned on a shoal)
+  const dd = deeperDir(s.x,s.z), deepAng = Math.atan2(dd.z, dd.x);
+  const wDeep = clampJS((3 - clear)/4, 0, 1);                 // 1 aground → 0 once we have ~3u clearance: steer to deep, else to the path
+  const tgtAng = g.course + wrap(deepAng - g.course)*wDeep;   // smooth blend (no snapping)
+  const turn = clampJS(wrap(tgtAng - s.psi), -1.1*dt, 1.1*dt);
+  s.psi = wrap(s.psi + turn); s.r = turn/Math.max(dt,1e-3);
+  const tgtU = (wDeep>0.4 ? 4.5 : clampJS(g.desSpeed,3,8));
+  s.u += clampJS(tgtU - s.u, -5*dt, 5*dt); s.v = 0;
+  const nx = s.x + Math.cos(s.psi)*s.u*dt, nz = s.z + Math.sin(s.psi)*s.u*dt;
+  if (-terrainHeight(nx,nz) >= P.draft){ s.x = nx; s.z = nz; }   // only ever move into water; if pinned, just keep turning toward deep
   s.grounded = false;
 }
 
@@ -901,20 +898,20 @@ async function init() {
       maybeReplan(boat3, dt);
       const g = guidance(boat3, t);
       lastGuide = g;
-      // choose the controller: realistic PID while cruising open water; the "electric motor" assist when
-      // in trouble — grounded, or close to land needing a turn tighter than the hull can manage.
-      const bc = worldToCell(boat3.x, boat3.z), dland = DLAND ? DLAND[gIdx(bc.c,bc.r)] : 99;
-      const courseErr = Math.abs(wrap(g.course - boat3.psi));
-      if (boat3.assist){ if (dland > 8 && courseErr < 0.3 && !boat3.grounded) boat3.assist = false; }
-      else if (boat3.grounded || (dland < 6 && courseErr > 0.6)) { boat3.assist = true; headingPID.reset(); speedPID.reset(); }
       const herr = wrap(g.desPsi - boat3.psi);
+      // realistic PID while cruising; the "electric motor" assist ONLY after an actual collision (grounded),
+      // and it stays engaged until we've had clear water for a moment — so it can never toggle/jitter.
       if (boat3.assist) {
         runAssist(boat3, dt, t, g);
+        const clear = -terrainHeight(boat3.x, boat3.z) - P.draft;
+        boat3.assistClearT = (clear > 4) ? (boat3.assistClearT||0)+dt : 0;
+        if (boat3.assistClearT > 0.7) { boat3.assist=false; boat3.assistClearT=0; headingPID.reset(); speedPID.reset(); planKey=''; path=null; }
       } else {
         boat3.delta = clampJS(headingPID.step(herr, boat3.psi, dt, P.hKp, P.hKi, P.hKd, -BOAT.deltaMax, BOAT.deltaMax, true), -BOAT.deltaMax, BOAT.deltaMax);
         const serr = g.desSpeed - boat3.u;
         boat3.thr = clampJS(speedPID.step(serr, boat3.u, dt, P.sKp, P.sKi, P.sKd, 0, 1, false), 0, 1);
         stepDynamics(boat3, dt, t);
+        if (boat3.grounded) { boat3.assist=true; boat3.assistClearT=0; }   // collision → engage the electric motor
       }
       recordTelemetry(t, herr, boat3.u, g.desSpeed);
       stepEstimator(dt);
