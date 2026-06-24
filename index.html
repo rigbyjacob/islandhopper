@@ -1464,24 +1464,26 @@ function makeLabelSprite(text, color, sizeY){
 // labels reveal how much real depth the vertical scale is compressing (only shown in bathymetry mode)
 let dipStick = null;
 function buildDipStick(){
-  const X=380, Z=270;                                          // deep open water S of the chain (~2500 m)
+  const X=230, Z=-430;                                         // deep open water just N of the Virgin Islands (~2700 m)
   const maxM = Math.max(0, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
   const g = new THREE.Group(); g.visible = false;
-  const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.8 });
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.45,-seabedY,8), poleMat);
-  pole.position.set(X, seabedY/2, Z); g.add(pole);
-  const ringGeo = new THREE.TorusGeometry(2.4,0.35,6,18); ringGeo.rotateX(Math.PI/2);
-  const ringMat = new THREE.MeshBasicMaterial({ color:0xffe6a8 });
+  const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.85, depthTest:false });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,-seabedY,8), poleMat);
+  pole.position.set(X, seabedY/2, Z); pole.renderOrder=18; g.add(pole);
+  const ringGeo = new THREE.TorusGeometry(2.6,0.4,6,18); ringGeo.rotateX(Math.PI/2);
+  const ringMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, depthTest:false });
   let lastLabelY = 1e9;
   const tick=(m, txt, force)=>{ const y=-compressM(m);
-    const ring=new THREE.Mesh(ringGeo, ringMat); ring.position.set(X,y,Z); g.add(ring);
-    if (txt && (force || Math.abs(y-lastLabelY) > 6)){                    // skip labels that would collide
-      const lab=makeLabelSprite(txt, 0xfff0c8, 7.5); lab.position.set(X+7, y, Z); g.add(lab); lastLabelY=y; }
+    const ring=new THREE.Mesh(ringGeo, ringMat); ring.position.set(X,y,Z); ring.renderOrder=19; g.add(ring);
+    if (txt && (force || Math.abs(y-lastLabelY) > 7)){                    // skip labels that would collide
+      const lab=makeLabelSprite(txt, 0xfff0c8, 6.5); lab.material.depthTest=false;   // draw on top (underwater → would otherwise be hidden)
+      lab.position.set(X+8, y, Z); g.add(lab); lastLabelY=y; }
   };
   tick(0, '0 m  (surface)', true);
-  for (let m=500; m<maxM-200; m+=500) tick(m, m+' m', false);
+  for (let m=500; m<maxM-250; m+=500) tick(m, m+' m', false);
   tick(maxM, '≈'+(Math.round(maxM/10)*10)+' m  (seabed)', true);
-  const title=makeLabelSprite('▼  depth sounding', 0xffffff, 9); title.position.set(X, 9, Z); g.add(title);
+  const title=makeLabelSprite('▼  depth sounding', 0xffffff, 8); title.material.depthTest=false;
+  title.position.set(X, 10, Z); g.add(title);
   scene.add(g); dipStick=g;
 }
 function buildLabels(){
@@ -1492,7 +1494,7 @@ function buildLabels(){
 }
 function updateLabels(){
   const on = P.showLabels, tgtName = (P.mode==='tour' && route[wpIdx]) ? route[wpIdx].name : null;
-  const cam = activeCam || camera, k = 0.03;   // cap apparent near-size: world scale = min(base, k·distance)
+  const cam = activeCam || camera, k = 0.019;   // cap apparent near-size: world scale = min(base, k·distance)
   const rescale = (sp)=>{ const d=sp.position.distanceTo(cam.position), ws=Math.min(sp.userData.base, k*d);
     sp.scale.set(ws*sp.userData.aspect, ws, 1); };
   for (const { sp, isl } of labelEls){ sp.visible = on; sp.material.color.set(isl.name===tgtName ? 0xff9a3c : 0xffffff); if(sp.visible) rescale(sp); }
