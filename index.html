@@ -786,7 +786,7 @@ const _sun = new THREE.Vector3(0.4, 0.8, 0.3);
 const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3();
 const C = {
   zenNight:new THREE.Color(0x05070f), zenDay:new THREE.Color(0x1d6fc6), zenGold:new THREE.Color(0x3a3570),
-  horNight:new THREE.Color(0x0a1830), horDay:new THREE.Color(0xc4e3f2), horGold:new THREE.Color(0xff7e3c),
+  horNight:new THREE.Color(0x0a1830), horDay:new THREE.Color(0x9cc8ea), horGold:new THREE.Color(0xff7e3c),   // less washed-out daytime horizon
   sunDay:new THREE.Color(0xfff3d4),   sunGold:new THREE.Color(0xff7a30),
   ltNight:new THREE.Color(0x3b4f86),  ltDay:new THREE.Color(0xfff2da),  ltGold:new THREE.Color(0xff9a52),
   stormGray:new THREE.Color(0x55606a),
@@ -798,10 +798,10 @@ function buildSky() {
   skyMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false });
   skyMat.fog = false;                                   // dome must not be fogged into white
   const vd = normalize(positionLocal);
-  const grad = smoothstep(-0.12, 0.55, vd.y);
+  const grad = smoothstep(-0.05, 0.38, vd.y);                        // reach the blue zenith sooner → less washed-out sky
   const col = mix(uHorizon, uZenith, grad).toVar();
   const sd = max(dot(vd, normalize(uSunDir)), 0.0);
-  const glow = pow(sd, 7.0).mul(0.5).add(pow(sd, 280.0).mul(7.0));   // soft halo + sun disk
+  const glow = pow(sd, 13.0).mul(0.30).add(pow(sd, 280.0).mul(7.0));   // tighter halo so it doesn't wash the whole sky pale + sun disk
   col.addAssign(uSunCol.mul(glow).mul(uSunInt));
   skyMat.colorNode = col;
   skyMesh = new THREE.Mesh(geo, skyMat); skyMesh.renderOrder = -10;
