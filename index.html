@@ -238,6 +238,7 @@ const P = {
   cineStyle: 0.5,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
   cineView: 'follow', // director camera mode: 'follow' (slider) | 'side' | 'race'
   bathy: false,       // bathymetric overlay — show underwater depth + contours
+  debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
@@ -439,6 +440,7 @@ const cellCenter = (c,r)=> ({ x: GRID.minX+(c+0.5)*GRID.cell, z: GRID.minZ+(r+0.
 const worldToCell = (x,z)=> ({ c: clampJS(Math.floor((x-GRID.minX)/GRID.cell),0,GRID.cols-1),
                                r: clampJS(Math.floor((z-GRID.minZ)/GRID.cell),0,GRID.rows-1) });
 let BLOCKED = null, DLAND = null;
+let navDebug = null;   // last A* result {raw cell-path, simplified path, gate, start, found} for the debug overlay
 function buildBlocked(inflate=2) {            // ~24u margin — clear of shoals but still lets the boat reach islands
   const raw = new Uint8Array(GRID.cols*GRID.rows);
   for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++){ const p=cellCenter(c,r);
@@ -500,7 +502,46 @@ function planPath(sx, sz, gx, gz) {
       const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>-3.2)return false; } return true; };
   const simp=[pts[0]]; let i=0;
   while(i<pts.length-1){ let j=pts.length-1; while(j>i+1&&!clearLOS(pts[i],pts[j]))j--; simp.push(pts[j]); i=j; }
+  navDebug = { raw: pts.map(p=>({x:p.x,z:p.z})), simp: simp.map(p=>({x:p.x,z:p.z})),
+               gate:{x:gx,z:gz}, start:{x:sx,z:sz}, found };   // capture for the debug overlay
   return simp;
+}
+// ---- navigation debug overlay: the A* grid (blocked = red, open water shaded by distance-to-land),
+//      the raw grid path (yellow, angular) vs the simplified path (green), and start/gate markers ----
+let navOverlay=null, navRawLine=null, navSimpLine=null, navMarkStart=null, navMarkGate=null, navMarkTgt=null;
+function buildNavGrid(){
+  const grp=new THREE.Group(); grp.visible=false; grp.renderOrder=30;
+  const N=GRID.cols*GRID.rows; let nb=0; for(let i=0;i<N;i++) if(BLOCKED[i]) nb++;
+  const geo=new THREE.PlaneGeometry(GRID.cell*0.9, GRID.cell*0.9); geo.rotateX(-Math.PI/2);
+  const blk=new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({color:0xff2233,transparent:true,opacity:0.5,depthTest:false}), nb||1);
+  const free=new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({transparent:true,opacity:0.18,depthTest:false}), (N-nb)||1);
+  blk.renderOrder=30; free.renderOrder=29;
+  const d=new THREE.Object3D(), col=new THREE.Color(); let bi=0, fi=0;
+  for(let r=0;r<GRID.rows;r++)for(let c=0;c<GRID.cols;c++){ const i=gIdx(c,r), p=cellCenter(c,r);
+    d.position.set(p.x,3,p.z); d.updateMatrix();
+    if(BLOCKED[i]){ blk.setMatrixAt(bi++, d.matrix); }
+    else { free.setMatrixAt(fi, d.matrix); const t=Math.min(DLAND?DLAND[i]:9,25)/25; col.setRGB(0.15,0.45+0.45*t,0.85); free.setColorAt(fi, col); fi++; } }
+  blk.instanceMatrix.needsUpdate=true; free.instanceMatrix.needsUpdate=true; if(free.instanceColor) free.instanceColor.needsUpdate=true;
+  grp.add(blk); grp.add(free);
+  const mkLine=(color)=>{ const g2=new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(400*3),3));
+    const ln=new THREE.Line(g2, new THREE.LineBasicMaterial({color,transparent:true,depthTest:false})); ln.renderOrder=32; ln.frustumCulled=false; return ln; };
+  navRawLine=mkLine(0xffe000); navSimpLine=mkLine(0x30ff70); grp.add(navRawLine); grp.add(navSimpLine);
+  const mkBall=(color,s)=>{ const b=new THREE.Mesh(new THREE.SphereGeometry(s,12,8), new THREE.MeshBasicMaterial({color,depthTest:false})); b.renderOrder=33; grp.add(b); return b; };
+  navMarkStart=mkBall(0x00e5ff,6); navMarkGate=mkBall(0xff8a00,7); navMarkTgt=mkBall(0xffffff,5);
+  scene.add(grp); navOverlay=grp;
+}
+function setNavLine(ln, pts){ const a=ln.geometry.attributes.position.array, n=Math.min(pts.length,400);
+  for(let i=0;i<n;i++){ a[i*3]=pts[i].x; a[i*3+1]=5; a[i*3+2]=pts[i].z; }
+  ln.geometry.setDrawRange(0,n); ln.geometry.attributes.position.needsUpdate=true; ln.geometry.computeBoundingSphere(); }
+function updateNavDebug(){
+  if(!navOverlay) return;
+  navOverlay.visible = !!P.debugNav;
+  if(!P.debugNav || !navDebug) return;
+  setNavLine(navRawLine, navDebug.raw); setNavLine(navSimpLine, navDebug.simp);
+  navMarkStart.position.set(navDebug.start.x,5,navDebug.start.z);
+  navMarkGate.position.set(navDebug.gate.x,6,navDebug.gate.z);
+  const isl=(P.mode==='tour'&&route[wpIdx])?route[wpIdx]:null;
+  navMarkTgt.visible=!!isl; if(isl) navMarkTgt.position.set(isl.x, Math.max(isl.h,4)+4, isl.z);
 }
 
 // ============================================================================
@@ -774,6 +815,7 @@ async function init() {
 
   BLOCKED = buildBlocked();
   buildDistLand();
+  buildNavGrid();
   kf = new KalmanFilter(boat3.x, boat3.z);
 
   // heading the boat at the first waypoint to start
@@ -812,6 +854,7 @@ async function init() {
     placeBoat(boatMesh, boat3, t);
     followCamera(boat3, dt);
     updateNavVisuals(dt);
+    updateNavDebug();
     updateFireworks(dt);
     controls.update();
     if (fpsMode) updateFpsCam(t);
@@ -2251,6 +2294,7 @@ function buildPanel() {
   addToggle(s, 'Compass', P, 'showCompass', applyHud);
   addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
+  addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
   // View
   s = section(panel, 'View');
