@@ -454,8 +454,10 @@ function planPath(sx, sz, gx, gz) {
   let cu=null;
   if (P.curOn && P.curStrength>0) { const dir=d2r(P.curDirDeg); cu={x:Math.cos(dir),z:Math.sin(dir),mag:P.curStrength}; }
   const dirs=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
-  const gI=gIdx(g.c,g.r); let found=false;
-  while(open.size){ const n=open.pop(), ni=gIdx(n.c,n.r); if(closed[ni])continue; closed[ni]=1; if(ni===gI){found=true;break;}
+  const gI=gIdx(g.c,g.r); let found=false, bestCell=sI, bestH=h(s.c,s.r);
+  while(open.size){ const n=open.pop(), ni=gIdx(n.c,n.r); if(closed[ni])continue; closed[ni]=1;
+    { const hh=h(n.c,n.r); if(hh<bestH){ bestH=hh; bestCell=ni; } }   // remember the closest-to-goal cell we can actually reach
+    if(ni===gI){found=true;break;}
     for(const [dc,dr] of dirs){ const cc=n.c+dc, rr=n.r+dr; if(cc<0||cc>=GRID.cols||rr<0||rr>=GRID.rows)continue;
       const ci=gIdx(cc,rr); if(BLOCKED[ci]||closed[ci])continue;
       if(dc&&dr){ if(BLOCKED[gIdx(n.c+dc,n.r)]||BLOCKED[gIdx(n.c,n.r+dr)])continue; }   // no corner cutting
@@ -464,10 +466,13 @@ function planPath(sx, sz, gx, gz) {
       if(DLAND){ const near=clampJS((5-DLAND[ci])/5,0,1); pen += 3.2*near*near; }   // prefer open water, but not so hard it can't approach the target island
       const tg=gScore[ni]+base*pen;
       if(tg<gScore[ci]){ gScore[ci]=tg; came[ci]=ni; open.push({c:cc,r:rr,f:tg+h(cc,rr)}); } } }
-  if(!found) return [{x:sx,z:sz},{x:gx,z:gz}];
-  const cells=[]; let cur=gI; while(cur!==-1){ const r=Math.floor(cur/GRID.cols),c=cur-r*GRID.cols; cells.push({c,r}); cur=came[cur]; }
+  // ROBUST: never return a straight line through land. If the exact goal is unreachable, route to the
+  // closest reachable open-water cell; the boat re-plans as it moves and progressively rounds the island.
+  const endCell = found ? gI : bestCell;
+  if (endCell === sI) return [{x:sx,z:sz}];                   // truly boxed in (rare): stay put, let recovery back us out
+  const cells=[]; let cur=endCell; while(cur!==-1){ const r=Math.floor(cur/GRID.cols),c=cur-r*GRID.cols; cells.push({c,r}); cur=came[cur]; }
   cells.reverse();
-  let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz}; pts[pts.length-1]={x:gx,z:gz};
+  let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz}; if(found) pts[pts.length-1]={x:gx,z:gz};
   const clearLOS=(a,b)=>{ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.cell*0.5));
     for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
       const wc=worldToCell(x,z); if(BLOCKED[gIdx(wc.c,wc.r)])return false; if(terrainHeight(x,z)>-3.2)return false; } return true; };
@@ -511,8 +516,12 @@ function randn(){ if(gaussSpare!==null){ const v=gaussSpare; gaussSpare=null; re
 // ============================================================================
 // Boat dynamics (3-DOF: surge u, sway v, yaw r)
 // ============================================================================
-const boat3 = { x: BYNAME['Culebra'].x + 50, z: BYNAME['Culebra'].z + 40,
-  psi: 0, u: 8, v: 0, r: 0, thr: 0.4, delta: 0, speedWater: 8, speedGround: 8 };
+// start out in open water SE of Guadeloupe (N) (the SE end of the chain), clear of all islands
+const START_POS = { x: 1080, z: 300 };
+const _Gua = BYNAME['Guadeloupe (N)'] || { x: 908.5, z: 176.4 };
+const boat3 = { x: START_POS.x, z: START_POS.z,
+  psi: Math.atan2(_Gua.z - START_POS.z, _Gua.x - START_POS.x),   // face back toward the chain
+  u: 8, v: 0, r: 0, thr: 0.4, delta: 0, speedWater: 8, speedGround: 8 };
 
 function stepDynamics(s, dt, t) {
   const cos = Math.cos(s.psi), sin = Math.sin(s.psi);
@@ -553,8 +562,8 @@ function stepDynamics(s, dt, t) {
 // ============================================================================
 // Guidance — A* path + pure-pursuit, producing desired heading + speed
 // ============================================================================
-const tourNames = ['Culebra','St. Thomas','Tortola','Virgin Gorda','St. Martin',
-                   'St. Barths','St. Kitts','Nevis','Antigua','Barbuda','Anegada'];
+const tourNames = ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
+                   'St. Martin','Anguilla','Virgin Gorda','Tortola','St. Thomas','Culebra'];
 let route = tourNames.map(n => BYNAME[n]).filter(Boolean);
 let wpIdx = 0;
 
@@ -625,7 +634,14 @@ function replan(s) {
 function maybeReplan(s, dt) {
   const key = `${P.mode}|${wpIdx}|${P.usePlanner}|${gotoTarget?(gotoTarget.x|0)+','+(gotoTarget.z|0):'-'}`;
   replanTimer -= dt;
-  if (key !== planKey || replanTimer <= 0 || !path) { planKey = key; replanTimer = 3.0; replan(s); }
+  if (key !== planKey || replanTimer <= 0 || !path) {
+    planKey = key; replan(s);
+    // if the route stops short of the gate (partial path around an obstacle), refresh sooner so the boat
+    // keeps discovering the way around instead of idling at the path end
+    const tgt = activeTarget(navPosition(s)), end = (path && path.length) ? path[path.length-1] : null;
+    const partial = end ? Math.hypot(end.x-tgt.x, end.z-tgt.z) > 28 : false;
+    replanTimer = partial ? 1.0 : 3.0;
+  }
 }
 let replanTimer = 0;
 
@@ -652,10 +668,12 @@ function guidance(s, t) {
     return { desPsi: d2r(P.desiredHeadingDeg), desSpeed: P.desiredSpeed, course: d2r(P.desiredHeadingDeg), name: '(holding heading)', xte: 0 };
 
   const nav = navPosition(s);
+  const gate = activeTarget(nav);                   // the actual island gate we're heading for
   if (!path) replan(s);
-  const goal = path[path.length-1];                 // the planned destination (nearest-side approach)
-  const dFinal = Math.hypot(goal.x - nav.x, goal.z - nav.z);
-  const aim = pursuit(path, nav, P.lookahead);
+  const dGate = Math.hypot(gate.x - nav.x, gate.z - nav.z);   // arrival/speed key off the gate, NOT the path end
+  // follow the planned (obstacle-free) path for steering; if a path is degenerate, aim straight at the gate
+  const pathPts = (path && path.length >= 2) ? path : [nav, gate];
+  const aim = pursuit(pathPts, nav, P.lookahead);
   // pure-pursuit heading toward the lookahead point, plus a cross-track pull onto the line
   let course = Math.atan2(aim.z - nav.z, aim.x - nav.x);
   course = course + clampJS(P.xteGain * aim.xteSigned, -0.7, 0.7);
@@ -667,12 +685,12 @@ function guidance(s, t) {
     const wx = Math.cos(course)*spd - e.cx, wz = Math.sin(course)*spd - e.cz;
     desPsi = Math.atan2(wz, wx);
   }
-  let desSpeed = Math.min(P.desiredSpeed, Math.max(5, dFinal*0.22));
+  let desSpeed = Math.min(P.desiredSpeed, Math.max(5, dGate*0.22));
 
-  if (P.mode === 'tour' && dFinal < 24) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
-  if (P.mode === 'goto' && dFinal < 12) { desSpeed = 0; }
+  if (P.mode === 'tour' && dGate < 30) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
+  if (P.mode === 'goto' && dGate < 12) { desSpeed = 0; }
   const name = P.mode === 'goto' ? 'destination' : route[wpIdx].name;
-  return { desPsi, desSpeed, course, dist: dFinal, name, xte: aim.xte };
+  return { desPsi, desSpeed, course, dist: dGate, name, xte: aim.xte };
 }
 
 // run-aground recovery: back straight out of the shoal, then replan from open water
@@ -2272,7 +2290,7 @@ function buildPanel() {
   const resetTune = el('div','btn',acts); resetTune.textContent='Reset gains';
   resetTune.onclick=()=>{ for (const k of ['hKp','hKi','hKd','sKp','sKi','sKd']) { P[k]=DEFAULTS[k]; syncSlider(k); } headingPID.reset(); speedPID.reset(); };
   const resetBoat = el('div','btn',acts); resetBoat.textContent='Reset boat';
-  resetBoat.onclick=()=>{ const c=BYNAME['Culebra']; Object.assign(boat3,{x:c.x+50,z:c.z+40,u:8,v:0,r:0,thr:0.4,delta:0}); wpIdx=0; const t0=activeTarget(); boat3.psi=Math.atan2(t0.z-boat3.z,t0.x-boat3.x); headingPID.reset(); speedPID.reset(); TEL.length=0; kf=new KalmanFilter(boat3.x,boat3.z); path=null; planKey=''; replan(boat3); };
+  resetBoat.onclick=()=>{ Object.assign(boat3,{x:START_POS.x,z:START_POS.z,u:8,v:0,r:0,thr:0.4,delta:0}); wpIdx=0; const t0=activeTarget(); boat3.psi=Math.atan2(t0.z-boat3.z,t0.x-boat3.x); headingPID.reset(); speedPID.reset(); TEL.length=0; kf=new KalmanFilter(boat3.x,boat3.z); path=null; planKey=''; replan(boat3); };
 
   // Restore EVERY control (PID, weather, nav, sky, HUD toggles…) to factory defaults.
   // Clearing the saved blob + reloading is the foolproof way to resync all DOM controls at once.
