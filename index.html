@@ -631,7 +631,7 @@ async function init() {
   buildTerrainField();
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain();
   boatMesh = buildBoat(); buildCamera();
-  buildClouds(); buildBoatShadow(); buildIslandLights();
+  buildClouds(); buildBoatShadow(); buildIslandLights(); buildFireworks();
   buildNavVisuals();
   buildWake();
   buildLabels();
@@ -676,6 +676,7 @@ async function init() {
     placeBoat(boatMesh, boat3, t);
     followCamera(boat3, dt);
     updateNavVisuals(dt);
+    updateFireworks(dt);
     controls.update();
     if (fpsMode) updateFpsCam(t);
     activeCam = fpsMode ? fpsCam : camera;
@@ -804,7 +805,7 @@ function updateEnvironment(dt) {
 }
 
 // ---- puffy clouds (white → gray with storms, dimmer at night) ----
-let cloudGroups=[], cloudMats=[], cloudBounds;
+let cloudGroups=[], cloudMats=[], cloudBounds, cloudShadows=[], cloudShadowMat;
 // cel-shaded puff: a soft round blob whose RGB is split into discrete light/mid/shadow
 // bands (light from top-left), so each sprite reads as a rounded cartoon puff.
 function makeCloudTexture(){
@@ -848,7 +849,11 @@ function buildClouds(){
       s.position.set((Math.random()-0.5)*w*0.8, 14+Math.random()*26, (Math.random()-0.5)*w*0.4); grp.add(s); }
     grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), baseY,
       cloudBounds.minZ+Math.random()*(cloudBounds.maxZ-cloudBounds.minZ));
-    grp.userData.spd=0.5+Math.random()*0.8; scene.add(grp); cloudGroups.push(grp);
+    grp.userData.spd=0.5+Math.random()*0.8; grp.userData.w=w; scene.add(grp); cloudGroups.push(grp);
+    // soft dark shadow cast onto the sea (positioned each frame by projecting the cloud along the sun)
+    const sh=new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({
+      map:makeDotTexture(), color:0x09131d, transparent:true, opacity:0, depthWrite:false }));
+    sh.rotation.x=-Math.PI/2; sh.renderOrder=1; scene.add(sh); cloudShadows.push(sh);
   }
 }
 function updateClouds(dt, sf, day){
@@ -858,10 +863,18 @@ function updateClouds(dt, sf, day){
   for (let i=0;i<cloudMats.length;i++){ const b=cols[i];
     cloudMats[i].color.setRGB(b[0]*tint*bright, b[1]*tint*bright, Math.min(1,b[2]*tint*bright*1.04));
     cloudMats[i].opacity = op*0.95; }
-  const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=8 + 34*sf;
-  for(const grp of cloudGroups){ grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
+  // drift with the wind — direction AND speed now respond to the wind controls
+  const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=6 + P.windStrength*2.4 + 26*sf;
+  const sy=Math.max(_sun.y, 0.16), shadowOp = clampJS(day*1.1,0,1)*(1-0.55*sf)*0.22;
+  for (let i=0;i<cloudGroups.length;i++){ const grp=cloudGroups[i];
+    grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
     if(grp.position.x>cloudBounds.maxX)grp.position.x=cloudBounds.minX; if(grp.position.x<cloudBounds.minX)grp.position.x=cloudBounds.maxX;
-    if(grp.position.z>cloudBounds.maxZ)grp.position.z=cloudBounds.minZ; if(grp.position.z<cloudBounds.minZ)grp.position.z=cloudBounds.maxZ; }
+    if(grp.position.z>cloudBounds.maxZ)grp.position.z=cloudBounds.minZ; if(grp.position.z<cloudBounds.minZ)grp.position.z=cloudBounds.maxZ;
+    const sh=cloudShadows[i]; if(sh){ const tproj=grp.position.y/sy;   // project the cloud down the sun ray to the sea
+      sh.position.set(grp.position.x - _sun.x*tproj, 1.8, grp.position.z - _sun.z*tproj);
+      const ss=grp.userData.w*1.25; sh.scale.set(ss, ss, 1);
+      sh.material.opacity = shadowOp; sh.visible = shadowOp>0.01; }
+  }
 }
 
 // ---- island night lights: warm glowing billboard Sprites on the land, lit after dusk.
@@ -917,6 +930,50 @@ function buildIslandLights(){
     }
   }
   scene.add(islandLightsGroup);
+}
+
+// ---- fireworks: the current target island celebrates the boat's visit (Sprite particle pool) ----
+const FW_MAX = 300; let fwSprites = [], fwState = [], fwTimer = 0;
+function buildFireworks(){
+  const tex = makeDotTexture();
+  for (let i=0;i<FW_MAX;i++){
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, color:0xffffff, transparent:true,
+      opacity:0, depthWrite:false, blending:THREE.AdditiveBlending, fog:false }));
+    m.visible=false; m.renderOrder=4; scene.add(m); fwSprites.push(m);
+    fwState.push({ life:0, x:0,y:0,z:0, vx:0,vy:0,vz:0 });
+  }
+}
+function spawnBurst(x,y,z){
+  const base = new THREE.Color().setHSL(Math.random(), 1.0, 0.62);
+  const n = 30 + (Math.random()*26|0); let spawned=0;
+  for (let i=0;i<FW_MAX && spawned<n;i++){
+    if (fwState[i].life>0) continue; const st=fwState[i], m=fwSprites[i];
+    const a=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1), spd=12+Math.random()*16;
+    st.vx=Math.sin(ph)*Math.cos(a)*spd; st.vz=Math.sin(ph)*Math.sin(a)*spd; st.vy=Math.cos(ph)*spd*0.8+5;
+    st.x=x; st.y=y; st.z=z; st.life=1.1+Math.random()*0.8;
+    m.material.color.copy(base); m.position.set(x,y,z); m.visible=true; spawned++;
+  }
+}
+function updateFireworks(dt){
+  if (!fwSprites.length) return;
+  if (P.mode==='tour' && !P.paused){
+    fwTimer -= dt;
+    if (fwTimer<=0){ fwTimer = 1.0 + Math.random()*1.1;
+      const isl=route[wpIdx], ang=Math.random()*Math.PI*2, rr=Math.random()*isl.r*0.7;
+      const x=isl.x+Math.cos(ang)*rr, z=isl.z+Math.sin(ang)*rr;
+      const y=Math.max(terrainHeight(x,z),2)+14+Math.random()*12;
+      spawnBurst(x,y,z);
+    }
+  }
+  for (let i=0;i<FW_MAX;i++){ const st=fwState[i], m=fwSprites[i];
+    if (st.life<=0){ if(m.visible) m.visible=false; continue; }
+    st.life-=dt; st.vy-=22*dt; st.vx*=(1-1.3*dt); st.vz*=(1-1.3*dt); st.vy*=(1-0.5*dt);
+    st.x+=st.vx*dt; st.y+=st.vy*dt; st.z+=st.vz*dt;
+    if (st.life<=0){ m.visible=false; continue; }
+    m.position.set(st.x,st.y,st.z);
+    const lf=clampJS(st.life,0,1); m.material.opacity=lf*0.95;
+    const sc=1.3+(1-lf)*1.6; m.scale.set(sc,sc,1);
+  }
 }
 
 // ---- fake soft contact shadow under the boat (water doesn't receive real shadows) ----
