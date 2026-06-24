@@ -1367,9 +1367,18 @@ function buildOcean() {
     .add(vnoise(p.mul(8.11).add(vec2(8.3,2.8))).mul(0.1)));
 
   const xz = positionLocal.xz;
-  const n = waveN(xz), sp = shore(xz), wh = waveH(xz);
+  const sp = shore(xz), wh = waveH(xz);
   const viewDir = normalize(cameraPosition.sub(positionWorld));
   const sunDir = normalize(uSunDir);
+  // Distance LOD on the wave NORMAL — this is the flicker fix. Every view-dependent term below
+  // (fresnel sky-reflection, sun lobes, foam) reads off this normal. Far from the camera each pixel
+  // spans many wave faces, so those shading contours sweep sub-pixel and strobe when the view
+  // rotates/pans (worse the higher & faster the camera — exactly the reported symptom). Fading the
+  // normal toward flat-up with distance makes far water shade smoothly & stably, while near water
+  // (boat / crow's-nest) keeps the full morphing detail.
+  const vdist = length(cameraPosition.sub(positionWorld));
+  const detail = smoothstep(2400.0, 280.0, vdist);          // 1 near → 0 far
+  const n = normalize(mix(vec3(0.0,1.0,0.0), waveN(xz), detail));
 
   // depth-based base colour: deep blue → turquoise shallows
   const deep = vec3(0.012,0.09,0.22), midC = vec3(0.03,0.30,0.48), shallow = vec3(0.16,0.62,0.66);
