@@ -335,9 +335,9 @@ function buildTerrainField(){
       Hh[i] = 2.8 + base + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift land clear of the wave crests + micro-relief
     }
     else { const d=dOut[i]*CELL, shelf=d*0.45;                       // coastal shelf slope from the shore
-      const relief = fbm(wx*0.022, wz*0.022)*30 + fbm(wx*0.07, wz*0.06)*9;   // undersea hills / ridges / seamounts
-      const k = clampJS((d-10)/30, 0, 1);                            // 0 at coast → 1 offshore
-      Hh[i] = -Math.min(lerp(shelf, 8 + (39-relief)*0.7, k), 55); }  // shelf near coast, varied seabed offshore (never breaches)
+      const relief = fbm(wx*0.020, wz*0.020)*40 + fbm(wx*0.06, wz*0.05)*14; // dramatic undersea topography (0..54)
+      const k = clampJS((d-8)/26, 0, 1);                             // 0 at coast → 1 offshore
+      Hh[i] = -Math.min(lerp(shelf, 6 + (54-relief)*0.75, k), 60); } // shallow banks (~6) ↔ deep basins (~46): visible relief
   }
   TF={GX0,GZ0,GW,GH,CELL,H:Hh};
 }
@@ -1423,7 +1423,7 @@ function buildLabels(){
 }
 function updateLabels(){
   const on = P.showLabels, tgtName = (P.mode==='tour' && route[wpIdx]) ? route[wpIdx].name : null;
-  const cam = activeCam || camera, k = 0.05;   // cap apparent near-size: world scale = min(base, k·distance)
+  const cam = activeCam || camera, k = 0.03;   // cap apparent near-size: world scale = min(base, k·distance)
   const rescale = (sp)=>{ const d=sp.position.distanceTo(cam.position), ws=Math.min(sp.userData.base, k*d);
     sp.scale.set(ws*sp.userData.aspect, ws, 1); };
   for (const { sp, isl } of labelEls){ sp.visible = on; sp.material.color.set(isl.name===tgtName ? 0xff9a3c : 0xffffff); if(sp.visible) rescale(sp); }
@@ -1536,7 +1536,7 @@ function buildOcean() {
     const bUv = vec2( positionWorld.x.sub(MAP.minX).div(MAP.maxX-MAP.minX),
                       positionWorld.z.sub(MAP.minZ).div(MAP.maxZ-MAP.minZ) );
     const depthN = texture(bathyTex, bUv).r;                                   // 0 surface → 1 deep(~45u)
-    const depthCol = mix(vec3(0.30,0.78,0.86), vec3(0.02,0.10,0.30), clamp(depthN, 0.0, 1.0));   // shallow cyan → deep navy
+    const depthCol = mix(vec3(0.32,0.80,0.88), vec3(0.06,0.22,0.46), clamp(depthN, 0.0, 1.0));   // shallow cyan → deep blue (not too dark, so seabed relief still reads)
     const cband = depthN.mul(11.0);                                            // iso-depth contour bands across the undersea relief
     const cline = oneMinus(smoothstep(0.0, 0.18, abs(sin(cband.mul(3.14159265)))));
     // light translucent tint + contour lines on the surface; the translucent ocean reveals the seabed below
@@ -1754,6 +1754,7 @@ function followCamera(s, dt) {
 // ============================================================================
 let cineMode = false, cineCam, cineInit = false;
 let cineShowcase = 0, cineShowcaseIsl = null, cineShowcaseAng = 0, cineShowcaseLast = -1, tourLapDone = false;   // helicopter orbit at final + returning-first island
+let cineSideSgn = 1, cineSideIdx = -2;   // which side the side/race camera sits (recomputed per island to face the islands)
 const _cP=new THREE.Vector3(), _cPv=new THREE.Vector3(),     // camera-position spring state + velocity
       _cL=new THREE.Vector3(), _cLv=new THREE.Vector3(),     // look-at spring state + velocity
       _cDesP=new THREE.Vector3(), _cDesL=new THREE.Vector3();
@@ -1771,9 +1772,18 @@ function cineDesired(){
   const bx = boat3.x, bz = boat3.z, by = waveHeightJS(bx, bz, t);
   const ch = Math.cos(boat3.psi), sh = Math.sin(boat3.psi);   // heading unit
   const rx = sh, rz = -ch;                                    // starboard (right of heading)
-  // ---- SIDE: profile the boat from the side as it passes the islands ----
+  // pick the side that looks ACROSS the boat toward the island cluster (opposite the most island mass),
+  // so Side/Race frame the islands rather than empty water. Recompute per island so it's stable on a leg.
+  if (wpIdx !== cineSideIdx){
+    let sum = 0;
+    for (const isl of ISLANDS){ const dx=isl.x-bx, dz=isl.z-bz, d2=dx*dx+dz*dz; if (d2 > 640000) continue;
+      sum += (dx*rx + dz*rz) / Math.max(d2, 400); }          // + = island mass to starboard
+    cineSideSgn = (sum > 0) ? -1 : 1;                         // sit opposite → islands fill the frame
+    cineSideIdx = wpIdx;
+  }
+  const sgn = cineSideSgn;
+  // ---- SIDE: profile the boat from the side, framing the islands beyond it ----
   if (P.cineView === 'side'){
-    const sgn = (wpIdx % 2 === 0) ? 1 : -1;                  // alternate side each island                                 // which side (toggles each island pass)
     _cDesP.set(bx + rx*128*sgn, by + 46, bz + rz*128*sgn);
     const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+26)_cDesP.y=tH+26;
     _cDesL.set(bx + ch*8, by + 7, bz + sh*8);
@@ -1781,7 +1791,6 @@ function cineDesired(){
   }
   // ---- RACE: tucked in close behind & to one side, low, zoomed — feel the action ----
   if (P.cineView === 'race'){
-    const sgn = (wpIdx % 2 === 0) ? 1 : -1;                  // alternate side each island
     _cDesP.set(bx - ch*46 + rx*20*sgn, by + 17, bz - sh*46 + rz*20*sgn);
     const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+12)_cDesP.y=tH+12;
     _cDesL.set(bx + ch*34, by + 9, bz + sh*34);              // look ahead down the course
