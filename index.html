@@ -614,7 +614,7 @@ function routeGate(idx){
   let dx=fx-cx, dz=fz-cz, dl=Math.hypot(dx,dz);
   if (dl<1){ const cl=Math.hypot(abx,abz)||1; dx=-abz/cl; dz=abx/cl; }              // island on the chord → go perpendicular
   else { dx/=dl; dz/=dl; }
-  return snapToWater({ x: cx+dx*(isl.r+26), z: cz+dz*(isl.r+26) });
+  return snapToWater({ x: cx+dx*(isl.r+40), z: cz+dz*(isl.r+40) });   // well outside the inflated no-go ring
 }
 function activeTarget(from) {
   if (P.mode === 'goto' && gotoTarget) return gotoTarget;
@@ -668,9 +668,13 @@ function guidance(s, t) {
     return { desPsi: d2r(P.desiredHeadingDeg), desSpeed: P.desiredSpeed, course: d2r(P.desiredHeadingDeg), name: '(holding heading)', xte: 0 };
 
   const nav = navPosition(s);
-  const gate = activeTarget(nav);                   // the actual island gate we're heading for
+  const gate = activeTarget(nav);                   // steering target (smooth-flow gate beside the island)
   if (!path) replan(s);
-  const dGate = Math.hypot(gate.x - nav.x, gate.z - nav.z);   // arrival/speed key off the gate, NOT the path end
+  // ARRIVAL is reaching the island's VICINITY — distance to its bounding circle — never an exact gate
+  // point (which may be unreachable). This is what stops the boat from forever chasing a blocked gate.
+  const tIsl = (P.mode === 'tour') ? route[wpIdx] : null;
+  const dArrive = tIsl ? (Math.hypot(tIsl.x-nav.x, tIsl.z-nav.z) - tIsl.r)
+                       : Math.hypot(gate.x-nav.x, gate.z-nav.z);
   // follow the planned (obstacle-free) path for steering; if a path is degenerate, aim straight at the gate
   const pathPts = (path && path.length >= 2) ? path : [nav, gate];
   const aim = pursuit(pathPts, nav, P.lookahead);
@@ -685,12 +689,12 @@ function guidance(s, t) {
     const wx = Math.cos(course)*spd - e.cx, wz = Math.sin(course)*spd - e.cz;
     desPsi = Math.atan2(wz, wx);
   }
-  let desSpeed = Math.min(P.desiredSpeed, Math.max(5, dGate*0.22));
+  let desSpeed = Math.min(P.desiredSpeed, Math.max(5, dArrive*0.22));
 
-  if (P.mode === 'tour' && dGate < 30) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
-  if (P.mode === 'goto' && dGate < 12) { desSpeed = 0; }
+  if (P.mode === 'tour' && dArrive < 45) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
+  if (P.mode === 'goto' && dArrive < 12) { desSpeed = 0; }
   const name = P.mode === 'goto' ? 'destination' : route[wpIdx].name;
-  return { desPsi, desSpeed, course, dist: dGate, name, xte: aim.xte };
+  return { desPsi, desSpeed, course, dist: dArrive, name, xte: aim.xte };
 }
 
 // run-aground recovery: back straight out of the shoal, then replan from open water
