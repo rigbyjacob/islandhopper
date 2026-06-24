@@ -785,9 +785,12 @@ const uHorizon = uniform(new THREE.Vector3(0.76, 0.88, 0.96));
 const uDayBright = uniform(1.0);
 const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
 const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reactive); mirrors CPU seaAmp
+const uMoonDir = uniform(new THREE.Vector3(0, 1, 0));
+const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
+const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
 
-let skyMat, skyMesh, fog, sunLight, hemiLight, seaSkirt;
-const _sun = new THREE.Vector3(0.4, 0.8, 0.3);
+let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt;
+const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
 const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3();
 const C = {
   zenNight:new THREE.Color(0x05070f), zenDay:new THREE.Color(0x1d6fc6), zenGold:new THREE.Color(0x3a3570),
@@ -811,6 +814,10 @@ function buildSky() {
     const sd = max(dot(vd, normalize(uSunDir)), 0.0);
     const glow = pow(sd, 13.0).mul(0.30).add(pow(sd, 280.0).mul(7.0));   // tight halo + sun disk
     col.addAssign(uSunCol.mul(glow).mul(uSunInt));
+    // moon — small cool disk + faint halo, rises at night
+    const md = max(dot(vd, normalize(uMoonDir)), 0.0);
+    const mglow = pow(md, 40.0).mul(0.12).add(pow(md, 1400.0).mul(6.0));
+    col.addAssign(uMoonCol.mul(mglow).mul(uMoonInt));
     return col;
   })();
   skyMesh = new THREE.Mesh(geo, skyMat); skyMesh.renderOrder = -10;
@@ -838,6 +845,9 @@ function buildLights() {
   sc.left=-340; sc.right=340; sc.top=340; sc.bottom=-340; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();
   sunLight.shadow.bias = -0.0005; sunLight.shadow.normalBias = 1.4;
   scene.add(sunLight); scene.add(sunLight.target);
+  // soft cool moonlight — a second directional light that fades in at night (no shadows, keeps it cheap)
+  moonLight = new THREE.DirectionalLight(0xb9c6ff, 0.0);
+  moonLight.position.set(-300, 500, -260); scene.add(moonLight); scene.add(moonLight.target);
   hemiLight = new THREE.HemisphereLight(0xbfe6ff, 0x35506b, 0.9); scene.add(hemiLight);
 }
 
@@ -871,6 +881,18 @@ function updateEnvironment(dt) {
   uSunInt.value  = (0.25 + 1.5*day) * (1 - 0.7*sf);
   uDayBright.value = (0.09 + 0.91*day) * (1 - 0.45*sf);   // much darker at night so shallows/foam don't glow
   uNight.value = clampJS((0.14 - e) / 0.18, 0, 1);                 // lights come on at dusk
+  // moon — opposite the sun, so it's up at night. Soft cool directional light + sky disk; fades with
+  // night fraction and how high the moon is, dimmed by storm cloud.
+  _moon.set(-Math.sin(phi), Math.cos(phi), -0.28).normalize();
+  const moonStr = uNight.value * clampJS(_moon.y, 0, 1) * (1 - 0.7*sf);
+  uMoonDir.value.copy(_moon);
+  uMoonInt.value = moonStr;
+  if (moonLight){
+    moonLight.intensity = moonStr * 0.6;
+    const Dm = 780;
+    moonLight.position.set(boat3.x + _moon.x*Dm, Math.max(_moon.y,0.1)*Dm + 60, boat3.z + _moon.z*Dm);
+    moonLight.target.position.set(boat3.x, 0, boat3.z); moonLight.target.updateMatrixWorld();
+  }
   if (islandLightsGroup) {
     islandLightsGroup.visible = uNight.value > 0.02;
     const op = uNight.value * (0.85 + 0.15*Math.sin(clock.elapsedTime*1.7));   // gentle collective flicker
