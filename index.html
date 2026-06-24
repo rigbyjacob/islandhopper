@@ -811,7 +811,12 @@ function buildSky() {
 function buildSeaSkirt() {
   const g = new THREE.PlaneGeometry(16000, 16000); g.rotateX(-Math.PI/2);
   seaSkirt = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x0a3048 }));
-  seaSkirt.position.y = -0.4; seaSkirt.renderOrder = -5; scene.add(seaSkirt);
+  // Sit the skirt well BELOW the deepest wave trough (~-9 in a full storm). At the old -0.4 the
+  // displaced ocean dipped through this flat plane, so the two opaque surfaces intersected → depth
+  // ties. Orthographic depth (linear) resolves them; the director's perspective depth (1/z, little
+  // precision at range) can't → z-fight flicker that appeared only with the director camera. Keeping
+  // the planes from intersecting kills it at the source. (Far edge is past the fog, so no seam.)
+  seaSkirt.position.y = -16; seaSkirt.renderOrder = -5; scene.add(seaSkirt);
 }
 function buildLights() {
   sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
@@ -1367,18 +1372,9 @@ function buildOcean() {
     .add(vnoise(p.mul(8.11).add(vec2(8.3,2.8))).mul(0.1)));
 
   const xz = positionLocal.xz;
-  const sp = shore(xz), wh = waveH(xz);
+  const n = waveN(xz), sp = shore(xz), wh = waveH(xz);
   const viewDir = normalize(cameraPosition.sub(positionWorld));
   const sunDir = normalize(uSunDir);
-  // Distance LOD on the wave NORMAL — this is the flicker fix. Every view-dependent term below
-  // (fresnel sky-reflection, sun lobes, foam) reads off this normal. Far from the camera each pixel
-  // spans many wave faces, so those shading contours sweep sub-pixel and strobe when the view
-  // rotates/pans (worse the higher & faster the camera — exactly the reported symptom). Fading the
-  // normal toward flat-up with distance makes far water shade smoothly & stably, while near water
-  // (boat / crow's-nest) keeps the full morphing detail.
-  const vdist = length(cameraPosition.sub(positionWorld));
-  const detail = smoothstep(2400.0, 280.0, vdist);          // 1 near → 0 far
-  const n = normalize(mix(vec3(0.0,1.0,0.0), waveN(xz), detail));
 
   // depth-based base colour: deep blue → turquoise shallows
   const deep = vec3(0.012,0.09,0.22), midC = vec3(0.03,0.30,0.48), shallow = vec3(0.16,0.62,0.66);
