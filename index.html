@@ -239,11 +239,12 @@ const P = {
   cineView: 'follow', // director camera mode: 'follow' (slider) | 'side' | 'race'
   bathy: false,       // bathymetric overlay — show underwater depth + contours
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
+  showClouds: true,   // clouds (can hide them for a clean debug view)
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
-const BOAT = { Tmax: 95, Cu: 0.095, Cv: 0.7, Krud: 0.095, Cr: 2.4, Izz: 1.0, m: 1.0, mv: 1.6, deltaMax: 0.6 };
+const BOAT = { Tmax: 95, Cu: 0.095, Cv: 0.7, Krud: 0.20, Cr: 2.2, Izz: 1.0, m: 1.0, mv: 1.6, deltaMax: 0.9 };   // stronger rudder + bigger deflection → much tighter turning radius (~15u vs ~42u)
 
 const d2r = (d) => d * Math.PI / 180, r2d = (r) => r * 180 / Math.PI;
 const clampJS = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -486,9 +487,16 @@ let _AN=0, _gScore=null, _came=null, _closed=null;
 function ensureAStarBuffers(){ const N=GRID.cols*GRID.rows; if(_AN!==N){ _AN=N; _gScore=new Float64Array(N); _came=new Int32Array(N); _closed=new Uint8Array(N); } }
 // Catmull-Rom spline through the (string-pulled) waypoints → a smooth, boat-flyable path. Each sample is
 // kept in navigable water (snapped off any blocked cell the curve bulges into near a tight corner).
-function catmull(p0,p1,p2,p3,t){ const t2=t*t, t3=t2*t;
-  return { x:0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
-           z:0.5*((2*p1.z)+(-p0.z+p2.z)*t+(2*p0.z-5*p1.z+4*p2.z-p3.z)*t2+(-p0.z+3*p1.z-3*p2.z+p3.z)*t3) }; }
+// CENTRIPETAL Catmull-Rom (alpha = 0.5, Barry-Goldman form) — unlike the uniform version it provably has
+// no cusps or self-intersections, so sharp/uneven waypoints can't produce switchback loops.
+function catmull(p0,p1,p2,p3,t){
+  const kn=(ti,a,b)=> ti + Math.sqrt(Math.max(Math.hypot(b.x-a.x,b.z-a.z),1e-5));
+  const t0=0, t1=kn(t0,p0,p1), t2=kn(t1,p1,p2), t3=kn(t2,p2,p3), tt=t1+(t2-t1)*t;
+  const L=(a,b,ta,tb)=>{ const d=(tb-ta)||1e-6, w=(tb-tt)/d, w2=(tt-ta)/d; return { x:w*a.x+w2*b.x, z:w*a.z+w2*b.z }; };
+  const A1=L(p0,p1,t0,t1), A2=L(p1,p2,t1,t2), A3=L(p2,p3,t2,t3);
+  const B1=L(A1,A2,t0,t2), B2=L(A2,A3,t1,t3);
+  return L(B1,B2,t1,t2);
+}
 function smoothPath(wp, closed=false){
   if (wp.length < 3) return wp;
   const n=wp.length, at=(k)=> closed ? wp[(k%n+n)%n] : wp[clampJS(k,0,n-1)];
@@ -503,6 +511,43 @@ function smoothPath(wp, closed=false){
       out.push(pt); }
   }
   return out;
+}
+// ---- path RELAXATION (elastic band): iteratively minimise curvature (Laplacian smoothing) while
+//      repelling from obstacles (distance-field gradient). Turns an angular A* path — even one forced
+//      through awkward gates — into ONE gentle, low-curvature curve that glides past islands with clearance. ----
+function dlandAt(x,z){ const wc=worldToCell(x,z); return DLAND ? DLAND[gIdx(wc.c,wc.r)] : 99; }
+function resamplePath(pts, spacing){
+  if (pts.length < 2) return pts.map(p=>({x:p.x,z:p.z}));
+  const out=[{x:pts[0].x,z:pts[0].z}]; let carry=0;
+  for (let i=1;i<pts.length;i++){ let ax=pts[i-1].x, az=pts[i-1].z; const bx=pts[i].x, bz=pts[i].z;
+    let segLen=Math.hypot(bx-ax,bz-az);
+    while (carry+segLen >= spacing && segLen>1e-6){ const t=(spacing-carry)/segLen; ax+=(bx-ax)*t; az+=(bz-az)*t;
+      out.push({x:ax,z:az}); segLen=Math.hypot(bx-ax,bz-az); carry=0; }
+    carry+=segLen;
+  }
+  const last=pts[pts.length-1]; if (Math.hypot(out[out.length-1].x-last.x,out[out.length-1].z-last.z)>1e-3) out.push({x:last.x,z:last.z});
+  return out;
+}
+function relaxPath(input, closed, iters){
+  const src=resamplePath(input, GRID.dx*2.2), n=src.length;
+  if (n < 4) return src;
+  const p=src.map(q=>({x:q.x,z:q.z})), orig=src.map(q=>({x:q.x,z:q.z}));
+  const CLR=7, wS=0.42, wR=1.15, wA=0.025, e=GRID.dx*1.5;   // stronger smoothing, weaker anchor → flattens kinks more
+  for (let it=0; it<iters; it++){
+    for (let i=0;i<n;i++){
+      if (!closed && (i===0 || i===n-1)) continue;                 // open paths: pin the endpoints
+      const a=p[(i-1+n)%n], b=p[(i+1)%n];
+      const sx=(a.x+b.x)*0.5-p[i].x, sz=(a.z+b.z)*0.5-p[i].z;       // curvature-minimising (Laplacian) pull
+      let rx=0, rz=0; const dl=dlandAt(p[i].x,p[i].z);              // obstacle repulsion (distance-field gradient)
+      if (dl < CLR){ const gx=dlandAt(p[i].x+e,p[i].z)-dlandAt(p[i].x-e,p[i].z), gz=dlandAt(p[i].x,p[i].z+e)-dlandAt(p[i].x,p[i].z-e);
+        const m=Math.hypot(gx,gz)||1, str=(CLR-dl)/CLR; rx=(gx/m)*str*GRID.dx; rz=(gz/m)*str*GRID.dx; }
+      const ax2=orig[i].x-p[i].x, az2=orig[i].z-p[i].z;            // light anchor so a closed loop can't collapse
+      const nx=p[i].x + wS*sx + wR*rx + wA*ax2, nz=p[i].z + wS*sz + wR*rz + wA*az2;
+      const wc=worldToCell(nx,nz);
+      if (!BLOCKED[gIdx(wc.c,wc.r)]){ p[i].x=nx; p[i].z=nz; }       // never relax onto land
+    }
+  }
+  return p;
 }
 function clearLOSseg(a,b){ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.dx*0.8));
   for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
@@ -548,9 +593,22 @@ function planRaw(sx, sz, gx, gz) {
 function planPath(sx, sz, gx, gz) {
   const r = planRaw(sx,sz,gx,gz);
   if (r.pts.length < 2) return [{x:sx,z:sz}];
-  const simp = simplifyPath(r.pts), smooth = smoothPath(simp);
+  const simp = simplifyPath(r.pts), smooth = relaxPath(simp, false, 100);
   navDebug = { raw: simp.map(p=>({x:p.x,z:p.z})), simp: smooth.map(p=>({x:p.x,z:p.z})),
                gate:{x:gx,z:gz}, start:{x:sx,z:sz}, found:r.found };
+  return smooth;
+}
+// plan A* through a sequence of world points (boat → gate → next gate …), then relax the whole thing into
+// one gentle curve. Used by the tour so it ALWAYS pathfinds from the boat's current position, looking a
+// couple of islands ahead so the transition past each island is globally smooth.
+function planThrough(wps){
+  let raw=[];
+  for (let i=0;i<wps.length-1;i++){ const leg=simplifyPath(planRaw(wps[i].x,wps[i].z,wps[i+1].x,wps[i+1].z).pts);
+    if (i>0 && leg.length) leg.shift(); raw=raw.concat(leg); }
+  if (raw.length < 2) return [{x:wps[0].x,z:wps[0].z}];
+  const smooth = relaxPath(raw, false, 80);
+  navDebug = { raw: raw.map(p=>({x:p.x,z:p.z})), simp: smooth.map(p=>({x:p.x,z:p.z})),
+               gate: wps[1]||wps[0], start: wps[0], found:true };
   return smooth;
 }
 // ---- GLOBAL tour route: plan the whole loop (gate→gate→…→gate→gate) as one continuous A* path, string-pull
@@ -568,10 +626,26 @@ function buildTourLoop(){
   }
   tourPath = smoothPath(wp, true);                             // closed-loop Catmull-Rom (wraps at the seam)
   tourGateAt = gates.map(g=>{ let bi=0,bd=1e18; for(let k=0;k<tourPath.length;k++){ const dx=tourPath[k].x-g.x,dz=tourPath[k].z-g.z,d=dx*dx+dz*dz; if(d<bd){bd=d;bi=k;} } return bi; });
-  navDebug = { raw: gates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),   // overlay: yellow=gates, green=global loop
-               gate: gates[0], start: gates[0], found:true };
+  tourGates = gates;
 }
 function nearestPathIndex(pp, x, z){ let bi=0,bd=1e18; for(let k=0;k<pp.length;k++){ const dx=pp[k].x-x,dz=pp[k].z-z,d=dx*dx+dz*dz; if(d<bd){bd=d;bi=k;} } return bi; }
+// the path the boat actually follows: an A* LEAD-IN from the boat to its nearest point on the loop (so it
+// never beelines across an island to reach the loop), then the loop rotated to start at that entry so
+// there is always path ahead (it loops forever).
+let tourGates = [], tourFollowTimer = 0;
+function tourFollowPath(bx, bz){
+  if (!tourPath || tourPath.length < 3) return null;
+  const pi = nearestPathIndex(tourPath, bx, bz), entry = tourPath[pi];
+  const loopRot = tourPath.slice(pi).concat(tourPath.slice(0,pi)).concat(tourPath.slice(pi, Math.min(pi+30, tourPath.length)));
+  let followed = loopRot;
+  if (Math.hypot(bx-entry.x, bz-entry.z) > GRID.dx*2.5){
+    const lead = planPath(bx, bz, entry.x, entry.z);          // A* to the loop — routes around islands, never through them
+    if (lead.length >= 2) followed = lead.concat(loopRot);
+  }
+  navDebug = { raw: tourGates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),   // yellow=gates, green=loop
+               gate: entry, start:{x:bx,z:bz}, found:true };
+  return followed;
+}
 // ---- navigation debug overlay: the A* grid (blocked = red, open water shaded by distance-to-land),
 //      the raw grid path (yellow, angular) vs the simplified path (green), and start/gate markers ----
 let navOverlay=null, navRawLine=null, navSimpLine=null, navMarkStart=null, navMarkGate=null, navMarkTgt=null;
@@ -757,16 +831,23 @@ function navPosition(s) {     // where the autopilot believes it is
 }
 function replan(s) {
   if (P.mode === 'hold') { path = null; return; }
-  const from = navPosition(s), tgt = activeTarget(from);
+  const from = navPosition(s);
+  if (P.mode === 'tour' && P.usePlanner) {     // ALWAYS pathfind from the boat to the current gate (no hard
+    const g = routeGate(wpIdx);                // intermediate waypoint that would force a switchback)
+    path = planPath(from.x, from.z, g.x, g.z);
+    updatePathLine(); return;
+  }
+  const tgt = activeTarget(from);
   path = P.usePlanner ? planPath(from.x, from.z, tgt.x, tgt.z) : [{x:from.x,z:from.z},{x:tgt.x,z:tgt.z}];
   updatePathLine();
 }
 function maybeReplan(s, dt) {
   // TOUR: one global loop, rebuilt only when the route or the current changes (the boat follows it forever)
+  // TOUR: always replan from the boat to the next gate(s), refreshed ~1s and on arrival (wpIdx change)
   if (P.mode === 'tour' && P.usePlanner) {
-    const key = route.map(r=>r.name).join(',') + '|' + (P.curOn ? P.curStrength.toFixed(1)+','+P.curDirDeg.toFixed(0) : '0');
-    if (key !== tourKey || !tourPath) { tourKey = key; buildTourLoop(); path = tourPath; updatePathLine(); }
-    else if (path !== tourPath) { path = tourPath; updatePathLine(); }
+    const key = `tour|${wpIdx}`;
+    replanTimer -= dt;
+    if (key !== planKey || replanTimer <= 0 || !path) { planKey = key; replanTimer = 1.0; replan(s); }
     return;
   }
   // GOTO / approach: per-target replan
@@ -813,19 +894,6 @@ function guidance(s, t) {
     return { desPsi: d2r(P.desiredHeadingDeg), desSpeed: P.desiredSpeed, course: d2r(P.desiredHeadingDeg), name: '(holding heading)', xte: 0 };
 
   const nav = navPosition(s);
-  // ---- GLOBAL TOUR: follow the one continuous loop; derive the "current island" (wpIdx) from progress ----
-  if (P.mode === 'tour' && P.usePlanner && tourPath && tourPath.length > 2) {
-    const pi = nearestPathIndex(tourPath, nav.x, nav.z);
-    let next = wpIdx, bestD = Infinity;                       // the next gate ahead along the loop
-    for (let i=0;i<tourGateAt.length;i++){ let d = tourGateAt[i]-pi; if (d < 0) d += tourPath.length; if (d > 1 && d < bestD){ bestD=d; next=i; } }
-    wpIdx = next;
-    const aim = pursuit(tourPath, nav, P.lookahead);
-    let course = Math.atan2(aim.z-nav.z, aim.x-nav.x) + clampJS(P.xteGain*aim.xteSigned, -0.7, 0.7);
-    let desPsi = course;
-    if (P.feedForward && kf){ const e=kf.est, spd=Math.max(P.desiredSpeed,6); const wx=Math.cos(course)*spd-e.cx, wz=Math.sin(course)*spd-e.cz; desPsi=Math.atan2(wz,wx); }
-    const desSpeed = P.desiredSpeed * clampJS(1 - Math.abs(wrap(course - s.psi))*0.5, 0.4, 1);
-    return { desPsi, desSpeed, course, dist: aim.xte, name: route[wpIdx] ? route[wpIdx].name : '', xte: aim.xte };
-  }
   const gate = activeTarget(nav);                   // steering target (smooth-flow gate beside the island)
   if (!path) replan(s);
   // ARRIVAL: within ~1 cell of the target's navigable perimeter. Targets often sit inside their own blocked
@@ -1242,6 +1310,10 @@ function buildClouds(){
 }
 function updateClouds(dt, sf, day){
   if(!cloudSprites.length) return;
+  const cloudsOn = P.showClouds !== false;
+  for (const g of cloudGroups) g.visible = cloudsOn;
+  for (const sh of cloudShadows) sh.visible = cloudsOn;
+  if (!cloudsOn) return;
   const tint=lerp(1.0,0.34,sf), bright=0.10+0.90*day, op=(0.82+0.18*day);   // dark clouds at night (not glowing white)
   const cols=[[1,1,1],[0.90,0.94,1.0],[0.62,0.70,0.82]];   // brighter tops, darker shaded bases
   for (const s of cloudSprites){ const b=cols[s.userData.tier], ao=s.userData.ao, m=s.material;
@@ -2408,6 +2480,7 @@ function buildPanel() {
   addToggle(s, 'Compass', P, 'showCompass', applyHud);
   addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
+  addToggle(s, 'Clouds', P, 'showClouds');
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
   // View
