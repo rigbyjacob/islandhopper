@@ -719,6 +719,7 @@ async function init() {
   boat3.psi = Math.atan2(t0.z - boat3.z, t0.x - boat3.x);
   replan(boat3);
   applyTourPacing();   // if the user had pacing enabled, set the speed for the route now
+  if (P.rainLens) enableRain();   // build the rain post-process now (it only renders while storming)
 
   let firstFrame = true, fpsT = 0, fpsN = 0;
 
@@ -754,10 +755,12 @@ async function init() {
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : camera);
+    const useRain = rainActive && rainPost && stormFactor > 0.01;   // rain-on-lens only while storming
     try {
-      if (bloomActive && bloomPost && !fpsMode && !cineMode) bloomPost.render();
+      if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
+      else if (bloomActive && bloomPost && !fpsMode && !cineMode) bloomPost.render();
       else renderer.render(scene, activeCam);
-    } catch (err) { console.warn('render failed', err); bloomActive = false; if (fpsMode) setView(false); }
+    } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
     if (P.showLabels) updateLabels();
@@ -864,6 +867,7 @@ function updateEnvironment(dt) {
   seaAmp = P.waveHeight;
   uSea.value = seaAmp;
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
+  uRain.value = stormFactor;                                            // rain-on-lens intensity follows the storm
 
   if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
   const phi = (P.timeOfDay/24)*Math.PI*2;
@@ -1419,7 +1423,7 @@ function buildBathyTexture(){
   const W=384, H=240, data=new Uint8Array(W*H*4);
   for (let j=0;j<H;j++) for (let i=0;i<W;i++){
     const x=lerp(MAP.minX,MAP.maxX,i/(W-1)), z=lerp(MAP.minZ,MAP.maxZ,j/(H-1));
-    const depth=clampJS(-terrainHeight(x,z), 0, 90), v=Math.round(depth/90*255), k=(j*W+i)*4;
+    const depth=clampJS(-terrainHeight(x,z), 0, 8), v=Math.round(depth/8*255), k=(j*W+i)*4;   // seabed only ranges 0–6u (coastal shelf), then flat
     data[k]=v; data[k+1]=v; data[k+2]=v; data[k+3]=255;
   }
   const t=new THREE.DataTexture(data,W,H,THREE.RGBAFormat); t.needsUpdate=true;
@@ -1518,9 +1522,9 @@ function buildOcean() {
     // ---- bathymetry overlay (toggle): seabed depth ramp + iso-depth contour lines ----
     const bUv = vec2( positionWorld.x.sub(MAP.minX).div(MAP.maxX-MAP.minX),
                       positionWorld.z.sub(MAP.minZ).div(MAP.maxZ-MAP.minZ) );
-    const depthN = texture(bathyTex, bUv).r;                                   // 0 surface → 1 deep(90u)
-    const depthCol = mix(vec3(0.20,0.82,0.86), vec3(0.0,0.04,0.22), clamp(depthN.mul(1.25),0.0,1.0));
-    const cband = depthN.mul(13.0);                                            // contour every ~7u of depth
+    const depthN = texture(bathyTex, bUv).r;                                   // 0 surface → 1 deep(~8u)
+    const depthCol = mix(vec3(0.34,0.90,0.92), vec3(0.01,0.07,0.26), clamp(depthN, 0.0, 1.0));   // shallow cyan → deep navy
+    const cband = depthN.mul(7.0);                                             // ~7 iso-depth contour bands across the shelf
     const cline = oneMinus(smoothstep(0.0, 0.16, abs(sin(cband.mul(3.14159265)))));
     const blended = mix(col, depthCol, float(0.74)).add(vec3(0.85,0.95,1.0).mul(cline).mul(0.4));
     col.assign(mix(col, blended, uBathy));
@@ -1976,55 +1980,51 @@ async function enableBloom(){
 function disableBloom(){ bloomActive = false; }
 
 // ============================================================================
-// Rain on the lens — a 2D canvas overlay (decoupled from the WebGPU scene, so it can never break it).
-// Droplets sprinkle in proportion to storm strength, cling, then slide down and absorb smaller drops.
+// Rain on the lens — guarded WebGPU TSL post-process. Procedural rain-on-glass: head-drops slide down
+// lanes (with trails) + a sprinkle of static beads; their height field refracts the scene beneath.
+// Intensity rides the storm (uRain). OFF unless toggled AND storming. (Now safe — the Fn() stack bug
+// that broke earlier post-processes is fixed.)
 // ============================================================================
-let rainCanvas, rainCtx, rainDrops = [], rainSpawn = 0;
-function buildRainLens(){
-  rainCanvas = document.createElement('canvas');
-  rainCanvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:6;';
-  document.getElementById('app').appendChild(rainCanvas);
-  rainCtx = rainCanvas.getContext('2d'); resizeRain();
-  window.addEventListener('resize', resizeRain);
+let rainPost = null, rainActive = false, rainScenePass = null;
+const uRain = uniform(0.0);
+async function enableRain(){
+  if (rainPost){ rainActive = true; return; }
+  try {
+    rainScenePass = pass(scene, camera);
+    const col = rainScenePass.getTextureNode();
+    const hash21 = Fn(([p]) => fract(sin(dot(p, vec2(127.1,311.7))).mul(43758.5453)));
+    const hash22 = Fn(([p]) => fract(sin(vec2(dot(p, vec2(127.1,311.7)), dot(p, vec2(269.5,183.3)))).mul(43758.5453)));
+    const film = Fn(([uvp]) => {                     // water-film height at aspect-corrected screen uv
+      const h = float(0.0).toVar();
+      const lanes = float(11.0);
+      const lane = floor(uvp.x.mul(lanes));
+      const rnd = hash21(vec2(lane, 3.0));
+      const head = fract(time.mul(rnd.mul(0.5).add(0.35)).mul(0.18).add(rnd.mul(7.0)));   // sliding head position
+      const lx = fract(uvp.x.mul(lanes)).sub(0.5);
+      const wob = sin(head.mul(18.0).add(rnd.mul(40.0))).mul(0.10);
+      h.addAssign(smoothstep(0.12, 0.0, length(vec2(lx.sub(wob).mul(1.5), uvp.y.sub(head)))));   // head drop
+      const dy = uvp.y.sub(head);
+      const above = smoothstep(0.0,-0.45,dy).mul(smoothstep(-0.9,-0.05,dy));
+      h.addAssign(smoothstep(0.05, 0.0, abs(lx.sub(wob))).mul(above).mul(0.5));               // trail
+      const g = uvp.mul(vec2(26.0,26.0)), id = floor(g), f = fract(g).sub(0.5), rr = hash22(id);
+      const c = f.sub(rr.sub(0.5).mul(0.7));
+      h.addAssign(smoothstep(rr.x.mul(0.24).add(0.10), 0.0, length(c)).mul(0.8));             // static sprinkle
+      return h;
+    });
+    const asp = screenSize.x.div(screenSize.y);
+    const uvA = vec2(screenUV.x.mul(asp), screenUV.y);
+    const e = float(0.0018);
+    const hC = film(uvA), hX = film(uvA.add(vec2(e,0.0))), hY = film(uvA.add(vec2(0.0,e)));
+    const grad = vec2(hC.sub(hX), hC.sub(hY)).mul(uRain);
+    const refr = col.sample(screenUV.add(grad.mul(1.1)));                                     // refraction
+    const rim = pow(clamp(hC,0.0,1.0), 2.0).mul(0.35).mul(uRain);                             // glint
+    const pp = new THREE.PostProcessing(renderer);
+    pp.outputNode = refr.add(vec3(rim));
+    rainPost = pp; rainActive = true; console.log('rain enabled');
+  } catch(e){ console.warn('rain setup failed — reverting', e); rainActive=false; rainPost=null;
+    P.rainLens=false; if (ui.rainTog) ui.rainTog.classList.remove('on'); }
 }
-function resizeRain(){ if(!rainCanvas) return; const dpr=Math.min(window.devicePixelRatio||1, 2);
-  rainCanvas.width=Math.floor(window.innerWidth*dpr); rainCanvas.height=Math.floor(window.innerHeight*dpr);
-  rainCtx.setTransform(dpr,0,0,dpr,0,0); }
-function drawDrop(ctx, d){
-  const r=d.r; ctx.save(); ctx.translate(d.x, d.y);
-  const g=ctx.createRadialGradient(-r*0.3,-r*0.3,r*0.12, 0,0,r);
-  g.addColorStop(0,'rgba(225,238,255,0.55)'); g.addColorStop(0.55,'rgba(150,180,215,0.20)'); g.addColorStop(1,'rgba(120,150,190,0)');
-  ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(0,0, r*0.85, r*(d.slide?1.2:0.95), 0, 0, 7); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.beginPath(); ctx.arc(-r*0.32,-r*0.34, r*0.20, 0, 7); ctx.fill();   // glint
-  ctx.strokeStyle='rgba(255,255,255,0.30)'; ctx.lineWidth=Math.max(0.6,r*0.12);
-  ctx.beginPath(); ctx.arc(0, r*0.16, r*0.62, 0.5, 2.6); ctx.stroke();                                          // bottom rim
-  ctx.restore();
-}
-function updateRainLens(dt){
-  if(!rainCtx) return;
-  const W=window.innerWidth, H=window.innerHeight;
-  rainCtx.clearRect(0,0,W,H);
-  const intensity = (P.rainLens!==false) ? stormFactor : 0;
-  if(intensity<=0.01 && rainDrops.length===0) return;
-  rainSpawn -= dt;
-  while(rainSpawn<=0 && intensity>0.02 && rainDrops.length<170){
-    rainSpawn += 0.05/(0.2 + intensity*2.2);
-    const r=2 + Math.random()*(2 + intensity*6);
-    rainDrops.push({ x:Math.random()*W, y:Math.random()*H*0.95, r, vy:0, slide:false, life:5+Math.random()*9, wob:Math.random()*6 });
-  }
-  for(let i=rainDrops.length-1;i>=0;i--){ const d=rainDrops[i];
-    d.life -= dt*(0.25 + 0.9*(1-intensity));                       // dry up as the storm eases
-    if(!d.slide && d.r > 4 + (1-intensity)*4 && Math.random() < dt*0.7) d.slide=true;
-    if(d.slide){
-      d.vy += dt*(38 + d.r*7); d.y += d.vy*dt; d.x += Math.sin(clock.elapsedTime*3 + d.wob)*dt*7;
-      for(let j=rainDrops.length-1;j>=0;j--){ if(j===i) continue; const o=rainDrops[j];
-        if(o.r<d.r && Math.abs(o.x-d.x)<d.r && o.y>d.y-d.r && o.y<d.y+d.r*1.6){ d.r=Math.min(d.r+o.r*0.45, 17); rainDrops.splice(j,1); if(j<i)i--; } }
-      if(Math.random()<dt*22) rainDrops.push({ x:d.x+(Math.random()-0.5)*d.r*0.6, y:d.y-d.r, r:1+Math.random()*1.5, vy:0, slide:false, life:3+Math.random()*4, wob:0 });
-    }
-    if(d.y>H+20 || d.life<=0 || d.r<0.5){ rainDrops.splice(i,1); continue; }
-    drawDrop(rainCtx, d);
-  }
-}
+function disableRain(){ rainActive = false; }
 
 // persist all panel settings between refreshes
 const SETTINGS_KEY = 'pidHelmsman.v1';
@@ -2169,7 +2169,7 @@ function buildPanel() {
   addToggle(s, 'Storm', P, 'stormOn');
   addSlider(s, 'Storm intensity', P, 'stormIntensity', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Wave height', P, 'waveHeight', 0, 6, 0.1, v=>v.toFixed(1));
-  addToggle(s, 'Rain on lens (storms)', P, 'rainLens');
+  ui.rainTog = addToggle(s, 'Rain on lens (storms)', P, 'rainLens', (on)=>{ if (on) enableRain(); else disableRain(); });
 
   // Navigation & estimation
   s = section(panel, 'Navigation & estimation');
