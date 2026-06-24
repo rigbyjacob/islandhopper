@@ -1465,7 +1465,7 @@ function makeLabelSprite(text, color, sizeY){
 // labels reveal how much real depth the vertical scale is compressing (only shown in bathymetry mode)
 let dipStick = null;
 function buildDipStick(){
-  const X=230, Z=-430;                                         // deep open water just N of the Virgin Islands (~2700 m)
+  const X=233, Z=-120;                                         // open water just S of the unnamed islet, ~1700 m
   const maxM = Math.max(0, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
   const g = new THREE.Group(); g.visible = false;
   const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.85, depthTest:false });
