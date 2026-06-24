@@ -614,9 +614,29 @@ function planThrough(wps){
 // ---- GLOBAL tour route: plan the whole loop (gate→gate→…→gate→gate) as one continuous A* path, string-pull
 //      and smooth it end-to-end, so inter-island transitions are optimised globally rather than leg-by-leg ----
 let tourPath = null, tourGateAt = [], tourKey = '';
+// Iteratively place each island's via-point based on the CONNECTED path (its neighbours' via-points), not
+// the islands. Each pass: move the gate to just-outside the red zone in the direction toward the chord of
+// the two neighbour gates. Co-adapts into one globally smooth chain (adjacent islands end up on the same
+// flow side). This is the "via-point determined by the global path" behaviour.
+function optimizeGates(){
+  let gates = route.map((_,i)=>routeGate(i));     // seed from the island-neighbour heuristic
+  for (let it=0; it<14; it++){
+    gates = gates.map((g,i)=>{
+      const isl=route[i], A=gates[(i-1+gates.length)%gates.length], B=gates[(i+1)%gates.length];
+      const ax=A.x,az=A.z,bx=B.x,bz=B.z,cx=isl.x,cz=isl.z, abx=bx-ax,abz=bz-az, L2=abx*abx+abz*abz||1;
+      const tp=clampJS(((cx-ax)*abx+(cz-az)*abz)/L2,0,1), fx=ax+abx*tp, fz=az+abz*tp;   // foot on the NEIGHBOUR-GATE chord
+      let dx=fx-cx, dz=fz-cz, dl=Math.hypot(dx,dz);
+      if (dl<1){ const cl=Math.hypot(abx,abz)||1; dx=-abz/cl; dz=abx/cl; } else { dx/=dl; dz/=dl; }
+      let r=GRID.dx; for(; r<600; r+=GRID.dx){ const x=cx+dx*r, z=cz+dz*r, wc=worldToCell(x,z); if(!BLOCKED||!BLOCKED[gIdx(wc.c,wc.r)]) break; }
+      const tgt={ x:cx+dx*(r+GRID.dx*2), z:cz+dz*(r+GRID.dx*2) };
+      return { x: g.x + (tgt.x-g.x)*0.6, z: g.z + (tgt.z-g.z)*0.6 };   // damped move toward the smooth spot
+    });
+  }
+  return gates;
+}
 function buildTourLoop(){
   if (!BLOCKED || route.length < 2){ tourPath=null; tourGateAt=[]; return; }
-  const gates = route.map((_,i)=>routeGate(i));
+  const gates = optimizeGates();
   let wp=[];
   for (let i=0;i<gates.length;i++){
     const a=gates[i], b=gates[(i+1)%gates.length];
