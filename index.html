@@ -244,7 +244,7 @@ const P = {
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
-const BOAT = { Tmax: 95, Cu: 0.095, Cv: 0.7, Krud: 0.20, Cr: 2.2, Izz: 1.0, m: 1.0, mv: 1.6, deltaMax: 0.9 };   // stronger rudder + bigger deflection → much tighter turning radius (~15u vs ~42u)
+const BOAT = { Tmax: 95, Cu: 0.095, Cv: 0.7, Krud: 0.15, Cr: 2.2, Izz: 1.0, m: 1.0, mv: 1.6, deltaMax: 0.8 };   // stronger rudder + bigger deflection → tighter turning radius (~18u vs ~42u)
 
 const d2r = (d) => d * Math.PI / 180, r2d = (r) => r * 180 / Math.PI;
 const clampJS = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -624,7 +624,7 @@ function buildTourLoop(){
     if (i>0 && legSimp.length) legSimp.shift();                // drop the duplicated junction gate
     wp=wp.concat(legSimp);
   }
-  tourPath = smoothPath(wp, true);                             // closed-loop Catmull-Rom (wraps at the seam)
+  tourPath = relaxPath(wp, true, 200);                         // elastic-band relax the whole closed loop → smooth, no switchbacks
   tourGateAt = gates.map(g=>{ let bi=0,bd=1e18; for(let k=0;k<tourPath.length;k++){ const dx=tourPath[k].x-g.x,dz=tourPath[k].z-g.z,d=dx*dx+dz*dz; if(d<bd){bd=d;bi=k;} } return bi; });
   tourGates = gates;
 }
@@ -663,14 +663,14 @@ function buildNavGrid(){
     else { free.setMatrixAt(fi, d.matrix); const t=Math.min(DLAND?DLAND[i]:9,25)/25; col.setRGB(0.15,0.45+0.45*t,0.85); free.setColorAt(fi, col); fi++; } }
   blk.instanceMatrix.needsUpdate=true; free.instanceMatrix.needsUpdate=true; if(free.instanceColor) free.instanceColor.needsUpdate=true;
   grp.add(blk); grp.add(free);
-  const mkLine=(color)=>{ const g2=new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(400*3),3));
+  const mkLine=(color)=>{ const g2=new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(2000*3),3));
     const ln=new THREE.Line(g2, new THREE.LineBasicMaterial({color,transparent:true,depthTest:false})); ln.renderOrder=32; ln.frustumCulled=false; return ln; };
   navRawLine=mkLine(0xffe000); navSimpLine=mkLine(0x30ff70); grp.add(navRawLine); grp.add(navSimpLine);
   const mkBall=(color,s)=>{ const b=new THREE.Mesh(new THREE.SphereGeometry(s,12,8), new THREE.MeshBasicMaterial({color,depthTest:false})); b.renderOrder=33; grp.add(b); return b; };
   navMarkStart=mkBall(0x00e5ff,6); navMarkGate=mkBall(0xff8a00,7); navMarkTgt=mkBall(0xffffff,5);
   scene.add(grp); navOverlay=grp;
 }
-function setNavLine(ln, pts){ const a=ln.geometry.attributes.position.array, n=Math.min(pts.length,400);
+function setNavLine(ln, pts){ const a=ln.geometry.attributes.position.array, n=Math.min(pts.length,2000);
   for(let i=0;i<n;i++){ a[i*3]=pts[i].x; a[i*3+1]=5; a[i*3+2]=pts[i].z; }
   ln.geometry.setDrawRange(0,n); ln.geometry.attributes.position.needsUpdate=true; ln.geometry.computeBoundingSphere(); }
 function updateNavDebug(){
@@ -832,9 +832,9 @@ function navPosition(s) {     // where the autopilot believes it is
 function replan(s) {
   if (P.mode === 'hold') { path = null; return; }
   const from = navPosition(s);
-  if (P.mode === 'tour' && P.usePlanner) {     // ALWAYS pathfind from the boat to the current gate (no hard
-    const g = routeGate(wpIdx);                // intermediate waypoint that would force a switchback)
-    path = planPath(from.x, from.z, g.x, g.z);
+  if (P.mode === 'tour' && P.usePlanner) {     // follow the global loop, joined by an A* lead-in from the boat
+    if (!tourPath) buildTourLoop();
+    path = tourFollowPath(from.x, from.z) || path;
     updatePathLine(); return;
   }
   const tgt = activeTarget(from);
@@ -843,11 +843,13 @@ function replan(s) {
 }
 function maybeReplan(s, dt) {
   // TOUR: one global loop, rebuilt only when the route or the current changes (the boat follows it forever)
-  // TOUR: always replan from the boat to the next gate(s), refreshed ~1s and on arrival (wpIdx change)
+  // TOUR: one global loop (rebuilt only when route/current changes); the FOLLOWED path is an A* lead-in from
+  // the boat onto the loop, refreshed ~1.2s so it always pathfinds from the boat's current position.
   if (P.mode === 'tour' && P.usePlanner) {
-    const key = `tour|${wpIdx}`;
-    replanTimer -= dt;
-    if (key !== planKey || replanTimer <= 0 || !path) { planKey = key; replanTimer = 1.0; replan(s); }
+    const key = route.map(r=>r.name).join(',') + '|' + (P.curOn ? P.curStrength.toFixed(1)+','+P.curDirDeg.toFixed(0) : '0');
+    if (key !== tourKey || !tourPath) { tourKey = key; buildTourLoop(); tourFollowTimer = 0; }
+    tourFollowTimer -= dt;
+    if (tourFollowTimer <= 0 || !path) { tourFollowTimer = 1.2; const np = navPosition(s); path = tourFollowPath(np.x, np.z); updatePathLine(); }
     return;
   }
   // GOTO / approach: per-target replan
@@ -894,6 +896,19 @@ function guidance(s, t) {
     return { desPsi: d2r(P.desiredHeadingDeg), desSpeed: P.desiredSpeed, course: d2r(P.desiredHeadingDeg), name: '(holding heading)', xte: 0 };
 
   const nav = navPosition(s);
+  // ---- GLOBAL TOUR: follow the loop (lead-in + rotated loop in `path`); current island = progress along it ----
+  if (P.mode === 'tour' && P.usePlanner && tourPath && tourPath.length > 2 && path && path.length > 1) {
+    const pi = nearestPathIndex(tourPath, nav.x, nav.z);
+    let next = wpIdx, bestD = Infinity;
+    for (let i=0;i<tourGateAt.length;i++){ let d = tourGateAt[i]-pi; if (d < 0) d += tourPath.length; if (d > 1 && d < bestD){ bestD=d; next=i; } }
+    wpIdx = next;
+    const aim = pursuit(path, nav, P.lookahead);
+    let course = Math.atan2(aim.z-nav.z, aim.x-nav.x) + clampJS(P.xteGain*aim.xteSigned, -0.7, 0.7);
+    let desPsi = course;
+    if (P.feedForward && kf){ const e=kf.est, spd=Math.max(P.desiredSpeed,6); const wx=Math.cos(course)*spd-e.cx, wz=Math.sin(course)*spd-e.cz; desPsi=Math.atan2(wz,wx); }
+    const desSpeed = P.desiredSpeed * clampJS(1 - Math.abs(wrap(course - s.psi))*0.25, 0.7, 1);   // only a mild slow-down on turns
+    return { desPsi, desSpeed, course, dist: aim.xte, name: route[wpIdx] ? route[wpIdx].name : '', xte: aim.xte };
+  }
   const gate = activeTarget(nav);                   // steering target (smooth-flow gate beside the island)
   if (!path) replan(s);
   // ARRIVAL: within ~1 cell of the target's navigable perimeter. Targets often sit inside their own blocked
