@@ -619,17 +619,26 @@ let tourPath = null, tourGateAt = [], tourKey = '';
 // the two neighbour gates. Co-adapts into one globally smooth chain (adjacent islands end up on the same
 // flow side). This is the "via-point determined by the global path" behaviour.
 function optimizeGates(){
+  const marchOut=(cx,cz,dx,dz)=>{ let r=GRID.dx; for(; r<700; r+=GRID.dx){ const x=cx+dx*r, z=cz+dz*r, wc=worldToCell(x,z); if(!BLOCKED||!BLOCKED[gIdx(wc.c,wc.r)]) break; } return { x:cx+dx*(r+GRID.dx*2), z:cz+dz*(r+GRID.dx*2) }; };
   let gates = route.map((_,i)=>routeGate(i));     // seed from the island-neighbour heuristic
-  for (let it=0; it<14; it++){
+  const DETOUR_W = P.turnVsDist!==undefined ? P.turnVsDist : 0.05;   // how much extra distance we'll pay per unit of straightness
+  for (let it=0; it<16; it++){
     gates = gates.map((g,i)=>{
       const isl=route[i], A=gates[(i-1+gates.length)%gates.length], B=gates[(i+1)%gates.length];
-      const ax=A.x,az=A.z,bx=B.x,bz=B.z,cx=isl.x,cz=isl.z, abx=bx-ax,abz=bz-az, L2=abx*abx+abz*abz||1;
-      const tp=clampJS(((cx-ax)*abx+(cz-az)*abz)/L2,0,1), fx=ax+abx*tp, fz=az+abz*tp;   // foot on the NEIGHBOUR-GATE chord
+      const cx=isl.x, cz=isl.z, abx=B.x-A.x, abz=B.z-A.z, L2=abx*abx+abz*abz||1;
+      const tp=clampJS(((cx-A.x)*abx+(cz-A.z)*abz)/L2,0,1), fx=A.x+abx*tp, fz=A.z+abz*tp;
       let dx=fx-cx, dz=fz-cz, dl=Math.hypot(dx,dz);
       if (dl<1){ const cl=Math.hypot(abx,abz)||1; dx=-abz/cl; dz=abx/cl; } else { dx/=dl; dz/=dl; }
-      let r=GRID.dx; for(; r<600; r+=GRID.dx){ const x=cx+dx*r, z=cz+dz*r, wc=worldToCell(x,z); if(!BLOCKED||!BLOCKED[gIdx(wc.c,wc.r)]) break; }
-      const tgt={ x:cx+dx*(r+GRID.dx*2), z:cz+dz*(r+GRID.dx*2) };
-      return { x: g.x + (tgt.x-g.x)*0.6, z: g.z + (tgt.z-g.z)*0.6 };   // damped move toward the smooth spot
+      // evaluate BOTH sides of the island: toward the neighbour-chord (near) and around it (far)
+      const cand=[ marchOut(cx,cz,dx,dz), marchOut(cx,cz,-dx,-dz) ];
+      const base=Math.hypot(B.x-A.x, B.z-A.z);
+      const score=c=>{ const i1=Math.hypot(c.x-A.x,c.z-A.z)||1, o1=Math.hypot(B.x-c.x,B.z-c.z)||1;
+        const straight=((c.x-A.x)*(B.x-c.x)+(c.z-A.z)*(B.z-c.z))/(i1*o1);   // +1 = no turn, -1 = U-turn
+        return straight - DETOUR_W*(i1+o1-base)/GRID.dx; };                 // reward straightness, pay for the detour
+      const s0=score(cand[0]), s1=score(cand[1]);
+      const near0 = Math.hypot(g.x-cand[0].x,g.z-cand[0].z) <= Math.hypot(g.x-cand[1].x,g.z-cand[1].z);
+      const best = near0 ? (s1 > s0+0.2 ? cand[1] : cand[0]) : (s0 > s1+0.2 ? cand[0] : cand[1]);   // hysteresis: stay unless clearly better
+      return { x: g.x + (best.x-g.x)*0.5, z: g.z + (best.z-g.z)*0.5 };      // damped move toward the chosen side
     });
   }
   return gates;
