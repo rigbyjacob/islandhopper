@@ -39,6 +39,14 @@
     box-shadow: 0 10px 40px rgba(0,0,0,.45); font-size: 12px; }
   #panel::-webkit-scrollbar { width: 8px; }
   #panel::-webkit-scrollbar-thumb { background: rgba(140,200,255,.22); border-radius: 4px; }
+  #skullBtn { position: fixed; top: 12px; right: 12px; z-index: 11; display: none; cursor: pointer;
+    width: 44px; height: 44px; line-height: 44px; text-align: center; font-size: 26px; color: #e9f4ff;
+    background: rgba(8,20,33,.82); backdrop-filter: blur(9px); border: 1px solid rgba(140,200,255,.22);
+    border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.45); user-select: none; pointer-events: auto; }
+  #skullBtn:hover { background: rgba(30,60,90,.9); }
+  .ttlrow { display: flex; align-items: center; justify-content: space-between; }
+  .collapse { cursor: pointer; font-size: 16px; opacity: .8; padding: 0 2px; user-select: none; }
+  .collapse:hover { opacity: 1; }
   #panel .ttl { font-weight: 650; font-size: 12.5px; letter-spacing: .2px; }
   #panel .read { font-variant-numeric: tabular-nums; opacity: .85; font-size: 11px; margin-top: 2px; }
   .sec { margin-top: 11px; border-top: 1px solid rgba(140,200,255,.12); padding-top: 9px; }
@@ -97,6 +105,7 @@
 </div>
 
 <div id="panel"></div>
+<div id="skullBtn" title="Open helm console">☠</div>
 <canvas id="telemetry" width="320" height="190"></canvas>
 <canvas id="compass" width="138" height="138"></canvas>
 
@@ -202,6 +211,8 @@ const P = {
   draft: 2.6,                            // min water depth the hull needs to float
   // sky & time
   autoDay: true, timeOfDay: 9.5, dayLength: 120,   // hours; dayLength = real seconds per full day
+  // HUD visibility
+  showTitle: true, showHints: true, showTelemetry: true, showCompass: true, showLabels: true,
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
@@ -631,7 +642,7 @@ async function init() {
   buildTerrainField();
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain();
   boatMesh = buildBoat(); buildCamera();
-  buildClouds(); buildBoatShadow(); buildIslandLights(); buildFireworks();
+  buildClouds(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
   buildNavVisuals();
   buildWake();
   buildLabels();
@@ -683,8 +694,9 @@ async function init() {
     try { renderer.render(scene, activeCam); }
     catch (err) { console.warn('render failed', err); if (fpsMode) setView(false); }
 
-    updateLabels();
-    drawTelemetry(); drawCompass();
+    if (P.showLabels) updateLabels();
+    if (P.showTelemetry) drawTelemetry();
+    if (P.showCompass) drawCompass();
     updateReadouts();
 
     fpsN++; fpsT += dt;
@@ -932,6 +944,49 @@ function buildIslandLights(){
   scene.add(islandLightsGroup);
 }
 
+// ---- palm trees: one merged trunk+fronds geometry, scattered on island lowlands via InstancedMesh ----
+function setGeoColor(geo, hex){ const c=new THREE.Color(hex), n=geo.attributes.position.count, arr=new Float32Array(n*3);
+  for(let i=0;i<n;i++){ arr[i*3]=c.r; arr[i*3+1]=c.g; arr[i*3+2]=c.b; } geo.setAttribute('color', new THREE.BufferAttribute(arr,3)); return geo; }
+function mergeGeos(geos){
+  let vc=0, ic=0; for(const g of geos){ vc+=g.attributes.position.count; ic+=g.index?g.index.count:g.attributes.position.count; }
+  const pos=new Float32Array(vc*3), nor=new Float32Array(vc*3), col=new Float32Array(vc*3), idx=new Uint32Array(ic);
+  let vo=0, io=0;
+  for(const g of geos){ const p=g.attributes.position, nm=g.attributes.normal, c=g.attributes.color;
+    for(let i=0;i<p.count;i++){ pos[(vo+i)*3]=p.getX(i); pos[(vo+i)*3+1]=p.getY(i); pos[(vo+i)*3+2]=p.getZ(i);
+      if(nm){ nor[(vo+i)*3]=nm.getX(i); nor[(vo+i)*3+1]=nm.getY(i); nor[(vo+i)*3+2]=nm.getZ(i); }
+      if(c){ col[(vo+i)*3]=c.getX(i); col[(vo+i)*3+1]=c.getY(i); col[(vo+i)*3+2]=c.getZ(i); } }
+    if(g.index){ for(let i=0;i<g.index.count;i++) idx[io+i]=g.index.getX(i)+vo; io+=g.index.count; }
+    else { for(let i=0;i<p.count;i++) idx[io+i]=vo+i; io+=p.count; }
+    vo+=p.count; }
+  const out=new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor,3));
+  out.setAttribute('color', new THREE.BufferAttribute(col,3));
+  out.setIndex(new THREE.BufferAttribute(idx,1)); return out;
+}
+function buildPalms(){
+  const TOP=4.4, geos=[];
+  const trunk=new THREE.CylinderGeometry(0.11,0.24,4.4,6); trunk.translate(0,2.2,0); setGeoColor(trunk,0x7a5230); geos.push(trunk);
+  for(let k=0;k<7;k++){ const fr=new THREE.ConeGeometry(0.34,2.8,4); fr.scale(1,1,0.3); fr.translate(0,1.4,0);
+    fr.rotateZ(-Math.PI/2+0.4); fr.rotateY(k/7*Math.PI*2); fr.translate(0,TOP,0);
+    setGeoColor(fr, k%2 ? 0x3f7d34 : 0x4f9440); geos.push(fr); }
+  const palmGeo=mergeGeos(geos);
+  const mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85 });
+  const N=300, inst=new THREE.InstancedMesh(palmGeo, mat, N);
+  inst.castShadow=true; inst.receiveShadow=true;
+  const d=new THREE.Object3D(); let placed=0;
+  for(const isl of ISLANDS){ const cap=Math.min(Math.floor(isl.r*1.3), 44); let p=0, tr=0;
+    while(p<cap && placed<N && tr<cap*22){ tr++;
+      const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*isl.r*0.95;
+      const x=isl.x+Math.cos(a)*rr, z=isl.z+Math.sin(a)*rr, hh=terrainHeight(x,z);
+      if(hh<2.9 || hh>9) continue;                       // coastal lowlands only
+      d.position.set(x, hh-0.3, z); d.rotation.set(0, Math.random()*Math.PI*2, 0);
+      const s=0.65+Math.random()*0.7; d.scale.set(s,s,s); d.updateMatrix();
+      inst.setMatrixAt(placed++, d.matrix); p++; }
+  }
+  inst.count=placed; inst.instanceMatrix.needsUpdate=true; scene.add(inst);
+}
+
 // ---- fireworks: the current target island celebrates the boat's visit (Sprite particle pool) ----
 const FW_MAX = 300; let fwSprites = [], fwState = [], fwTimer = 0;
 function buildFireworks(){
@@ -1015,8 +1070,9 @@ let targetGlow, glowHalo; const _glowCol = new THREE.Color();
 function buildNavVisuals() {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3*128), 3));
-  pathLine = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x5fd0ff, transparent: true, opacity: 0.85 }));
-  pathLine.frustumCulled = false; scene.add(pathLine);
+  pathLine = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0xf2dca0, transparent: true,
+    opacity: 0.92, dashSize: 7, gapSize: 5, depthTest: false }));   // old-map ink-and-dash plotted route
+  pathLine.frustumCulled = false; pathLine.renderOrder = 5; scene.add(pathLine);
 
   // target glow: a soft warm pulsing halo on the sea around the target island
   targetGlow = new THREE.Group(); targetGlow.renderOrder = 3;
@@ -1038,9 +1094,10 @@ function updatePathLine() {
   if (!pathLine) return;
   const pts = (P.showPath && path) ? path : [];
   const arr = pathLine.geometry.attributes.position.array, n = Math.min(pts.length, 128);
-  for (let i=0;i<n;i++){ arr[i*3]=pts[i].x; arr[i*3+1]=2.0; arr[i*3+2]=pts[i].z; }
+  for (let i=0;i<n;i++){ arr[i*3]=pts[i].x; arr[i*3+1]=2.6; arr[i*3+2]=pts[i].z; }
   pathLine.geometry.setDrawRange(0, n);
   pathLine.geometry.attributes.position.needsUpdate = true;
+  if (n > 1) pathLine.geometry.computeLineDistances();   // required for the dashed (old-map) look
   pathLine.visible = P.showPath && n > 1;
 }
 function spawnGpsPing(x,z){ if(!P.showGps) return; const m = gpsPings[gpsPtr]; gpsPtr = (gpsPtr+1)%gpsPings.length;
@@ -1461,15 +1518,36 @@ function toggleRecord(btn){
   btn.classList.add('active');
 }
 
+function applyHud(){
+  const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display = on?'':'none'; };
+  set('title',P.showTitle); set('hint',P.showHints); set('telemetry',P.showTelemetry);
+  set('compass',P.showCompass); set('labels',P.showLabels);
+}
+function setPanelOpen(open){
+  document.getElementById('panel').style.display = open?'':'none';
+  document.getElementById('skullBtn').style.display = open?'none':'';
+}
 function buildPanel() {
   const panel = document.getElementById('panel');
   const head = el('div','',panel);
-  const ttl = el('div','ttl',head); ttl.textContent = 'Helm Console';
+  const ttlrow = el('div','ttlrow',head);
+  const ttl = el('div','ttl',ttlrow); ttl.textContent = '☠ Helm Console';
+  const collapse = el('div','collapse',ttlrow); collapse.textContent = '✕'; collapse.title = 'Collapse';
+  collapse.onclick = () => setPanelOpen(false);
+  document.getElementById('skullBtn').onclick = () => setPanelOpen(true);
   ui.read = el('div','read',head);
   ui.fps = el('div','read',head); ui.fps.textContent = '— fps';
 
+  // HUD visibility toggles
+  let s = section(panel, 'Display');
+  addToggle(s, 'Title', P, 'showTitle', applyHud);
+  addToggle(s, 'Control hints', P, 'showHints', applyHud);
+  addToggle(s, 'PID telemetry graphs', P, 'showTelemetry', applyHud);
+  addToggle(s, 'Compass', P, 'showCompass', applyHud);
+  addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
+
   // View
-  let s = section(panel, 'View');
+  s = section(panel, 'View');
   ui.viewBtn = el('div','btn', el('div','btns',s)); ui.viewBtn.textContent = 'View: Orbit 🗺';
   ui.viewBtn.onclick = () => setView(!fpsMode);
   const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
@@ -1636,24 +1714,42 @@ function plot(arr, f, x, y, w, h, color, lw){
 
 const ccv=document.getElementById('compass'), ccx=ccv.getContext('2d');
 function drawCompass(){
-  const W=ccv.width, H=ccv.height, cx=W/2, cy=H/2, R=W/2-10; ccx.clearRect(0,0,W,H);
-  ccx.strokeStyle='rgba(150,200,255,.35)'; ccx.lineWidth=1.5; ccx.beginPath(); ccx.arc(cx,cy,R,0,Math.PI*2); ccx.stroke();
-  ccx.fillStyle='rgba(220,238,251,.8)'; ccx.font='10px ui-sans-serif'; ccx.textAlign='center'; ccx.textBaseline='middle';
-  ccx.fillText('N',cx,cy-R+8); ccx.fillText('S',cx,cy+R-8); ccx.fillText('E',cx+R-7,cy); ccx.fillText('W',cx-R+7,cy);
-  // world heading (cos,sin) over (x,z): east=+x=right, south=+z=down → screen maps directly
+  const W=ccv.width, H=ccv.height, cx=W/2, cy=H/2, R=W/2-7; ccx.clearRect(0,0,W,H);
+  // aged face + brass rims
+  ccx.beginPath(); ccx.arc(cx,cy,R,0,7); ccx.fillStyle='rgba(26,20,11,.94)'; ccx.fill();
+  ccx.lineWidth=3; ccx.strokeStyle='#c79a44'; ccx.beginPath(); ccx.arc(cx,cy,R,0,7); ccx.stroke();
+  ccx.lineWidth=1; ccx.strokeStyle='#7a5e22'; ccx.beginPath(); ccx.arc(cx,cy,R-3,0,7); ccx.stroke();
+  // rim ticks (long every 45°)
+  for (let i=0;i<24;i++){ const a=i/24*Math.PI*2, long=(i%3===0), r0=R-4, r1=R-(long?10:6);
+    ccx.strokeStyle=long?'#d8b25a':'#9a7a34'; ccx.lineWidth=long?1.5:1;
+    ccx.beginPath(); ccx.moveTo(cx+Math.cos(a)*r0,cy+Math.sin(a)*r0); ccx.lineTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1); ccx.stroke(); }
+  // 8-point compass star
+  ccx.fillStyle='rgba(184,144,62,.5)';
+  for (let k=0;k<8;k++){ const a=k/8*Math.PI*2 - Math.PI/2, rr=(k%2===0)?R-13:R-30;
+    ccx.beginPath(); ccx.moveTo(cx+Math.cos(a-0.13)*rr*0.34, cy+Math.sin(a-0.13)*rr*0.34);
+    ccx.lineTo(cx+Math.cos(a)*rr, cy+Math.sin(a)*rr);
+    ccx.lineTo(cx+Math.cos(a+0.13)*rr*0.34, cy+Math.sin(a+0.13)*rr*0.34); ccx.closePath(); ccx.fill(); }
+  // serif cardinals
+  ccx.fillStyle='#e6c879'; ccx.font='bold 12px Georgia, serif'; ccx.textAlign='center'; ccx.textBaseline='middle';
+  const lr=R-15; ccx.fillText('N',cx,cy-lr); ccx.fillText('S',cx,cy+lr); ccx.fillText('E',cx+lr,cy); ccx.fillText('W',cx-lr,cy);
+  // current / wind / desired indicators (kept)
   const arrow=(ang,len,color,lw,dashed)=>{ ccx.strokeStyle=color; ccx.lineWidth=lw; ccx.setLineDash(dashed?[4,3]:[]);
     const ex=cx+Math.cos(ang)*R*len, ey=cy+Math.sin(ang)*R*len;
     ccx.beginPath(); ccx.moveTo(cx,cy); ccx.lineTo(ex,ey); ccx.stroke();
-    ccx.setLineDash([]); ccx.fillStyle=color;
-    ccx.beginPath(); const a2=0.4; ccx.moveTo(ex,ey);
-    ccx.lineTo(ex-Math.cos(ang-a2)*7, ey-Math.sin(ang-a2)*7);
-    ccx.lineTo(ex-Math.cos(ang+a2)*7, ey-Math.sin(ang+a2)*7); ccx.fill(); };
-  if (P.curOn) arrow(d2r(P.curDirDeg), 0.85, 'rgba(80,200,200,.8)', 2, false);  // current (teal)
-  if (kf) { const e=kf.est, mag=Math.hypot(e.cx,e.cz); if (mag>0.3)
-    arrow(Math.atan2(e.cz,e.cx), 0.6, 'rgba(123,224,138,.9)', 1.5, true); }       // est. current (green dashed)
-  if (P.windOn) arrow(d2r(P.windDirDeg), 0.7, 'rgba(230,240,255,.7)', 2, false); // wind (white)
-  arrow(lastGuide.desPsi||0, 0.9, '#5fd0ff', 2, true);                            // desired (cyan dashed)
-  arrow(boat3.psi, 0.9, '#ffe08a', 2.5, false);                                   // boat heading (yellow)
+    ccx.setLineDash([]); ccx.fillStyle=color; ccx.beginPath(); const a2=0.4; ccx.moveTo(ex,ey);
+    ccx.lineTo(ex-Math.cos(ang-a2)*6, ey-Math.sin(ang-a2)*6);
+    ccx.lineTo(ex-Math.cos(ang+a2)*6, ey-Math.sin(ang+a2)*6); ccx.fill(); };
+  if (P.curOn) arrow(d2r(P.curDirDeg), 0.74, 'rgba(90,200,200,.85)', 2, false);
+  if (kf) { const e=kf.est; if (Math.hypot(e.cx,e.cz)>0.3) arrow(Math.atan2(e.cz,e.cx), 0.58, 'rgba(123,224,138,.9)', 1.5, true); }
+  if (P.windOn) arrow(d2r(P.windDirDeg), 0.64, 'rgba(230,240,255,.7)', 2, false);
+  arrow(lastGuide.desPsi||0, 0.82, '#7fd0ff', 2, true);
+  // boat heading as a two-tone compass needle
+  const a=boat3.psi, needle=(ang,len,col)=>{ ccx.fillStyle=col;
+    ccx.beginPath(); ccx.moveTo(cx+Math.cos(ang)*R*len, cy+Math.sin(ang)*R*len);
+    ccx.lineTo(cx+Math.cos(ang+1.9)*5, cy+Math.sin(ang+1.9)*5);
+    ccx.lineTo(cx+Math.cos(ang-1.9)*5, cy+Math.sin(ang-1.9)*5); ccx.closePath(); ccx.fill(); };
+  needle(a, 0.82, '#d9433a'); needle(a+Math.PI, 0.72, '#efe6cf');
+  ccx.fillStyle='#c79a44'; ccx.beginPath(); ccx.arc(cx,cy,3,0,7); ccx.fill();
 }
 </script>
 </body>
