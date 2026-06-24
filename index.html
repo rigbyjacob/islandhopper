@@ -764,7 +764,7 @@ async function init() {
     } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
-    if (P.showLabels) updateLabels();
+    updateLabels();   // sprite labels (handles its own showLabels gating)
     if (P.showTelemetry) drawTelemetry();
     if (P.showCompass) drawCompass();
     updateReadouts();
@@ -1380,43 +1380,34 @@ const CITY_LABELS = [
   ['Isabel Segunda',-65.44,18.15],
 ].map(([name,lon,lat]) => { const p = proj(lon,lat); return { name, x:p.x, z:p.z }; });
 
-let labelEls = [], cityLabelEls = []; const _vL = new THREE.Vector3();
-function buildLabels() {
-  const layer = document.getElementById('labels');
-  for (const isl of ISLANDS) {
-    const d = document.createElement('div'); d.className = 'ilabel'; d.textContent = isl.name;
-    layer.appendChild(d); labelEls.push({ el: d, isl });
-  }
-  for (const ct of CITY_LABELS) {
-    const d = document.createElement('div'); d.className = 'clabel'; d.textContent = ct.name;
-    layer.appendChild(d); cityLabelEls.push({ el: d, ct });
-  }
+let labelEls = [], cityLabelEls = [];
+// In-scene sprite labels (constant screen size via sizeAttenuation:false) so the VIDEO RECORDER
+// captures them — HTML overlays weren't in the WebGPU canvas. White text tinted per-sprite (orange =
+// current target). depthTest off so they're never hidden behind terrain.
+function makeLabelSprite(text, color, sizeY){
+  const cv=document.createElement('canvas'), ctx=cv.getContext('2d');
+  const font='bold 40px ui-sans-serif, system-ui, -apple-system, sans-serif';
+  ctx.font=font; const w=Math.ceil(ctx.measureText(text).width)+28, h=60;
+  cv.width=w; cv.height=h; ctx.font=font; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.shadowColor='rgba(0,8,18,0.95)'; ctx.shadowBlur=7; ctx.shadowOffsetY=1; ctx.fillStyle='#ffffff';
+  ctx.fillText(text, w/2, h/2+1); ctx.shadowBlur=0; ctx.fillText(text, w/2, h/2+1);
+  const tex=new THREE.CanvasTexture(cv); tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true;
+  const mat=new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false, sizeAttenuation:false });
+  mat.color.set(color);
+  const sp=new THREE.Sprite(mat); sp.renderOrder=20; sp.scale.set(sizeY*(w/h), sizeY, 1);
+  return sp;
 }
-function updateLabels() {
-  const w = window.innerWidth, h = window.innerHeight;
-  const fade = clampJS((camera.zoom - 0.5) / 0.6, 0.25, 1);   // dimmer when zoomed way out
-  const tgtName = (P.mode === 'tour' && route[wpIdx]) ? route[wpIdx].name : null;   // island the helm is steering to
-  for (const { el, isl } of labelEls) {
-    el.classList.toggle('target', isl.name === tgtName);   // glows orange while it's the target, reverts after
-    _vL.set(isl.x, Math.max(isl.h, 6) + 8, isl.z).project(activeCam || camera);
-    if (_vL.z > 1 || _vL.x < -1.05 || _vL.x > 1.05 || _vL.y < -1.05 || _vL.y > 1.05) { el.style.display = 'none'; continue; }
-    el.style.display = 'block';
-    el.style.left = ((_vL.x*0.5+0.5)*w) + 'px';
-    el.style.top  = ((-_vL.y*0.5+0.5)*h) + 'px';
-    el.style.opacity = fade;
-  }
-  // city labels: only when zoomed in (or in the crow's nest), so they don't clutter the wide view
-  const cityShow = fpsMode || cineMode || (activeCam === camera && camera.zoom > 1.25);
-  const cityOp = (fpsMode || cineMode) ? 0.9 : clampJS((camera.zoom - 1.25) / 0.8, 0.3, 1);
-  for (const { el, ct } of cityLabelEls) {
-    if (!cityShow) { el.style.display = 'none'; continue; }
-    _vL.set(ct.x, terrainHeight(ct.x, ct.z) + 4, ct.z).project(activeCam || camera);
-    if (_vL.z > 1 || _vL.x < -1.05 || _vL.x > 1.05 || _vL.y < -1.05 || _vL.y > 1.05) { el.style.display = 'none'; continue; }
-    el.style.display = 'block';
-    el.style.left = ((_vL.x*0.5+0.5)*w) + 'px';
-    el.style.top  = ((-_vL.y*0.5+0.5)*h) + 'px';
-    el.style.opacity = cityOp;
-  }
+function buildLabels(){
+  for (const isl of ISLANDS){ const sp=makeLabelSprite(isl.name, 0xffffff, 0.058);
+    sp.position.set(isl.x, Math.max(isl.h,6)+11, isl.z); scene.add(sp); labelEls.push({ sp, isl }); }
+  for (const ct of CITY_LABELS){ const sp=makeLabelSprite('• '+ct.name, 0xffe0ad, 0.040);
+    sp.position.set(ct.x, terrainHeight(ct.x,ct.z)+5, ct.z); scene.add(sp); cityLabelEls.push({ sp, ct }); }
+}
+function updateLabels(){
+  const on = P.showLabels, tgtName = (P.mode==='tour' && route[wpIdx]) ? route[wpIdx].name : null;
+  for (const { sp, isl } of labelEls){ sp.visible = on; sp.material.color.set(isl.name===tgtName ? 0xff9a3c : 0xffffff); }
+  const cityShow = on && (fpsMode || cineMode || (activeCam === camera && camera.zoom > 1.25));
+  for (const { sp } of cityLabelEls){ sp.visible = cityShow; }
 }
 
 function buildBathyTexture(){
