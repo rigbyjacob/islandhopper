@@ -191,7 +191,7 @@ const P = {
   navOnEstimate: true,                   // steer using the Kalman position estimate vs. true position
   feedForward: false,                    // pre-crab using the estimated current
   gpsNoise: 5,                           // GPS std-dev (world units)
-  showPath: true, showGps: true,
+  showPath: true, showGps: false,
   // path following + grounding
   lookahead: 26,                         // pure-pursuit lookahead (smaller = hugs line tighter)
   xteGain: 0.012,                        // cross-track correction gain (bigger = snaps to line harder)
@@ -221,7 +221,7 @@ const WAVES = (() => {
   for (let i=0;i<11;i++){
     const a = dirDeg*Math.PI/180, freq = (2*Math.PI)/len;
     out.push({ nx: Math.cos(a), ny: Math.sin(a), freq,
-               amp: Math.sqrt(len)*0.033, speed: Math.sqrt(3.0*freq) });
+               amp: Math.sqrt(len)*0.026, speed: Math.sqrt(3.0*freq) });   // calmer sea so islands aren't swamped
     dirDeg = (dirDeg + 137.5) % 360; len *= 0.80;
   }
   return out;
@@ -281,7 +281,7 @@ function buildTerrainField(){
   for(let r=0;r<GH;r++)for(let c=0;c<GW;c++){ const i=I(c,r), wx=GX0+(c+0.5)*CELL, wz=GZ0+(r+0.5)*CELL;
     if(land[i]){
       const base = ELEV[li++] / 10;                         // real SRTM/GEBCO elevation (metres→world units), baked
-      Hh[i] = Math.max(0.6, base + (fbm(wx*0.15, wz*0.15)-0.5)*1.2);   // + a touch of micro-relief
+      Hh[i] = 2.8 + base + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift land clear of the wave crests + micro-relief
     }
     else Hh[i]=Math.max(-6, -dOut[i]*CELL*0.45); }
   TF={GX0,GZ0,GW,GH,CELL,H:Hh};
@@ -798,16 +798,26 @@ function updateEnvironment(dt) {
 
 // ---- puffy clouds (white → gray with storms, dimmer at night) ----
 let cloudGroups=[], cloudMats=[], cloudBounds;
-// lumpy cumulus texture: several overlapping soft blobs → irregular fluffy alpha
+// cel-shaded puff: a soft round blob whose RGB is split into discrete light/mid/shadow
+// bands (light from top-left), so each sprite reads as a rounded cartoon puff.
 function makeCloudTexture(){
   const N=128, c=document.createElement('canvas'); c.width=c.height=N; const x=c.getContext('2d');
-  for (let k=0;k<9;k++){
-    const r=N*(0.16+Math.random()*0.18), cx=N*0.5+(Math.random()-0.5)*N*0.42, cy=N*0.52+(Math.random()-0.5)*N*0.3;
+  // 1) alpha shape — a couple of overlapping soft discs for a slightly lumpy outline
+  for (let k=0;k<4;k++){
+    const r=N*(0.30+Math.random()*0.12), cx=N*0.5+(Math.random()-0.5)*N*0.18, cy=N*0.52+(Math.random()-0.5)*N*0.14;
     const g=x.createRadialGradient(cx,cy,1,cx,cy,r);
-    g.addColorStop(0,'rgba(255,255,255,0.95)'); g.addColorStop(0.55,'rgba(255,255,255,0.45)'); g.addColorStop(1,'rgba(255,255,255,0)');
+    g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.78,'rgba(255,255,255,1)'); g.addColorStop(1,'rgba(255,255,255,0)');
     x.fillStyle=g; x.fillRect(0,0,N,N);
   }
-  const tex=new THREE.CanvasTexture(c); return tex;
+  // 2) cel shading — quantized brightness bands, only over the puff (source-atop), light from upper-left
+  x.globalCompositeOperation='source-atop';
+  const lg=x.createRadialGradient(N*0.36,N*0.34,2, N*0.52,N*0.54,N*0.66);
+  lg.addColorStop(0.00,'rgb(255,255,255)'); lg.addColorStop(0.46,'rgb(255,255,255)');   // highlight band
+  lg.addColorStop(0.47,'rgb(226,233,243)'); lg.addColorStop(0.72,'rgb(226,233,243)');   // mid band (hard step = cel)
+  lg.addColorStop(0.73,'rgb(178,192,210)'); lg.addColorStop(1.00,'rgb(178,192,210)');   // shadow band
+  x.fillStyle=lg; x.fillRect(0,0,N,N);
+  x.globalCompositeOperation='source-over';
+  return new THREE.CanvasTexture(c);
 }
 function buildClouds(){
   const tex=makeCloudTexture();
@@ -856,23 +866,45 @@ function makeDotTexture(){
   g.addColorStop(0.6,'rgba(255,255,255,0.12)'); g.addColorStop(1,'rgba(255,255,255,0)');
   x.fillStyle=g; x.fillRect(0,0,64,64); return new THREE.CanvasTexture(c);
 }
+// real city locations (lon,lat,population-weight) → light clusters; San Juan metro is the standout
+const CITIES = [
+  [-66.06,18.46,100],[-66.04,18.23,28],[-66.61,18.01,30],[-66.72,18.45,18],[-65.83,18.15,12],[-65.65,18.33,10], // Puerto Rico
+  [-65.44,18.15,4],[-65.30,18.30,3],                                                                            // Vieques, Culebra
+  [-64.93,18.34,16],[-64.73,18.33,4],[-64.62,18.42,9],[-64.43,18.45,3],                                         // USVI/BVI
+  [-63.07,18.06,15],[-63.05,18.22,5],[-62.85,17.90,5],[-62.98,17.49,3],[-63.24,17.63,3],                        // St Martin..Saba
+  [-62.72,17.30,12],[-62.62,17.14,5],[-61.85,17.12,15],[-61.83,17.63,3],[-62.21,16.75,4],[-61.73,16.24,12],     // Kitts..Guadeloupe
+].map(([lon,lat,w]) => { const p = proj(lon,lat); return { x:p.x, z:p.z, w }; });
+
 function buildIslandLights(){
   const tex = makeDotTexture();
-  const palette = [[1.0,0.86,0.55],[1.0,0.74,0.40],[1.0,0.48,0.18],[0.72,0.86,1.0]]; // house, lamp, BBQ, cool
+  const palette = [[1.0,0.88,0.6],[1.0,0.78,0.45],[1.0,0.5,0.2],[0.7,0.85,1.0]]; // house, lamp, BBQ, cool
   islandLightMats = palette.map(c => new THREE.SpriteMaterial({ map:tex, color:new THREE.Color(c[0],c[1],c[2]),
     transparent:true, opacity:0, depthWrite:false, depthTest:true, blending:THREE.AdditiveBlending, fog:false }));
   islandLightsGroup = new THREE.Group(); islandLightsGroup.renderOrder = 3;
-  let total = 0;
+  const onLand = (x,z) => terrainHeight(x,z) > 1.5;
+  let total = 0; const CAP = 460;
+  // ---- dense, bright city clusters (count & spread scale with population) ----
+  for (const ct of CITIES){
+    const count = clampJS(Math.round(ct.w*0.42), 2, 42), spread = 4 + Math.sqrt(ct.w)*2.4;
+    let placed=0, tries=0;
+    while (placed<count && tries<count*16 && total<CAP){ tries++;
+      const a=Math.random()*Math.PI*2, rr=Math.pow(Math.random(),0.7)*spread;
+      const x=ct.x+Math.cos(a)*rr, z=ct.z+Math.sin(a)*rr; if (!onLand(x,z)) continue;
+      const mi = Math.random()<0.1?2 : Math.random()<0.35?1:0;     // mostly warm white/amber
+      const s=new THREE.Sprite(islandLightMats[mi]); s.position.set(x, terrainHeight(x,z)+0.8, z);
+      const sc=1.1+Math.random()*1.0; s.scale.set(sc,sc,1);
+      islandLightsGroup.add(s); placed++; total++;
+    }
+  }
+  // ---- sparse rural lights scattered across the rest of the land ----
   for (const isl of ISLANDS){
-    const cap = Math.min(Math.floor(isl.r*1.2), 36); let placed=0, tries=0;
-    while (placed<cap && tries<cap*12 && total<260){ tries++;
+    const cap=Math.min(Math.floor(isl.r*0.4), 9); let placed=0, tries=0;
+    while (placed<cap && tries<cap*12 && total<CAP){ tries++;
       const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*isl.r*0.9;
-      const x=isl.x+Math.cos(a)*rr, z=isl.z+Math.sin(a)*rr, h=terrainHeight(x,z);
-      if (h < 1.5) continue;                              // only on land above the beach
-      const mi = Math.random()<0.12?3 : Math.random()<0.3?2 : Math.random()<0.55?1:0;
-      const s = new THREE.Sprite(islandLightMats[mi]);
-      s.position.set(x, h+0.8, z);
-      const sc = 1.1 + Math.random()*0.8; s.scale.set(sc, sc, 1);   // small point-lights, not island-sized blobs
+      const x=isl.x+Math.cos(a)*rr, z=isl.z+Math.sin(a)*rr; if (!onLand(x,z)) continue;
+      const mi = Math.random()<0.15?2:1;
+      const s=new THREE.Sprite(islandLightMats[mi]); s.position.set(x, terrainHeight(x,z)+0.8, z);
+      const sc=0.9+Math.random()*0.6; s.scale.set(sc,sc,1);
       islandLightsGroup.add(s); placed++; total++;
     }
   }
@@ -914,25 +946,18 @@ function stepEstimator(dt) {
 }
 
 let pathLine, estRing, gpsPings = [], gpsPtr = 0;
-let targetGlow, glowHalo, glowBeam, glowRing; const _glowCol = new THREE.Color();
+let targetGlow, glowHalo; const _glowCol = new THREE.Color();
 function buildNavVisuals() {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3*128), 3));
   pathLine = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x5fd0ff, transparent: true, opacity: 0.85 }));
   pathLine.frustumCulled = false; scene.add(pathLine);
 
-  // mysterious target glow: a soft halo on the sea, a thin pulsing ring, and a faint beacon column
+  // target glow: a soft warm pulsing halo on the sea around the target island
   targetGlow = new THREE.Group(); targetGlow.renderOrder = 3;
-  const haloTex = makeDotTexture();
   glowHalo = new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({
-    map:haloTex, color:0x6fe8ff, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
+    map:makeDotTexture(), color:0xff7a2e, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
   glowHalo.rotation.x = -Math.PI/2; glowHalo.position.y = 1.6; targetGlow.add(glowHalo);
-  glowRing = new THREE.Mesh(new THREE.TorusGeometry(1, 0.06, 8, 64), new THREE.MeshBasicMaterial({
-    color:0x9fe8ff, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
-  glowRing.rotation.x = -Math.PI/2; glowRing.position.y = 1.8; targetGlow.add(glowRing);
-  glowBeam = new THREE.Mesh(new THREE.CylinderGeometry(3, 0.6, 1, 24, 1, true), new THREE.MeshBasicMaterial({
-    color:0x9f7bff, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
-  targetGlow.add(glowBeam);
   scene.add(targetGlow);
 
   estRing = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.4, 8, 20),
@@ -970,15 +995,10 @@ function updateNavVisuals(dt) {
       else { const tg = activeTarget(); tx = tg.x; tz = tg.z; rad = 26; }
       const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7), yw = waveHeightJS(tx, tz, tt);
       targetGlow.position.set(tx, 0, tz);
-      _glowCol.setHSL(0.55 + 0.10*Math.sin(tt*0.45), 0.85, 0.6);   // slow cyan↔violet drift
-      const hs = rad*2.6*(1 + 0.05*pulse);
+      _glowCol.setHSL(0.045 + 0.03*Math.sin(tt*0.5), 0.95, 0.58);   // warm red↔amber drift
+      const hs = rad*2.6*(1 + 0.06*pulse);
       glowHalo.position.y = yw + 1.6; glowHalo.scale.set(hs, hs, 1);
-      glowHalo.material.color.copy(_glowCol); glowHalo.material.opacity = 0.18 + 0.16*pulse;
-      const rs = rad*(1.05 + 0.08*pulse);
-      glowRing.position.y = yw + 1.9; glowRing.scale.set(rs, rs, rs*0.5);
-      glowRing.material.color.copy(_glowCol); glowRing.material.opacity = 0.25 + 0.25*pulse;
-      glowBeam.position.y = yw + 70; glowBeam.scale.set(1 + rad*0.05, 140, 1 + rad*0.05);
-      glowBeam.material.color.copy(_glowCol); glowBeam.material.opacity = 0.04 + 0.05*pulse;
+      glowHalo.material.color.copy(_glowCol); glowHalo.material.opacity = 0.24 + 0.2*pulse;
     }
   }
   if (pathLine) pathLine.visible = P.showPath && path && path.length > 1;
