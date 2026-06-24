@@ -816,11 +816,12 @@ async function init() {
     controls.update();
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
-    activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : camera);
+    else if (flyMode) updateFlyCam(dt);
+    activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
     const useRain = rainActive && rainPost && stormFactor > 0.01;   // rain-on-lens only while storming
     try {
       if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
-      else if (bloomActive && bloomPost && !fpsMode && !cineMode) bloomPost.render();
+      else if (bloomActive && bloomPost && !fpsMode && !cineMode && !flyMode) bloomPost.render();
       else renderer.render(scene, activeCam);
     } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
@@ -1801,6 +1802,8 @@ function placeBoat(boat, s, t) {
 const camOffset = new THREE.Vector3(150, 360, 240);
 let camTarget = new THREE.Vector3(MAP.cx, 0, MAP.cz);
 let fpsCam, fpsMode = false, fpsYaw = 0, fpsPitch = -0.30, activeCam;   // look down at the bow, not dead-level
+let flyCam, flyMode = false;                                            // free-fly "plane" camera to tour the whole map
+const flyState = { pos:new THREE.Vector3(200,460,700), yaw:-1.9, pitch:-0.55, keys:{} };
 function buildCamera() {
   const aspect = window.innerWidth/window.innerHeight, view = 380;
   camera = new THREE.OrthographicCamera(-view*aspect, view*aspect, view, -view, -4000, 12000);
@@ -1811,6 +1814,7 @@ function buildCamera() {
   controls.update();
   fpsCam = new THREE.PerspectiveCamera(72, aspect, 0.5, 16000);
   cineCam = new THREE.PerspectiveCamera(50, aspect, 0.5, 26000);   // cinematic director camera
+  flyCam  = new THREE.PerspectiveCamera(68, aspect, 0.5, 30000);   // free-fly plane camera
   activeCam = camera;
 }
 function setView(fps) {
@@ -1831,6 +1835,31 @@ function followCamera(s, dt) {
   const k = 1 - Math.pow(0.0015, dt);
   controls.target.x += (s.x - controls.target.x)*k*0.7;
   controls.target.z += (s.z - controls.target.z)*k*0.7;
+}
+// free-fly "plane" camera: WASD / arrows to move, Q/Space up, E/C down, Shift to boost, drag to look
+function setFly(on){
+  flyMode = on; controls.enabled = !on && !fpsMode && !cineMode;
+  if (on){ if (fpsMode) setView(false); if (cineMode) setCine(false);
+    flyState.pos.set(200,460,700); flyState.yaw=-1.9; flyState.pitch=-0.55; flyState.keys={}; }   // reset to an overview
+  const app=document.getElementById('app'); if(app) app.style.cursor = on ? 'grab' : '';
+  if (ui.flyBtn) ui.flyBtn.textContent = on ? '✈ Flying — P to exit' : '✈ Fly the map (P)';
+}
+function updateFlyCam(dt){
+  const K=flyState.keys, boost=K['shift']?2.6:1.0, sp=620*boost*dt;
+  const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
+  const fx=cy*cp, fy=sp2, fz=sy*cp;                                  // forward
+  const rx=Math.cos(flyState.yaw+Math.PI/2), rz=Math.sin(flyState.yaw+Math.PI/2);   // right (horizontal)
+  const p=flyState.pos;
+  const fwd=K['w']||K['arrowup'], bk=K['s']||K['arrowdown'], lf=K['a']||K['arrowleft'], rt=K['d']||K['arrowright'];
+  if(fwd){ p.x+=fx*sp; p.y+=fy*sp; p.z+=fz*sp; }
+  if(bk){  p.x-=fx*sp; p.y-=fy*sp; p.z-=fz*sp; }
+  if(lf){  p.x-=rx*sp; p.z-=rz*sp; }
+  if(rt){  p.x+=rx*sp; p.z+=rz*sp; }
+  if(K['q']||K[' ']) p.y+=sp;
+  if(K['e']||K['c']) p.y-=sp;
+  p.y=Math.max(p.y, 6);                                              // stay above the water
+  flyCam.position.copy(p);
+  flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
 }
 
 // ============================================================================
@@ -1979,6 +2008,7 @@ function onResize() {
   camera.updateProjectionMatrix();
   if (fpsCam) { fpsCam.aspect = aspect; fpsCam.updateProjectionMatrix(); }
   if (cineCam) { cineCam.aspect = aspect; cineCam.updateProjectionMatrix(); }
+  if (flyCam) { flyCam.aspect = aspect; flyCam.updateProjectionMatrix(); }
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
@@ -1995,13 +2025,22 @@ function initInput() {
       gotoTarget = { x: pt.x, z: pt.z }; setMode('goto');
     }
   });
-  // crow's-nest view: 'V' toggles, drag to look around
-  window.addEventListener('keydown', (e) => { if (e.key === 'v' || e.key === 'V') setView(!fpsMode); });
+  // crow's-nest view: 'V' toggles, drag to look around. Fly view: 'P' toggles, WASD/arrows to move, drag to look.
+  const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA');
+  window.addEventListener('keydown', (e) => {
+    if (typing(e)) return;
+    if (e.key === 'v' || e.key === 'V') setView(!fpsMode);
+    if (e.key === 'p' || e.key === 'P') setFly(!flyMode);
+    if (flyMode){ flyState.keys[e.key.toLowerCase()] = true; if(e.key===' ') e.preventDefault(); }
+  });
+  window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; });
   let dragging=false, lx=0, ly=0;
-  renderer.domElement.addEventListener('pointerdown', (e)=>{ if(fpsMode){ dragging=true; lx=e.clientX; ly=e.clientY; } });
+  renderer.domElement.addEventListener('pointerdown', (e)=>{ if(fpsMode||flyMode){ dragging=true; lx=e.clientX; ly=e.clientY; } });
   window.addEventListener('pointerup', ()=>{ dragging=false; });
-  window.addEventListener('pointermove', (e)=>{ if(fpsMode && dragging){
-    fpsYaw -= (e.clientX-lx)*0.004; fpsPitch = clampJS(fpsPitch - (e.clientY-ly)*0.004, -0.5, 0.5);
+  window.addEventListener('pointermove', (e)=>{ if(dragging && (fpsMode||flyMode)){
+    const dx=(e.clientX-lx)*0.004, dy=(e.clientY-ly)*0.004;
+    if (fpsMode){ fpsYaw -= dx; fpsPitch = clampJS(fpsPitch - dy, -0.5, 0.5); }
+    else { flyState.yaw += dx; flyState.pitch = clampJS(flyState.pitch - dy, -1.4, 1.4); }
     lx=e.clientX; ly=e.clientY; } });
 }
 
@@ -2218,6 +2257,9 @@ function buildPanel() {
   ui.viewBtn = el('div','btn', el('div','btns',s)); ui.viewBtn.textContent = 'View: Orbit 🗺';
   ui.viewBtn.onclick = () => setView(!fpsMode);
   const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
+  ui.flyBtn = el('div','btn', el('div','btns',s)); ui.flyBtn.textContent = '✈ Fly the map (P)';
+  ui.flyBtn.onclick = () => setFly(!flyMode);
+  const fhint = el('div','read',s); fhint.innerHTML = '<b>WASD</b>/arrows move · <b>Q/E</b> up·down · <b>Shift</b> boost · drag to look';
 
   // Cinematic tour director
   s = section(panel, 'Cinematic tour');
