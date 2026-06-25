@@ -239,7 +239,7 @@ const P = {
   bloom: false,       // HDR-ish glow post-process (guarded toggle)
   style: 'tropical',  // art-style re-grade: tropical | photoreal | pissarro | gauguin
   // cinematic tour director
-  cine: false,        // drive a perspective "director" camera that frames the boat cinematically
+  cine: true,         // drive a perspective "director" camera that frames the boat cinematically (default view)
   tourPace: true,     // stretch/compress boat speed so the whole route takes ~tourMinutes
   tourMinutes: 1,     // target duration for the full route (soft deadline; PID stays in control)
   cineStyle: 0.2,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
@@ -1060,6 +1060,7 @@ async function init() {
   applyHud();        // reflect any restored HUD-visibility settings
   onResize();        // apply any restored aspect-ratio lock + composition grid
   initInput();
+  if (P.cine) setCine(true);   // Director camera is the default view
 
   BLOCKED = buildBlocked();
   buildDistLand();
@@ -1869,7 +1870,42 @@ function stepEstimator(dt) {
 }
 
 let pathRibbon, estRing, gpsPings = [], gpsPtr = 0;
-const _glowCol = new THREE.Color();   // target glow is now drawn in the ocean shader (uTarget* uniforms)
+const _glowCol = new THREE.Color();
+let targetRing = null, targetRingKey = '';
+// soft vertical gradient (bright at the water line → fades up): the glow band's "rising" look
+function makeRingGlowTex(){
+  const W=4,H=64,c=document.createElement('canvas'); c.width=W;c.height=H; const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,H,0,0);   // bottom (water) → top
+  g.addColorStop(0.0,'rgba(255,255,255,0.95)'); g.addColorStop(0.45,'rgba(255,255,255,0.4)');
+  g.addColorStop(1.0,'rgba(255,255,255,0)');
+  x.fillStyle=g; x.fillRect(0,0,W,H); return new THREE.CanvasTexture(c);
+}
+// ONE smooth contour: a vertical glowing band offset just outside the coastline, height H so it stands
+// a little above the water (battles wave clipping). UV.v 0=base 1=top drives the gradient fade.
+function _ringGeom(pts, offset, H){
+  let R=pts; if (R.length>1 && R[0][0]===R[R.length-1][0] && R[0][1]===R[R.length-1][1]) R=R.slice(0,-1);
+  const step=Math.max(1,Math.floor(R.length/130)), Pp=[]; for(let i=0;i<R.length;i+=step) Pp.push(R[i]);
+  const N=Pp.length; if(N<3) return null;
+  let cx=0,cz=0; for(const p of Pp){cx+=p[0];cz+=p[1];} cx/=N; cz/=N;
+  const nrm=(i)=>{ const a=Pp[(i-1+N)%N],b=Pp[i],c=Pp[(i+1)%N]; let tx=c[0]-a[0],tz=c[1]-a[1]; const tl=Math.hypot(tx,tz)||1; tx/=tl;tz/=tl;
+    let nx=tz,nz=-tx; if(nx*(b[0]-cx)+nz*(b[1]-cz)<0){nx=-nx;nz=-nz;} return [nx,nz]; };
+  const off=(i)=>{ const p=Pp[i], n=nrm(i); return [p[0]+n[0]*offset, p[1]+n[1]*offset]; };
+  const pos=new Float32Array(N*18), uv=new Float32Array(N*12); let o=0,u=0;
+  const P3=(x,y,z)=>{pos[o++]=x;pos[o++]=y;pos[o++]=z;}, UV=(v)=>{uv[u++]=0;uv[u++]=v;};
+  for(let i=0;i<N;i++){ const i2=(i+1)%N, a=off(i), b=off(i2);
+    P3(a[0],0,a[1]);UV(0); P3(a[0],H,a[1]);UV(1); P3(b[0],H,b[1]);UV(1);
+    P3(a[0],0,a[1]);UV(0); P3(b[0],H,b[1]);UV(1); P3(b[0],0,b[1]);UV(0);
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+  return g;
+}
+function setTargetRing(ring, cx, cz, fallbackR){
+  let pts=ring;
+  if(!pts||pts.length<6){ pts=[]; const Rr=Math.max(fallbackR||26,18); for(let a=0;a<72;a++){ const th=a/72*Math.PI*2; pts.push([cx+Math.cos(th)*Rr, cz+Math.sin(th)*Rr]); } }
+  const g=_ringGeom(pts, 8, 4.5);
+  if(g){ if(targetRing.geometry) targetRing.geometry.dispose(); targetRing.geometry=g; targetRing.visible=true; } else targetRing.visible=false;
+}
 function buildNavVisuals() {
   // planned route as a ribbon of forward-tapering "wedge" dashes lying on the water (world-space width,
   // so perspective foreshortens them). The boat EATS dashes as it passes — only the path ahead draws.
@@ -1883,7 +1919,11 @@ function buildNavVisuals() {
     opacity: 0.7, depthTest: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));   // glowing dashes — depth-tested so the hull & wave crests occlude them (sunken look, not floating over the ship)
   pathRibbon.frustumCulled = false; pathRibbon.renderOrder = 5; scene.add(pathRibbon);
 
-  // (target glow is drawn in the ocean shader — see the uTarget* uniforms — so there's no geometry here)
+  // target glow: one smooth vertical glowing band hugging the target island's coastline (stands above the water)
+  targetRing = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({
+    map:makeRingGlowTex(), color:0xff7a2e, transparent:true, opacity:0, depthWrite:false,
+    blending:THREE.AdditiveBlending, side:THREE.DoubleSide, fog:true }));
+  targetRing.renderOrder = 3; targetRing.visible = false; scene.add(targetRing);
 
   estRing = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.4, 8, 20),
     new THREE.MeshBasicMaterial({ color: 0x7be08a, transparent: true, opacity: 0.85 }));
@@ -1942,19 +1982,19 @@ function updateNavVisuals(dt) {
     else m.material.opacity = 0; }
   if (estRing && kf) { const e = kf.est; estRing.position.set(e.px, 2.2, e.pz);
     estRing.visible = P.showGps; }    // toggled by "Show GPS fixes"
-  {
-    // target glow — drive the ocean-shader contour glow toward the target island (smooth, per-pixel)
+  if (targetRing) {
     if (P.mode !== 'hold') {
-      let tx, tz, rad;
-      if (P.mode === 'tour') { const isl = route[wpIdx]; tx=isl.x; tz=isl.z; rad=Math.max(isl.r,22); }
-      else { const tg = activeTarget(); tx=tg.x; tz=tg.z; rad=26; }
-      const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7);
-      uTargetPos.value.set(tx, tz);
-      uTargetRad.value = Math.max(rad*2.6, 90);                      // falloff radius scales with island size
+      let tx, tz, rad, ring=null, key;
+      if (P.mode === 'tour') { const isl = route[wpIdx]; tx=isl.x; tz=isl.z; rad=Math.max(isl.r,22); ring=isl.ring; key='t:'+(isl.name||wpIdx); }
+      else { const tg = activeTarget(); tx=tg.x; tz=tg.z; rad=26; key='g:'+Math.round(tx)+','+Math.round(tz); }
+      if (key !== targetRingKey){ targetRingKey=key; setTargetRing(ring, tx, tz, rad); }   // rebuild only on target change
+      const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7), yw = waveHeightJS(tx, tz, tt);
+      targetRing.position.y = yw + 0.2;                              // ride the wave surface; band rises above it
       _glowCol.setHSL(0.045 + 0.03*Math.sin(tt*0.5), 0.95, 0.6);     // warm red↔amber drift
-      uTargetCol.value.set(_glowCol.r, _glowCol.g, _glowCol.b);
-      uTargetGlow.value = 0.55 + 0.45*pulse;                         // pulse the brightness
-    } else { uTargetGlow.value = 0; }
+      targetRing.material.color.copy(_glowCol);
+      targetRing.material.opacity = 0.34 + 0.22*pulse;               // subtle, pulsing
+      targetRing.visible = true;
+    } else { targetRing.visible = false; }
   }
   updateWake(boat3, clock.elapsedTime);
 }
@@ -2207,15 +2247,7 @@ function buildOcean() {
 
     // art-style grade — desaturate toward luma + tint (so Ink/Monet etc. carry across the water too)
     const _gl = dot(col, vec3(0.299,0.587,0.114));
-    col.assign(mix(vec3(_gl), col, uGradeSat).mul(uGradeTint));
-
-    // ---- target glow: warm iso-depth contours that hug the target island, drawn per-pixel (smooth, no
-    //      geometry/segmentation), localized by a soft radial falloff and pulsed from JS via uTargetGlow ----
-    const _td   = vec2(positionWorld.x.sub(uTargetPos.x), positionWorld.z.sub(uTargetPos.y)).length();
-    const _tprx = smoothstep(uTargetRad, uTargetRad.mul(0.28), _td);          // 1 near the target → 0 far away
-    const _tband= depthN.mul(20.0);                                           // tighter contour spacing than the bathy overlay
-    const _tline= oneMinus(smoothstep(0.0, 0.15, abs(sin(_tband.mul(3.14159265)))));   // a touch softer/wider → glows more
-    col.addAssign(uTargetCol.mul(_tline.mul(_tprx).mul(uTargetGlow).mul(1.35)));        // brighter so the rings read through the water
+    col.assign(mix(vec3(_gl), col, uGradeSat).mul(uGradeTint));   // (target glow is geometry now — see targetRing)
 
     return col.mul(uDayBright);   // darken the sea at night
   });
@@ -2950,7 +2982,7 @@ async function enableOutline(){
 const SETTINGS_KEY = 'pidHelmsman.v1';
 function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
 function loadSettings(){ try { const s = localStorage.getItem(SETTINGS_KEY);
-  if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; P.cine = false; P.bloom = false; } } catch(_){ } }   // don't auto-restore pause / director cam / bloom
+  if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; P.cine = true; P.bloom = false; } } catch(_){ } }   // Director camera is the default view; don't auto-restore pause / bloom
 
 // Snapshot every control value + the active route into one portable, shareable object.
 // Transient/session-only flags are forced to their resting state so exported defaults are clean.
