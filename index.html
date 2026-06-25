@@ -249,6 +249,7 @@ const P = {
   showClouds: true,   // clouds (can hide them for a clean debug view)
   cloudSoft: true,    // cloud look: true = soft naturalistic, false = cartoon cel-shaded puffs
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
+  showRainParticles: true,   // world-space falling raindrops + splashes near the boat under storm cells
   aspect: 'fill',     // viewport aspect lock: 'fill' | '1:1' | '3:2' | '4:3' | '4:5' | '16:9' | '1.85:1' | '2.39:1'
   grid: 'off',        // composition overlay (UI only, NOT recorded): off|thirds|golden|center|diagonal|safe
   outline: true,      // woodblock ink outlines (Sobel edge post-pass) — only active on ink/hokusai styles
@@ -1049,7 +1050,7 @@ async function init() {
   buildTerrainField();
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain(); buildDipStick();
   boatMesh = buildBoat(); buildCamera();
-  buildClouds(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
+  buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
   buildShrubs(); buildTownMotifs();
   applySceneStyle();   // grade terrain + vegetation + towns to the active art style
   buildNavVisuals();
@@ -1371,6 +1372,7 @@ function updateEnvironment(dt) {
   applyStyleLighting();   // tint sky/lights/exposure for the selected art style (layers on top of day/night)
   if (skyMesh) skyMesh.position.set(controls.target.x, 0, controls.target.z);
   updateClouds(dt, sf, day);
+  updateRain(dt);
   updateBoatShadow(day);
 }
 
@@ -1378,6 +1380,7 @@ function updateEnvironment(dt) {
 let cloudGroups=[], cloudMats=[], cloudSprites=[], cloudBounds, cloudShadows=[], cloudShadowMat;
 let cloudTexSoft=null, cloudTexCartoon=null, cloudRainTex=null;
 let lightLight=null, boltMesh=null, lightT=0, lightDur=0, lightBaseY=300; const lightStrike=new THREE.Vector2();
+let rainMesh=null, rainDrops=[], splashPool=[], rainLocal=0; const _rd=new THREE.Object3D();   // raindrop particle system
 // cel-shaded puff: a soft round blob whose RGB is split into discrete light/mid/shadow
 // bands (light from top-left), so each sprite reads as a rounded cartoon puff.
 function makeCloudTexture(soft){
@@ -1427,6 +1430,23 @@ function makeRainTexture(){
   for(let i=0;i<30;i++){ const px=Math.random()*W, len=24+Math.random()*70, y0=Math.random()*H;
     x.globalAlpha=0.25+Math.random()*0.55; x.beginPath(); x.moveTo(px,y0); x.lineTo(px-2,y0+len); x.stroke(); }
   const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(3,2); return t;
+}
+// a single soft vertical rain streak (for the instanced falling-drop particles)
+function makeStreakTexture(){
+  const W=16,H=64,c=document.createElement('canvas'); c.width=W;c.height=H; const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'rgba(222,234,247,0)'); g.addColorStop(0.5,'rgba(222,234,247,0.9)'); g.addColorStop(1,'rgba(222,234,247,0)');
+  x.fillStyle=g; x.fillRect(W*0.34,0,W*0.32,H);
+  return new THREE.CanvasTexture(c);
+}
+// a thin bright ring (splash/ripple on the water — transparent centre, bright rim)
+function makeRingTexture(){
+  const N=64,c=document.createElement('canvas'); c.width=c.height=N; const x=c.getContext('2d');
+  const g=x.createRadialGradient(N/2,N/2,N*0.18,N/2,N/2,N*0.48);
+  g.addColorStop(0.0,'rgba(226,238,250,0)'); g.addColorStop(0.62,'rgba(226,238,250,0)');
+  g.addColorStop(0.80,'rgba(232,243,252,0.9)'); g.addColorStop(1.0,'rgba(232,243,252,0)');
+  x.fillStyle=g; x.fillRect(0,0,N,N);
+  return new THREE.CanvasTexture(c);
 }
 function buildClouds(){
   cloudTexSoft = makeCloudTexture(true); cloudTexCartoon = makeCloudTexture(false); cloudRainTex = makeRainTexture();
@@ -1489,7 +1509,7 @@ function updateClouds(dt, sf, day){
   const cloudsOn = P.showClouds !== false;
   for (const g of cloudGroups) g.visible = cloudsOn;
   for (const sh of cloudShadows) sh.visible = cloudsOn;
-  if (!cloudsOn){ if(lightLight) lightLight.intensity=0; if(boltMesh) boltMesh.visible=false; return; }
+  if (!cloudsOn){ if(lightLight) lightLight.intensity=0; if(boltMesh) boltMesh.visible=false; rainLocal=0; return; }
   const tint=lerp(1.0,0.34,sf), bright=0.10+0.90*day, op=(0.82+0.18*day);   // dark clouds at night (not glowing white)
   const cols=[[1,1,1],[0.90,0.94,1.0],[0.62,0.70,0.82]];   // brighter tops, darker shaded bases
   for (const s of cloudSprites){ const b=cols[s.userData.tier], ao=s.userData.ao, m=s.material;
@@ -1517,6 +1537,7 @@ function updateClouds(dt, sf, day){
       sh.material.opacity = clampJS(shadowOp + sf*(grp.userData.storm||0)*0.4, 0, 0.7); sh.visible = sh.material.opacity>0.01; }
   }
   uRain.value = clampJS(sf * localRain * 1.6, 0, 1);   // rain-on-lens ONLY when the boat is under/near a storm cell
+  rainLocal = uRain.value;                             // raindrop particles ride the same local-storm intensity
   // ---- lightning: random strikes under the stormiest cells; a bolt column + flash that lights the scene ----
   if (lightLight){
     if (lightT<=0 && sf>0.15 && Math.random() < sf*sf*dt*2.8){       // more frequent strikes in heavy storms
@@ -1536,6 +1557,42 @@ function updateClouds(dt, sf, day){
       renderer.toneMappingExposure *= (1 + flick*1.0);                  // bright whole-sky flash that pops against the dark storm
     } else { lightLight.intensity = 0; if (boltMesh) boltMesh.visible = false; }
   }
+}
+
+// ---- raindrop particle system: instanced falling streaks (varying sizes, wind-slanted) localized around
+//      the boat under a storm cell, with splash/ripple rings where each drop strikes the sea ----
+function buildRain(){
+  const N=420;
+  const g=new THREE.PlaneGeometry(1,1);
+  const mat=new THREE.MeshBasicMaterial({ map:makeStreakTexture(), color:0xcdddf0, transparent:true, opacity:0.6, depthWrite:false, side:THREE.DoubleSide, fog:true });
+  rainMesh=new THREE.InstancedMesh(g, mat, N); rainMesh.frustumCulled=false; rainMesh.count=0; rainMesh.renderOrder=3; scene.add(rainMesh);
+  for(let i=0;i<N;i++) rainDrops.push({ x:0,y:0,z:0, active:false, spd:120+Math.random()*90, len:5+Math.random()*11, wid:0.16+Math.random()*0.18 });
+  const ringTex=makeRingTexture(), rg=new THREE.PlaneGeometry(1,1); rg.rotateX(-Math.PI/2);
+  for(let i=0;i<80;i++){ const m=new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ map:ringTex, color:0xdaeaf8, transparent:true, opacity:0, depthWrite:false, fog:true }));
+    m.visible=false; m.renderOrder=3; scene.add(m); splashPool.push({ mesh:m, life:0, dur:0.5 }); }
+}
+function spawnSplash(x,y,z){ for(const s of splashPool){ if(s.life<=0){ s.dur=0.42+Math.random()*0.26; s.life=s.dur;
+  s.mesh.position.set(x, y+0.15, z); s.mesh.scale.set(2,2,1); s.mesh.material.opacity=0.6; s.mesh.visible=true; return; } } }
+function updateSplashes(dt){ for(const s of splashPool){ if(s.life>0){ s.life-=dt; const k=1-s.life/s.dur;
+  const sc=2+k*11; s.mesh.scale.set(sc,sc,1); s.mesh.material.opacity=Math.max(0,(1-k)*0.6); s.mesh.visible=s.life>0; } else s.mesh.visible=false; } }
+function updateRain(dt){
+  if(!rainMesh) return;
+  const on = (P.showRainParticles!==false) && rainLocal>0.04;
+  if(!on){ rainMesh.count=0; rainMesh.visible=false; updateSplashes(dt); return; }   // let existing splashes finish, no new drops
+  rainMesh.visible=true;
+  const t=clock.elapsedTime, cam=activeCam||camera, cx=boat3.x, cz=boat3.z, BOX=85, TOP=150;
+  const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), wdrift=8+P.windStrength*3;
+  const want=Math.max(0, Math.min(rainDrops.length, Math.floor(rainLocal*rainDrops.length)));
+  for(let i=0;i<want;i++){ const d=rainDrops[i];
+    if(!d.active){ d.active=true; d.x=cx+(Math.random()-0.5)*2*BOX; d.z=cz+(Math.random()-0.5)*2*BOX; d.y=Math.random()*TOP; }
+    d.y -= d.spd*dt; d.x += wx*wdrift*dt; d.z += wz*wdrift*dt;
+    const seaY=waveHeightJS(d.x, d.z, t);
+    if(d.y<=seaY){ spawnSplash(d.x, seaY, d.z); d.y=TOP; d.x=cx+(Math.random()-0.5)*2*BOX; d.z=cz+(Math.random()-0.5)*2*BOX; }
+    _rd.position.set(d.x, d.y, d.z); _rd.rotation.set(0, Math.atan2(cam.position.x-d.x, cam.position.z-d.z), 0);
+    _rd.scale.set(d.wid, d.len, 1); _rd.updateMatrix(); rainMesh.setMatrixAt(i, _rd.matrix);
+  }
+  rainMesh.count=want; rainMesh.instanceMatrix.needsUpdate=true;
+  updateSplashes(dt);
 }
 
 // ---- island night lights: warm glowing billboard Sprites on the land, lit after dusk.
@@ -2923,6 +2980,7 @@ function buildPanel() {
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
   addToggle(s, 'Clouds', P, 'showClouds');
   addToggle(s, 'Soft clouds (off = cartoon)', P, 'cloudSoft', ()=>setCloudStyle());
+  addToggle(s, 'Rain particles + splashes', P, 'showRainParticles');
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
   // View
