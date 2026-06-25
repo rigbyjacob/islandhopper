@@ -1301,13 +1301,47 @@ function buildVehicles(){
   FLEET.push({ id:'ship', label:'Ship', ship:true, cam:shipCam, _cp:new THREE.Vector3(), _cl:new THREE.Vector3(), camInit:false, camDist:55, camHigh:22 });
   const defs=[
     { id:'sub',   label:'Submarine', cruiseY:-34, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:20, mesh:buildSubMesh(),
-      route:routeFrom(['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts']) },
+      routeNames:['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts'] },
     { id:'plane', label:'Plane',     cruiseY:95,  cruiseSpeed:70,  turnRate:0.5,  accelK:0.5, arriveR:95, bank:1, camDist:78, camHigh:26, mesh:buildPlaneMesh(),
-      route:routeFrom(['St. Thomas','Tortola','Anguilla','St. Martin','St. Barths','Antigua']) },
+      routeNames:['St. Thomas','Tortola','Anguilla','St. Martin','St. Barths','Antigua'] },
     { id:'ufo',   label:'UFO',       cruiseY:135, cruiseSpeed:130, turnRate:1.6,  accelK:5.0, arriveR:75, camDist:62, camHigh:30, mesh:buildUfoMesh(),
-      route:routeFrom(['Antigua','Guadeloupe (N)','St. Kitts','Anguilla','Barbuda','Montserrat']) },
+      routeNames:['Antigua','Guadeloupe (N)','St. Kitts','Anguilla','Barbuda','Montserrat'] },
   ];
-  for (const d of defs){ const w=d.route[0]||{x:0,z:0}; const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); scene.add(v.mesh); FLEET.push(v); }
+  for (const d of defs){ d.route=routeFrom(d.routeNames); const w=d.route[0]||{x:0,z:0};
+    const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); v.routeNames=d.routeNames.slice(); scene.add(v.mesh); FLEET.push(v); }
+}
+// ---- submarine underwater nav grid: a hex cell is blocked where the seabed rises above the sub's depth
+//      (so it routes around islands/shoals). Rebuilt only when the sub's depth changes by > ~8u. ----
+let subBlocked=null, subDLAND=null, subGridDepth=null;
+function buildSubBlocked(depth){
+  const N=GRID.cols*GRID.rows, raw=new Uint8Array(N), thr=depth-3;   // need ~3u of water below the hull
+  for(let r=0;r<GRID.rows;r++)for(let c=0;c<GRID.cols;c++){ const p=cellCenter(c,r);
+    raw[gIdx(c,r)] = seabedHeight(p.x,p.z) > thr ? 1 : 0; }
+  const blk=raw.slice(), dist=new Int16Array(N).fill(9999), q=[], nb=[]; let head=0;   // inflate 1 ring
+  for(let i=0;i<N;i++) if(raw[i]){dist[i]=0;q.push(i);}
+  while(head<q.length){ const ci=q[head++]; if(dist[ci]>=1)continue; const r=Math.floor(ci/GRID.cols),c=ci-r*GRID.cols;
+    hexNbrs(c,r,nb); for(let k=0;k<nb.length;k+=2){const ni=gIdx(nb[k],nb[k+1]); if(dist[ni]>dist[ci]+1){dist[ni]=dist[ci]+1;blk[ni]=1;q.push(ni);}}}
+  return blk;
+}
+function buildSubDist(blk){
+  const N=GRID.cols*GRID.rows, D=new Int16Array(N).fill(9999), q=[], nb=[]; let head=0;
+  for(let i=0;i<N;i++) if(blk[i]){D[i]=0;q.push(i);}
+  while(head<q.length){const ci=q[head++],r=Math.floor(ci/GRID.cols),c=ci-r*GRID.cols;
+    hexNbrs(c,r,nb);for(let k=0;k<nb.length;k+=2){const ni=gIdx(nb[k],nb[k+1]);if(D[ni]>D[ci]+1){D[ni]=D[ci]+1;q.push(ni);}}}
+  return D;
+}
+function ensureSubGrid(depth){
+  if(subBlocked && subGridDepth!==null && Math.abs(depth-subGridDepth)<8) return;
+  subBlocked=buildSubBlocked(depth); subDLAND=buildSubDist(subBlocked); subGridDepth=depth;
+}
+function planSubPath(v, tx, tz){   // borrow the A* solver with the sub's grid swapped in, then restore
+  const sB=BLOCKED, sD=DLAND, sN=navDebug; BLOCKED=subBlocked; DLAND=subDLAND;
+  let pts;
+  try { const r=planRaw(v.pos.x, v.pos.z, tx, tz);
+        pts=(r.pts && r.pts.length>1) ? relaxPath(simplifyPath(r.pts), false, 70) : [{x:v.pos.x,z:v.pos.z},{x:tx,z:tz}]; }
+  catch(e){ pts=[{x:v.pos.x,z:v.pos.z},{x:tx,z:tz}]; }
+  finally { BLOCKED=sB; DLAND=sD; navDebug=sN; }
+  v.path=pts; v.pathIdx=0;
 }
 const _MKEYS=['w','a','s','d','q','e','c',' ','arrowup','arrowdown','arrowleft','arrowright'];
 function _piloting(){ for (const k of _MKEYS) if (manualKeys[k]) return true; return false; }
@@ -1329,8 +1363,19 @@ function _agentStep(v, dt){
   } else {
     v._manAlt=undefined;
     if (!v.route.length) return;
-    const tgt=v.route[v.wpIdx], dx=tgt.x-v.pos.x, dz=tgt.z-v.pos.z, dist=Math.hypot(dx,dz);
-    if (dist < v.arriveR) v.wpIdx=(v.wpIdx+1)%v.route.length;
+    const isl=v.route[v.wpIdx], distIsl=Math.hypot(isl.x-v.pos.x, isl.z-v.pos.z);
+    let aimx=isl.x, aimz=isl.z;
+    if (v.id==='sub'){                                    // route AROUND geometry via the underwater A* grid
+      ensureSubGrid(v.pos.y);
+      v._replanT=(v._replanT||0)-dt;
+      const depthMoved = v._planDepth===undefined || Math.abs(v.pos.y - v._planDepth) > 8;
+      if (!v.path || depthMoved || v._replanT<=0){ planSubPath(v, isl.x, isl.z); v._planDepth=v.pos.y; v._replanT=2.5; }
+      const path=v.path||[];
+      while (v.pathIdx<path.length-1 && Math.hypot(path[v.pathIdx].x-v.pos.x, path[v.pathIdx].z-v.pos.z) < 22) v.pathIdx++;
+      const ap=path[Math.min(v.pathIdx, path.length-1)]; if (ap){ aimx=ap.x; aimz=ap.z; }
+    }
+    if (distIsl < v.arriveR){ v.wpIdx=(v.wpIdx+1)%v.route.length; if (v.id==='sub') v.path=null; }
+    const dx=aimx-v.pos.x, dz=aimz-v.pos.z;
     const desYaw=Math.atan2(dz,dx), yErr=wrap(desYaw-v.yaw);
     const rate=v.hpid.step(yErr, v.yaw, dt, 2.2, 0.0, 0.5, -v.turnRate, v.turnRate, true);
     v.yaw=wrap(v.yaw+rate*dt);
@@ -1338,7 +1383,7 @@ function _agentStep(v, dt){
     const sErr=v.cruiseSpeed-v.speed;
     const acc=v.spid.step(sErr, v.speed, dt, v.accelK, 0, 0, -v.cruiseSpeed*5, v.cruiseSpeed*5, false);
     v.speed=Math.max(0, v.speed+acc*dt);
-    if (v.id==='ufo' && dist < v.arriveR*1.8) v.speed *= Math.pow(0.015, dt);   // saucery dart-and-hover stop
+    if (v.id==='ufo' && distIsl < v.arriveR*1.8) v.speed *= Math.pow(0.015, dt);   // saucery dart-and-hover stop
   }
   v.pos.x += Math.cos(v.yaw)*v.speed*dt; v.pos.z += Math.sin(v.yaw)*v.speed*dt;
   let targY;
@@ -1388,6 +1433,8 @@ function setFleetView(v){
   controls.enabled = !active && !fpsMode && !cineMode && !flyMode;
   if (ui.fleetBtns) for (const k in ui.fleetBtns) ui.fleetBtns[k].classList.toggle('active', k===v);
   const fg=document.getElementById('fleetgrid'); if (fg) fg.style.display = (v==='grid') ? 'grid' : 'none';
+  if (ui.fleetRoute){ const fv=FLEET.find(x=>x.id===v), editable=fv && !fv.ship;
+    ui.fleetRoute.disabled=!editable; ui.fleetRoute.value = editable ? (fv.routeNames||[]).join(', ') : ''; }
 }
 
 // ============================================================================
@@ -3212,7 +3259,14 @@ function buildPanel() {
     const b=el('div','btn',fleetRow); b.textContent=lbl; b.onclick=()=>setFleetView(k); ui.fleetBtns[k]=b;
   }
   ui.fleetBtns['off'].classList.add('active');
-  el('div','read',s).innerHTML = 'each vehicle self-navigates its own route · pilot the focused one with <b>WASD/Q/E</b>';
+  el('div','read',s).innerHTML = 'each vehicle self-navigates (director). Focus one and hold <b>WASD/Q·E</b> to pilot it.';
+  ui.fleetRoute = el('textarea','routebox',s); ui.fleetRoute.rows = 2; ui.fleetRoute.disabled = true;
+  ui.fleetRoute.placeholder = 'Select Sub / Plane / UFO, then set its island route (comma-separated)';
+  const frow = el('div','btns',s);
+  const applyFR = el('div','btn',frow); applyFR.textContent = 'Apply route';
+  applyFR.onclick = () => { const v=FLEET.find(x=>x.id===fleetView); if(!v||v.ship) return;
+    const names=ui.fleetRoute.value.split(',').map(x=>x.trim()).filter(Boolean); if(!names.length) return;
+    v.routeNames=names; v.route=routeFrom(names); v.wpIdx=0; v.path=null; };
 
   // Cinematic tour director
   s = section(panel, 'Cinematic tour');
