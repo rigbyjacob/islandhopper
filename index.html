@@ -3184,16 +3184,19 @@ function drawCompass(){
      when opened via file:// or deployed. Trigger with `just reload` (or `touch reload.txt`). -->
 <script>
 (function(){
-  if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
-  let last = null;
+  var host = location.hostname;
+  var local = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '[::1]' || host === '::1';
+  if (!local) { console.log('[live-reload] off (not localhost: "' + host + '")'); return; }
+  console.log('[live-reload] watching reload.txt every 1s');
+  var last = null;
   async function poll(){
     try {
-      const r = await fetch('reload.txt?_=' + Date.now(), { cache: 'no-store' });
-      if (!r.ok) return;
-      const v = r.headers.get('Last-Modified') || await r.text();
-      if (last !== null && v !== last) { location.reload(); return; }
-      last = v;
-    } catch(_) {}
+      var r = await fetch('reload.txt?_=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) { console.warn('[live-reload] reload.txt -> HTTP ' + r.status); return; }
+      var v = (await r.text()).trim();          // compare CONTENTS (a timestamp), not headers
+      if (last === null) { last = v; console.log('[live-reload] baseline ' + v); return; }
+      if (v !== last) { console.log('[live-reload] change ' + last + ' -> ' + v + ', reloading'); location.reload(); }
+    } catch(e) { console.warn('[live-reload] poll failed', e); }
   }
   setInterval(poll, 1000); poll();
 })();
