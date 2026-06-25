@@ -247,6 +247,7 @@ const P = {
   bathy: true,        // bathymetric overlay — show underwater depth + contours
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
   showClouds: true,   // clouds (can hide them for a clean debug view)
+  cloudSoft: true,    // cloud look: true = soft naturalistic, false = cartoon cel-shaded puffs
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
   aspect: 'fill',     // viewport aspect lock: 'fill' | '1:1' | '3:2' | '4:3' | '4:5' | '16:9' | '1.85:1' | '2.39:1'
   grid: 'off',        // composition overlay (UI only, NOT recorded): off|thirds|golden|center|diagonal|safe
@@ -1375,18 +1376,37 @@ function updateEnvironment(dt) {
 
 // ---- puffy clouds (white → gray with storms, dimmer at night) ----
 let cloudGroups=[], cloudMats=[], cloudSprites=[], cloudBounds, cloudShadows=[], cloudShadowMat;
+let cloudTexSoft=null, cloudTexCartoon=null;
 // cel-shaded puff: a soft round blob whose RGB is split into discrete light/mid/shadow
 // bands (light from top-left), so each sprite reads as a rounded cartoon puff.
-function makeCloudTexture(){
+function makeCloudTexture(soft){
   const N=128, c=document.createElement('canvas'); c.width=c.height=N; const x=c.getContext('2d');
-  // 1) alpha shape — a couple of overlapping soft discs for a slightly lumpy outline
+  if (soft){
+    // SOFT (naturalistic): several overlapping discs with WISPY falloff (no hard edge → no sticker outline)
+    for (let k=0;k<7;k++){
+      const r=N*(0.24+Math.random()*0.17), cx=N*0.5+(Math.random()-0.5)*N*0.28, cy=N*0.54+(Math.random()-0.5)*N*0.22;
+      const g=x.createRadialGradient(cx,cy,1,cx,cy,r);
+      g.addColorStop(0,'rgba(255,255,255,0.85)'); g.addColorStop(0.5,'rgba(255,255,255,0.55)'); g.addColorStop(1,'rgba(255,255,255,0)');
+      x.fillStyle=g; x.fillRect(0,0,N,N);
+    }
+    // smooth volumetric shading — continuous light→shadow ramp, light from upper-left, deeper shadow for volume
+    x.globalCompositeOperation='source-atop';
+    const lg=x.createRadialGradient(N*0.37,N*0.31,2, N*0.55,N*0.62,N*0.74);
+    lg.addColorStop(0.00,'rgb(255,255,255)');
+    lg.addColorStop(0.42,'rgb(236,242,249)');
+    lg.addColorStop(0.74,'rgb(186,199,218)');
+    lg.addColorStop(1.00,'rgb(140,156,182)');                 // darker underside → more self-shadow
+    x.fillStyle=lg; x.fillRect(0,0,N,N);
+    x.globalCompositeOperation='source-over';
+    return new THREE.CanvasTexture(c);
+  }
+  // CARTOON (cel): hard-edged alpha + quantized brightness bands, light from upper-left
   for (let k=0;k<4;k++){
     const r=N*(0.30+Math.random()*0.12), cx=N*0.5+(Math.random()-0.5)*N*0.18, cy=N*0.52+(Math.random()-0.5)*N*0.14;
     const g=x.createRadialGradient(cx,cy,1,cx,cy,r);
     g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.78,'rgba(255,255,255,1)'); g.addColorStop(1,'rgba(255,255,255,0)');
     x.fillStyle=g; x.fillRect(0,0,N,N);
   }
-  // 2) cel shading — quantized brightness bands, only over the puff (source-atop), light from upper-left
   x.globalCompositeOperation='source-atop';
   const lg=x.createRadialGradient(N*0.36,N*0.34,2, N*0.52,N*0.54,N*0.66);
   lg.addColorStop(0.00,'rgb(255,255,255)'); lg.addColorStop(0.40,'rgb(255,255,255)');   // highlight band
@@ -1397,8 +1417,11 @@ function makeCloudTexture(){
   x.globalCompositeOperation='source-over';
   return new THREE.CanvasTexture(c);
 }
+function setCloudStyle(){ const t = (P.cloudSoft!==false) ? cloudTexSoft : cloudTexCartoon;
+  for (const s of cloudSprites){ s.material.map = t; s.material.needsUpdate = true; } }
 function buildClouds(){
-  const tex=makeCloudTexture();
+  cloudTexSoft = makeCloudTexture(true); cloudTexCartoon = makeCloudTexture(false);
+  const tex = (P.cloudSoft!==false) ? cloudTexSoft : cloudTexCartoon;
   // 3 shading tiers (kept as colour reference; each sprite now owns its own tinted material so
   // we can bake per-puff ambient occlusion on top of the tier colour)
   const tierCols=[0xffffff, 0xeaf0f6, 0xb9c6d6];
@@ -1429,7 +1452,7 @@ function buildClouds(){
         const dxz=Math.hypot(a.position.x-b.position.x, a.position.z-b.position.z);
         const reach=(a.scale.x+b.scale.x)*0.45; if (dxz>=reach) continue;
         occ += (1-dxz/reach) * clampJS(dy/30,0.2,1); }
-      a.userData.ao = 1 - clampJS(occ*0.5, 0, 0.5);                       // darken at most 50%
+      a.userData.ao = 1 - clampJS(occ*0.66, 0, 0.62);                     // stronger self-shadow (darken up to 62%)
     }
     for (const s of puffs) cloudSprites.push(s);
     grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), baseY,
@@ -2850,6 +2873,7 @@ function buildPanel() {
   addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
   addToggle(s, 'Clouds', P, 'showClouds');
+  addToggle(s, 'Soft clouds (off = cartoon)', P, 'cloudSoft', ()=>setCloudStyle());
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
   // View
