@@ -308,6 +308,8 @@ function vnoise(x, z) { const ix=Math.floor(x), iz=Math.floor(z), fx=x-ix, fz=z-
   const a=hash(ix,iz), b=hash(ix+1,iz), c=hash(ix,iz+1), d=hash(ix+1,iz+1);
   return a*(1-u)*(1-v) + b*u*(1-v) + c*(1-u)*v + d*u*v; }
 function fbm(x, z) { let s=0, amp=0.5, f=1; for (let o=0;o<4;o++){ s+=amp*vnoise(x*f,z*f); f*=2; amp*=0.5; } return s; }
+// ridged multifractal — sharp crests (1-|n|)² stacked → volcanic spines, not rolling hills
+function ridge(x, z) { let s=0, amp=0.5, f=1; for (let o=0;o<4;o++){ const n=1-Math.abs(2*vnoise(x*f,z*f)-1); s+=amp*n*n; f*=2; amp*=0.5; } return s; }
 
 // real-coastline terrain: scanline-fill the island polygons, then a signed-distance
 // transform gives island relief AND gradual offshore shoals (no more cliff seabed).
@@ -347,7 +349,12 @@ function buildTerrainField(){
   for(let r=0;r<GH;r++)for(let c=0;c<GW;c++){ const i=I(c,r), wx=GX0+(c+0.5)*CELL, wz=GZ0+(r+0.5)*CELL;
     if(land[i]){
       const base = ELEV[li++] / 10;                         // real SRTM/GEBCO elevation (metres→world units), baked
-      const lh = 2.8 + base + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift land clear of the wave crests + micro-relief
+      // dramatic VOLCANIC relief: steepen where it's already tall (cones, not domes), and lay ridged
+      // crests on real high ground only (clamp keeps beaches/lowland smooth so coastlines stay clean).
+      const tall = clampJS(base/12, 0, 1);
+      const peakBoost = base * (1 + 0.55*tall);
+      const rdg = (ridge(wx*0.05, wz*0.05) - 0.4) * clampJS(base/6, 0, 1) * 2.8;
+      const lh = 2.8 + peakBoost + rdg + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift clear of crests + micro-relief
       Hh[i] = lh; Hsea[i] = lh;
     }
     else {
@@ -1894,7 +1901,10 @@ function buildOcean() {
     const clump  = smoothstep(0.34, 0.7, fbm2(xz.mul(0.022)));
     const crest = smoothstep(0.68,1.20,wh).mul(smoothstep(0.96,0.74,n.y));   // more whitecaps along the swell crests
     const whitecap = clamp(crest.mul(smoothstep(0.45,0.80, fnoise)).mul(clump), 0.0, 1.0);
-    const shoreFoam = smoothstep(0.8,0.98,sp).mul(smoothstep(0.32,0.7, fnoise));
+    // shoreline foam — a broken band hugging the islands that LAPS in and out (sin travelling up the
+    // shore-proximity gradient), brighter and wider than before so the coast reads as surf, not a flat edge
+    const lap = sin(sp.mul(42.0).sub(time.mul(2.3))).mul(0.5).add(0.5);
+    const shoreFoam = smoothstep(0.72,0.985,sp).mul(smoothstep(0.26,0.66, fnoise)).mul(float(0.5).add(lap.mul(0.7)));
     const foam = clamp(max(whitecap, shoreFoam), 0.0, 1.0);
     col.assign(mix(col, vec3(0.95,0.98,1.0), foam));
 
@@ -1941,25 +1951,44 @@ function buildTerrain() {
   const geo = new THREE.PlaneGeometry(W, H, segX, segY);
   geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
   const pos = geo.attributes.position, colors = new Float32Array(pos.count*3);
-  const hgt = new Float32Array(pos.count);               // cache heights for the AO pass
-  const sand=new THREE.Color(0xe6d6a8), grass=new THREE.Color(0x4f8a3c), forest=new THREE.Color(0x2f6630),
-        rock=new THREE.Color(0x7d756a), seabed=new THREE.Color(0x14506b), c=new THREE.Color();
+  const hgt = new Float32Array(pos.count), rough = new Float32Array(pos.count);   // heights for AO, per-vertex roughness
+  const dx=W/segX, dz=H/segY;
+  // PASS 1 — real GEBCO seabed/land height (must finish before slope can be read from neighbours)
+  for (let i=0;i<pos.count;i++){ const x=pos.getX(i), z=pos.getZ(i); const y=seabedHeight(x,z); pos.setY(i,y); hgt[i]=y; }
+  // PASS 2 — colour by HEIGHT *and* SLOPE: steep faces expose rock→cliff at any elevation, wet→dry beach band
+  const seabed=new THREE.Color(0x14506b), wetsand=new THREE.Color(0xa98c52), sand=new THREE.Color(0xe6d6a8),
+        grass=new THREE.Color(0x4f8a3c), forest=new THREE.Color(0x2f6630), rock=new THREE.Color(0x7d756a),
+        cliff=new THREE.Color(0x564f47), c=new THREE.Color();
   for (let i=0;i<pos.count;i++){
-    const x=pos.getX(i), z=pos.getZ(i); let y=seabedHeight(x,z); pos.setY(i,y); hgt[i]=y;   // real GEBCO seabed
-    if (y<0.2) c.copy(seabed);
-    else if (y<2.0) c.copy(seabed).lerp(sand, smooth01(clampJS((y-0.2)/1.8,0,1)));   // beach
-    else if (y<5.0) c.copy(sand).lerp(grass, smooth01(clampJS((y-2.0)/3.0,0,1)));    // lowland
-    else if (y<13)  c.copy(grass).lerp(forest, smooth01(clampJS((y-5.0)/8,0,1)));     // forested hills (most of the island)
-    else            c.copy(forest).lerp(rock, smooth01(clampJS((y-13)/6,0,1)));       // rocky peaks only
+    const x=pos.getX(i), z=pos.getZ(i), y=hgt[i], col=i%nx, row=(i/nx)|0;
+    const hL=hgt[col>0?i-1:i], hR=hgt[col<nx-1?i+1:i], hD=hgt[row>0?i-nx:i], hU=hgt[row<ny-1?i+nx:i];
+    const slope=Math.hypot((hR-hL)/(2*dx),(hU-hD)/(2*dz));            // |∇height| ≈ steepness
+    let rgh=0.95;
+    if (y<0.2){ c.copy(seabed); }
+    else if (y<1.4){                                                  // shoreline: dark WET sand → dry sand
+      c.copy(seabed).lerp(wetsand, smooth01(clampJS((y-0.2)/0.5,0,1)));
+      c.lerp(sand, smooth01(clampJS((y-0.75)/0.65,0,1)));
+      rgh = 0.55 + 0.4*clampJS((y-0.2)/1.2,0,1);                      // wet sand glossy, dry sand matte
+    } else {
+      if (y<5.0)      c.copy(sand).lerp(grass, smooth01(clampJS((y-1.4)/3.6,0,1)));
+      else if (y<13)  c.copy(grass).lerp(forest, smooth01(clampJS((y-5.0)/8,0,1)));
+      else            c.copy(forest).lerp(rock, smooth01(clampJS((y-13)/6,0,1)));
+      const steep=smooth01(clampJS((slope-0.5)/0.6,0,1));             // bare rock on steep faces
+      c.lerp(rock, steep*0.8);
+      const cliffy=smooth01(clampJS((slope-1.15)/0.7,0,1));           // dark cliff on the steepest
+      c.lerp(cliff, cliffy*0.9);
+      rgh = 0.92 - 0.3*Math.max(steep,cliffy);                        // rock catches a touch more light than foliage
+    }
     const tn=(fbm(x*0.12,z*0.12)-0.5)*0.12;
     colors[i*3]=clampJS(c.r+tn,0,1); colors[i*3+1]=clampJS(c.g+tn,0,1); colors[i*3+2]=clampJS(c.b+tn,0,1);
+    rough[i]=rgh;
   }
   // ---- baked horizon ambient occlusion (CPU, one-time) ----
   // For each land vertex, march outward in 8 compass directions over the height grid; the
   // steepest upward slope to a neighbour is that direction's "horizon". Vertices tucked at the
   // base of hills / inside coves see more sky blocked → darker. Peaks stay bright. Replaces the
   // GTAO post-process (which couldn't reproduce our custom-shader scene and read black by day).
-  const dx=W/segX, dz=H/segY, AO_R=16, DIRS=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  const AO_R=16, DIRS=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
   for (let r=0;r<ny;r++) for (let col=0;col<nx;col++){
     const i=r*nx+col, y=hgt[i];
     if (y<0.3) continue;                                  // skip open water/seabed (hidden under the ocean)
@@ -1977,9 +2006,23 @@ function buildTerrain() {
     const aoF = 1 - clampJS(horizon*0.7, 0, 0.5);         // darken at most 50%
     colors[i*3]*=aoF; colors[i*3+1]*=aoF; colors[i*3+2]*=aoF;
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors,3)); geo.computeVertexNormals();
-  const mat = new THREE.MeshStandardNodeMaterial({ roughness:0.95, metalness:0.0 });
+  geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+  geo.setAttribute('arough', new THREE.BufferAttribute(rough,1));
+  geo.computeVertexNormals();
+  // micro-normal detail: tilt land normals by a high-frequency noise gradient so flat slopes shimmer
+  // with rocky/leafy texture under the moving sun — geometry & silhouette stay exactly the same.
+  const nrm=geo.attributes.normal, ND=0.8, ne=0.9, nf=0.55;
+  for (let i=0;i<pos.count;i++){ if (hgt[i]<0.3) continue;
+    const x=pos.getX(i), z=pos.getZ(i);
+    const gx=(fbm((x+ne)*nf,z*nf)-fbm((x-ne)*nf,z*nf))/(2*ne);
+    const gz=(fbm(x*nf,(z+ne)*nf)-fbm(x*nf,(z-ne)*nf))/(2*ne);
+    let nX=nrm.getX(i)-gx*ND, nY=nrm.getY(i), nZ=nrm.getZ(i)-gz*ND, L=Math.hypot(nX,nY,nZ)||1;
+    nrm.setXYZ(i, nX/L, nY/L, nZ/L);
+  }
+  nrm.needsUpdate=true;
+  const mat = new THREE.MeshStandardNodeMaterial({ metalness:0.0 });
   mat.colorNode = attribute('color','vec3');
+  mat.roughnessNode = attribute('arough','float');   // wet sand glossy, foliage matte, rock in between
   const mesh = new THREE.Mesh(geo, mat); mesh.position.y = -0.05;
   mesh.castShadow = true; mesh.receiveShadow = true; scene.add(mesh);
 }
