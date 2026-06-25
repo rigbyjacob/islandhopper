@@ -350,7 +350,7 @@ function gebcoMetres(x,z){ const M=BATHY_META;
   const a=BATHY[r0*M.w+c0], b=BATHY[r0*M.w+c1], c=BATHY[r1*M.w+c0], d=BATHY[r1*M.w+c1];
   return (a*(1-tx)+b*tx)*(1-tz) + (c*(1-tx)+d*tx)*tz; }
 // compress 0..~8300 m of real depth into a viewable 0..60 world units (banks/shelves get the fine end)
-function compressM(dm){ return 60*(1-Math.exp(-Math.max(0,dm)/600)); }
+function compressM(dm){ return 110*(1-Math.exp(-Math.max(0,dm)/720)); }   // deeper seabed → real room for the submarine
 function gebcoDepthWorld(x,z){ return compressM(-gebcoMetres(x,z)); }
 function buildTerrainField(){
   let minX=1e9,maxX=-1e9,minZ=1e9,maxZ=-1e9;
@@ -1129,15 +1129,13 @@ async function init() {
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
-    const fleetSingle = (fleetView!=='off' && fleetView!=='grid') ? fleetCam(fleetView) : null;
-    if (fleetSingle) activeCam = fleetSingle;   // looking through one vehicle's director cam
     const useRain = rainActive && rainPost && stormFactor > 0.01;   // rain-on-lens only while storming
     const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
     try {
       if (fleetView==='grid'){ renderFleetGrid(); }
       else if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
       else if (useOutline){ outlineScenePass.camera = activeCam; outlineScenePass.scene = scene; outlinePost.render(); }
-      else if (bloomActive && bloomPost && !fpsMode && !cineMode && !flyMode && !fleetSingle) bloomPost.render();
+      else if (bloomActive && bloomPost && !fpsMode && !cineMode && !flyMode) bloomPost.render();
       else renderer.render(scene, activeCam);
     } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; outlineActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
@@ -1251,6 +1249,15 @@ function buildLights() {
 const FLEET = [];
 let fleetView = 'off';   // 'off' | 'ship' | 'sub' | 'plane' | 'ufo' | 'grid'
 const manualKeys = {};   // WASD/Q/E state for piloting the focused vehicle
+let dirSubjectId = 'ship';   // who the Director camera films (ship, or a focused vehicle)
+function _dirSubject(){
+  if (dirSubjectId!=='ship'){ const v=FLEET.find(x=>x.id===dirSubjectId);
+    if (v && !v.ship){ const w=v.route && v.route[v.wpIdx]; const tgt = w ? {x:w.x,z:w.z,r:40} : {x:v.pos.x,z:v.pos.z,r:40};
+      const scale = v.id==='sub'?0.42 : v.id==='plane'?1.3 : v.id==='ufo'?1.1 : 1;
+      return { x:v.pos.x, z:v.pos.z, y:v.pos.y, psi:v.yaw, path:v.path||null, tgt, scale }; } }
+  const t=clock.elapsedTime, tg=(route[wpIdx]||activeTarget());
+  return { x:boat3.x, z:boat3.z, y:waveHeightJS(boat3.x,boat3.z,t), psi:boat3.psi, path:path, tgt:tg, scale:1 };
+}
 function islandPt(name){ const i = ISLANDS.find(s=>s.name===name); return i ? {x:i.x, z:i.z} : null; }
 function routeFrom(names){ const r = names.map(islandPt).filter(Boolean); return r.length ? r : ISLANDS.slice(0,5).map(i=>({x:i.x,z:i.z})); }
 
@@ -1300,7 +1307,7 @@ function buildVehicles(){
   const shipCam=new THREE.PerspectiveCamera(52,1,0.5,26000);
   FLEET.push({ id:'ship', label:'Ship', ship:true, cam:shipCam, _cp:new THREE.Vector3(), _cl:new THREE.Vector3(), camInit:false, camDist:55, camHigh:22 });
   const defs=[
-    { id:'sub',   label:'Submarine', cruiseY:-34, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:20, mesh:buildSubMesh(),
+    { id:'sub',   label:'Submarine', cruiseY:-30, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:26, mesh:buildSubMesh(),
       routeNames:['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts'] },
     { id:'plane', label:'Plane',     cruiseY:95,  cruiseSpeed:70,  turnRate:0.5,  accelK:0.5, arriveR:95, bank:1, camDist:78, camHigh:26, mesh:buildPlaneMesh(),
       routeNames:['St. Thomas','Tortola','Anguilla','St. Martin','St. Barths','Antigua'] },
@@ -1308,7 +1315,25 @@ function buildVehicles(){
       routeNames:['Antigua','Guadeloupe (N)','St. Kitts','Anguilla','Barbuda','Montserrat'] },
   ];
   for (const d of defs){ d.route=routeFrom(d.routeNames); const w=d.route[0]||{x:0,z:0};
-    const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); v.routeNames=d.routeNames.slice(); scene.add(v.mesh); FLEET.push(v); }
+    const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); v.routeNames=d.routeNames.slice();
+    v.pathLine=makeVehLine(d.id==='sub'?0x44d0ff:d.id==='plane'?0xffd24a:0xff66cc);
+    scene.add(v.mesh); FLEET.push(v); }
+}
+function makeVehLine(color){   // debug polyline of a vehicle's route/path (shown with the nav-debug toggle)
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(256*3),3));
+  const l=new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent:true, opacity:0.85, depthTest:false }));
+  l.frustumCulled=false; l.renderOrder=6; l.visible=false; scene.add(l); return l;
+}
+function updateVehPath(v){
+  if (!v.pathLine) return;
+  if (!P.debugNav){ if (v.pathLine.visible) v.pathLine.visible=false; return; }
+  let pts;
+  if (v.id==='sub' && v.path && v.path.length>1) pts=v.path;                 // sub: its full A* path
+  else { const w=v.route && v.route[v.wpIdx]; pts = w ? [{x:v.pos.x,z:v.pos.z},{x:w.x,z:w.z}] : null; }   // others: line to target
+  if (!pts || pts.length<2){ v.pathLine.visible=false; return; }
+  const y=v.pos.y+0.5, arr=v.pathLine.geometry.attributes.position.array, n=Math.min(pts.length,256);
+  for (let i=0;i<n;i++){ arr[i*3]=pts[i].x; arr[i*3+1]=y; arr[i*3+2]=pts[i].z; }
+  v.pathLine.geometry.setDrawRange(0,n); v.pathLine.geometry.attributes.position.needsUpdate=true; v.pathLine.visible=true;
 }
 // ---- submarine underwater nav grid: a hex cell is blocked where the seabed rises above the sub's depth
 //      (so it routes around islands/shoals). Rebuilt only when the sub's depth changes by > ~8u. ----
@@ -1339,7 +1364,7 @@ function planSubPath(v, tx, tz){   // borrow the A* solver with the sub's grid s
   let pts;
   try { const r=planRaw(v.pos.x, v.pos.z, tx, tz);
         pts=(r.pts && r.pts.length>1) ? relaxPath(simplifyPath(r.pts), false, 70) : [{x:v.pos.x,z:v.pos.z},{x:tx,z:tz}]; }
-  catch(e){ pts=[{x:v.pos.x,z:v.pos.z},{x:tx,z:tz}]; }
+  catch(e){ console.warn('sub path plan failed', e); pts=[{x:v.pos.x,z:v.pos.z},{x:tx,z:tz}]; }
   finally { BLOCKED=sB; DLAND=sD; navDebug=sN; }
   v.path=pts; v.pathIdx=0;
 }
@@ -1412,7 +1437,7 @@ function _vehCam(v, dt){
   v.cam.position.copy(v._cp); v.cam.lookAt(v._cl);
   const _vp=computeViewport(); v.cam.aspect=_vp.w/_vp.h; v.cam.updateProjectionMatrix();   // single-view aspect (grid overrides)
 }
-function updateVehicles(dt){ for (const v of FLEET){ if (!v.ship) _agentStep(v, dt); _vehCam(v, dt); } }
+function updateVehicles(dt){ for (const v of FLEET){ if (!v.ship){ _agentStep(v, dt); updateVehPath(v); } _vehCam(v, dt); } }
 function fleetCam(id){ const v=FLEET.find(x=>x.id===id); return v ? v.cam : null; }
 const _gsz=new THREE.Vector2();
 function renderFleetGrid(){   // Brady-Bunch 2×2: ship / sub / plane / UFO
@@ -1427,10 +1452,17 @@ function renderFleetGrid(){   // Brady-Bunch 2×2: ship / sub / plane / UFO
   renderer.setScissorTest(false); renderer.setViewport(0,0,W,H);
 }
 function setFleetView(v){
-  fleetView = v; const active = (v!=='off');
-  if (active){ if (fpsMode) setView(false); if (flyMode) setFly(false); if (cineMode) setCine(false); }
-  else if (P.cine && !cineMode){ setCine(true); }   // back to Normal → restore the Director camera
-  controls.enabled = !active && !fpsMode && !cineMode && !flyMode;
+  fleetView = v;
+  if (v==='grid'){ if (fpsMode) setView(false); if (flyMode) setFly(false); }
+  else {
+    // single view = the FULL Director filming the chosen subject (ship for Normal/Ship, else the vehicle)
+    dirSubjectId = (v==='off'||v==='ship') ? 'ship' : v;
+    if (fpsMode) setView(false); if (flyMode) setFly(false);
+    cineInit = false;                                  // re-swoop onto the new subject
+    if (v==='off' || v==='ship'){ if (P.cine && !cineMode) setCine(true); }
+    else { if (!cineMode) setCine(true); }             // a focused vehicle is always filmed by the Director
+  }
+  controls.enabled = (v==='off'||v==='ship') && !cineMode && !fpsMode && !flyMode;
   if (ui.fleetBtns) for (const k in ui.fleetBtns) ui.fleetBtns[k].classList.toggle('active', k===v);
   const fg=document.getElementById('fleetgrid'); if (fg) fg.style.display = (v==='grid') ? 'grid' : 'none';
   if (ui.fleetRoute){ const fv=FLEET.find(x=>x.id===v), editable=fv && !fv.ship;
@@ -2337,7 +2369,7 @@ function buildBathyTexture(){
   const W=900, H=800, data=new Uint8Array(W*H*4);
   for (let j=0;j<H;j++) for (let i=0;i<W;i++){
     const x=lerp(BATHY_RGN.x0,BATHY_RGN.x1,i/(W-1)), z=lerp(BATHY_RGN.z0,BATHY_RGN.z1,j/(H-1));
-    const depth=clampJS(-seabedHeight(x,z), 0, 60), v=Math.round(depth/60*255), k=(j*W+i)*4;   // 0..60u compressed depth
+    const depth=clampJS(-seabedHeight(x,z), 0, 110), v=Math.round(depth/110*255), k=(j*W+i)*4;   // 0..110u compressed depth
     data[k]=v; data[k+1]=v; data[k+2]=v; data[k+3]=255;
   }
   // force the outer border to "deep" so ClampToEdge beyond the tile reads as uniform abyss (never streaks)
@@ -2778,44 +2810,39 @@ function springVec(pos, vel, target, omega, dt){
   }
 }
 function cineDesired(){
-  const t = clock.elapsedTime;
-  const bx = boat3.x, bz = boat3.z, by = waveHeightJS(bx, bz, t);
-  const ch = Math.cos(boat3.psi), sh = Math.sin(boat3.psi);   // heading unit
+  const S = _dirSubject(), sc = S.scale;                      // subject = ship or the focused vehicle
+  const bx = S.x, bz = S.z, by = S.y;
+  const ch = Math.cos(S.psi), sh = Math.sin(S.psi);           // heading unit
   const rx = sh, rz = -ch;                                    // starboard (right of heading)
-  // pick the side that looks ACROSS the boat toward the island cluster (opposite the most island mass),
-  // so Side/Race frame the islands rather than empty water. Recompute per island so it's stable on a leg.
-  if (wpIdx !== cineSideIdx){
-    let sum = 0;
-    for (const isl of ISLANDS){ const dx=isl.x-bx, dz=isl.z-bz, d2=dx*dx+dz*dz; if (d2 > 640000) continue;
-      sum += (dx*rx + dz*rz) / Math.max(d2, 400); }          // + = island mass to starboard
-    cineSideSgn = (sum > 0) ? -1 : 1;                         // sit opposite → islands fill the frame
-    cineSideIdx = wpIdx;
-  }
-  const sgn = cineSideSgn;
-  // ---- SIDE: profile the boat from the side, framing the islands beyond it ----
+  // pick the side that looks ACROSS the subject toward the island cluster (cheap; recomputed each call)
+  let sum = 0;
+  for (const isl of ISLANDS){ const dx=isl.x-bx, dz=isl.z-bz, d2=dx*dx+dz*dz; if (d2 > 640000) continue;
+    sum += (dx*rx + dz*rz) / Math.max(d2, 400); }
+  const sgn = (sum > 0) ? -1 : 1;
+  // ---- SIDE: profile the subject from the side, framing the islands beyond it ----
   if (P.cineView === 'side'){
-    _cDesP.set(bx + rx*128*sgn, by + 46, bz + rz*128*sgn);
+    _cDesP.set(bx + rx*128*sc*sgn, by + 46*sc, bz + rz*128*sc*sgn);
     const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+26)_cDesP.y=tH+26;
     _cDesL.set(bx + ch*8, by + 7, bz + sh*8);
     return;
   }
   // ---- RACE: tucked in close behind & to one side, low, zoomed — feel the action ----
   if (P.cineView === 'race'){
-    _cDesP.set(bx - ch*46 + rx*20*sgn, by + 17, bz - sh*46 + rz*20*sgn);
+    _cDesP.set(bx - ch*46*sc + rx*20*sc*sgn, by + 17*sc, bz - sh*46*sc + rz*20*sc*sgn);
     const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+12)_cDesP.y=tH+12;
     _cDesL.set(bx + ch*34, by + 9, bz + sh*34);              // look ahead down the course
     return;
   }
   // ---- FOLLOW (Adams↔Bresson slider) ----
-  // --- upcoming turn (signed: + left, − right) by sampling the planned path ahead of the boat ---
+  // --- upcoming turn (signed: + left, − right) by sampling the subject's planned path ahead ---
   let turn = 0;
-  if (path && path.length>1){
-    const a1 = pursuit(path, {x:bx,z:bz}, 35), a2 = pursuit(path, {x:bx,z:bz}, 110);
+  if (S.path && S.path.length>1){
+    const a1 = pursuit(S.path, {x:bx,z:bz}, 35), a2 = pursuit(S.path, {x:bx,z:bz}, 110);
     const h1 = Math.atan2(a1.z-bz, a1.x-bx), h2 = Math.atan2(a2.z-a1.z, a2.x-a1.x);
     turn = wrap(h2 - h1);
   }
   // --- event intensity → composition lean (0 Adams … 1 Bresson) ---
-  const tgt = route[wpIdx] || activeTarget();
+  const tgt = S.tgt;
   const distIsl = Math.hypot(bx-tgt.x, bz-tgt.z);
   const near = clampJS(1 - (distIsl-(tgt.r||40))/220, 0, 1);  // approaching/at the target island
   const turnInt = clampJS(Math.abs(turn)/0.6, 0, 1);
@@ -2830,15 +2857,15 @@ function cineDesired(){
   const swing  = clampJS(turn/0.6, -1, 1) * 95;
   // rule-of-thirds: push the look target sideways so the boat sits ~a third off-centre
   const thirdOff = lerp(42, 82, blend) * (turn>=0?1:-1);
-  _cDesP.set(bx - ch*back + rx*swing, by + hgt, bz - sh*back + rz*swing);
+  _cDesP.set(bx - ch*back*sc + rx*swing*sc, by + hgt*sc, bz - sh*back*sc + rz*swing*sc);
   const tH = terrainHeight(_cDesP.x, _cDesP.z); if (_cDesP.y < tH+30) _cDesP.y = tH+30;   // don't clip an island
-  // horizon-on-a-third: aim the look point low (boat + a touch up) and lead it ahead
-  _cDesL.set(bx + ch*lead + rx*thirdOff, by + 8, bz + sh*lead + rz*thirdOff);
+  // horizon-on-a-third: aim the look point low (subject + a touch up) and lead it ahead
+  _cDesL.set(bx + ch*lead*sc + rx*thirdOff, by + 8, bz + sh*lead + rz*thirdOff);
 }
 function updateCineCam(dt){
   // ---- helicopter showcase: when the boat reaches the FINAL island of the route, orbit the island
-  // while keeping the boat in focus for a few seconds, then resume normal follow ----
-  if (P.mode==='tour' && route.length){
+  // while keeping the boat in focus for a few seconds, then resume normal follow (ship subject only) ----
+  if (dirSubjectId==='ship' && P.mode==='tour' && route.length){
     const lastIdx = route.length-1;
     // fire at the FINAL island, and on the RETURN to the first island (after a lap) — but not at the
     // tour's very start. Requiring a different island than the last showcase lets it alternate last↔first.
@@ -2867,8 +2894,8 @@ function updateCineCam(dt){
   }
   cineDesired();
   if (!cineInit){   // swoop-in: start high & pulled back, springs glide down into the follow pose
-    const ch=Math.cos(boat3.psi), sh=Math.sin(boat3.psi);
-    _cP.set(boat3.x - ch*520, _cDesP.y + 470, boat3.z - sh*520);
+    const S=_dirSubject(), ch=Math.cos(S.psi), sh=Math.sin(S.psi);
+    _cP.set(S.x - ch*520, _cDesP.y + 470, S.z - sh*520);
     _cL.copy(_cDesL); _cPv.set(0,0,0); _cLv.set(0,0,0); cineInit = true;
   }
   // race tucks in and zooms; side/follow are wider. Spring the FOV so mode changes ease.
