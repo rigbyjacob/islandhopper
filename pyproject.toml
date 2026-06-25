@@ -1,0 +1,5 @@
+[project]
+name = "pid-helmsman-server"
+version = "0.1.0"
+description = "Local static dev server for the Caribbean PID Helmsman demo (stdlib http.server, no deps)."
+requires-python = ">=3.14"
