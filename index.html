@@ -1049,6 +1049,7 @@ async function init() {
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
   buildShrubs(); buildTownMotifs();
+  applySceneStyle();   // grade terrain + vegetation + towns to the active art style
   buildNavVisuals();
   buildWake();
   buildLabels();
@@ -1141,6 +1142,8 @@ const uSunCol  = uniform(new THREE.Vector3(1, 0.96, 0.85));
 const uSunInt  = uniform(1.0);
 const uZenith  = uniform(new THREE.Vector3(0.12, 0.43, 0.78));
 const uHorizon = uniform(new THREE.Vector3(0.76, 0.88, 0.96));
+const uGradeSat  = uniform(1.0);                       // art-style scene saturation for the WATER shader (1=normal, 0=gray)
+const uGradeTint = uniform(new THREE.Vector3(1, 1, 1));// art-style water tint
 const uDayBright = uniform(1.0);
 const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
 const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reactive); mirrors CPU seaAmp
@@ -1216,11 +1219,15 @@ function buildLights() {
 // Art-style re-grade — palette + material + lighting, layered ON TOP of the
 // day/night system (so dawn/dusk/storm still work; the style just tints the result).
 // ============================================================================
+// each style: terrain/veg/building grade (sat/contrast/warm), lighting (exposure/ambient/tints), and
+// sceneSat = how much the WATER + SKY desaturate (1 = full colour, 0 = monochrome ink).
 const STYLES = {
-  tropical:  { label:'Tropical (game)',                    exposure:1.00, sat:1.00, contrast:1.00, warm:0.00,  ambient:1.00, lightTint:[1,1,1],          skyTint:[1,1,1] },
-  photoreal: { label:'Photorealistic',                     exposure:1.00, sat:0.92, contrast:1.06, warm:-0.015, ambient:0.98, lightTint:[1,0.99,0.97],   skyTint:[1,1,1] },
-  pissarro:  { label:'Pissarro — Caribbean Impressionist', exposure:1.09, sat:0.80, contrast:0.90, warm:0.05,  ambient:1.18, lightTint:[1.06,1.00,0.90], skyTint:[1.05,1.02,0.95] },
-  gauguin:   { label:'Gauguin — Post-Impressionist',       exposure:1.02, sat:1.40, contrast:1.12, warm:0.04,  ambient:0.92, lightTint:[1.07,0.98,0.84], skyTint:[1.06,0.98,0.90] },
+  tropical:  { label:'Tropical (game)',                    exposure:1.00, sat:1.00, contrast:1.00, warm:0.00,  ambient:1.00, lightTint:[1,1,1],          skyTint:[1,1,1],          sceneSat:1.00 },
+  photoreal: { label:'Photorealistic',                     exposure:1.00, sat:0.92, contrast:1.06, warm:-0.015, ambient:0.98, lightTint:[1,0.99,0.97],   skyTint:[1,1,1],          sceneSat:1.00 },
+  pissarro:  { label:'Pissarro — Caribbean Impressionist', exposure:1.09, sat:0.80, contrast:0.90, warm:0.05,  ambient:1.18, lightTint:[1.06,1.00,0.90], skyTint:[1.05,1.02,0.95], sceneSat:1.00 },
+  gauguin:   { label:'Gauguin — Post-Impressionist',       exposure:1.02, sat:1.40, contrast:1.12, warm:0.04,  ambient:0.92, lightTint:[1.07,0.98,0.84], skyTint:[1.06,0.98,0.90], sceneSat:1.00 },
+  ink:       { label:'Japanese Ink (sumi-e)',              exposure:1.12, sat:0.05, contrast:1.55, warm:0.03,  ambient:1.30, lightTint:[1.02,1.00,0.94], skyTint:[1.07,1.05,0.97], sceneSat:0.06 },
+  monet:     { label:'Monet — Impressionist',              exposure:1.10, sat:0.66, contrast:0.84, warm:-0.01, ambient:1.28, lightTint:[1.00,0.99,1.03], skyTint:[1.02,1.00,1.06], sceneSat:0.74 },
 };
 function styleNow(){ return STYLES[P.style] || STYLES.tropical; }
 function gradeRGB(r, g, b, S){
@@ -1230,18 +1237,23 @@ function gradeRGB(r, g, b, S){
   r += S.warm; b -= S.warm;                                      // warm/cool shift
   return [clampJS(r,0,1), clampJS(g,0,1), clampJS(b,0,1)];
 }
-// terrain island colours are baked at build time; keep the un-graded "tropical" base so styles can
-// re-grade the existing buffer instantly (no expensive mesh rebuild on style switch)
-let terrainColorAttr=null, terrainBaseColors=null;
-function applyTerrainStyle(){
-  if (!terrainColorAttr || !terrainBaseColors) return;
-  const S=styleNow(), a=terrainColorAttr.array, base=terrainBaseColors;
-  for (let i=0;i<base.length;i+=3){ const g=gradeRGB(base[i],base[i+1],base[i+2],S); a[i]=g[0]; a[i+1]=g[1]; a[i+2]=g[2]; }
-  terrainColorAttr.needsUpdate=true;
+// All vertex-coloured land features (terrain, palms, shrubs, town buildings) bake their colours at build
+// time. We keep each one's un-graded base buffer and re-grade them ALL instantly on a style switch, so
+// the islands, vegetation and towns shift together (e.g. all go to ink wash) — no mesh rebuild.
+const styledColorAttrs = [];
+function registerStyledColors(geo){ const a = geo && geo.getAttribute && geo.getAttribute('color'); if (a) styledColorAttrs.push({ attr:a, base:a.array.slice() }); }
+function applySceneStyle(){
+  const S=styleNow();
+  for (const e of styledColorAttrs){ const a=e.attr.array, base=e.base;
+    for (let i=0;i<base.length;i+=3){ const g=gradeRGB(base[i],base[i+1],base[i+2],S); a[i]=g[0]; a[i+1]=g[1]; a[i+2]=g[2]; }
+    e.attr.needsUpdate=true; }
 }
-// multiply the just-computed sky/light uniforms by the style tint (called at the end of each env update)
+// desaturate a Vector3 colour uniform toward its luma by (1-sat), in place
+function desatV3(v, sat){ const l=0.299*v.x+0.587*v.y+0.114*v.z; v.set(l+(v.x-l)*sat, l+(v.y-l)*sat, l+(v.z-l)*sat); }
+// applied at the end of each env update: tint + desaturate the sky/sun/light, set the water grade uniforms
 function applyStyleLighting(){
-  const S=styleNow(), st=S.skyTint, lt=S.lightTint;
+  const S=styleNow(), st=S.skyTint, lt=S.lightTint, ss=S.sceneSat;
+  desatV3(uZenith.value, ss); desatV3(uHorizon.value, ss); desatV3(uSunCol.value, ss);
   uZenith.value.set(uZenith.value.x*st[0],  uZenith.value.y*st[1],  uZenith.value.z*st[2]);
   uHorizon.value.set(uHorizon.value.x*st[0], uHorizon.value.y*st[1], uHorizon.value.z*st[2]);
   uSunCol.value.set(uSunCol.value.x*st[0],   uSunCol.value.y*st[1],  uSunCol.value.z*st[2]);
@@ -1249,8 +1261,10 @@ function applyStyleLighting(){
   hemiLight.color.setRGB(hemiLight.color.r*lt[0], hemiLight.color.g*lt[1], hemiLight.color.b*lt[2]);
   hemiLight.intensity *= S.ambient;
   renderer.toneMappingExposure *= S.exposure;
+  uGradeSat.value = ss;                                          // water shader desaturation
+  uGradeTint.value.set(st[0], st[1], st[2]);                     // water shader tint
 }
-function setStyle(name){ if (STYLES[name]) P.style=name; applyTerrainStyle(); saveSettings(); }
+function setStyle(name){ if (STYLES[name]) P.style=name; applySceneStyle(); saveSettings(); }
 
 function updateEnvironment(dt) {
   const stormTarget = P.stormOn ? P.stormIntensity : 0;
@@ -1536,6 +1550,7 @@ function buildPalms(){
     makePalm({ trunkH:4.6, lean:0.26, nf:7, frondLen:3.0, droop:0.7,  trunkR:0.22 }),  // leaning
   ];
   const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85 });
+  for (const g of variants) registerStyledColors(g);   // palms join the style re-grade
   const CAPv = 240;
   const meshes = variants.map(g => { const m=new THREE.InstancedMesh(g, mat, CAPv);
     m.castShadow=true; m.receiveShadow=true; m.count=0; scene.add(m); return { m, n:0 }; });
@@ -1567,6 +1582,7 @@ function makeBush(){
 }
 function buildShrubs(){
   const g=makeBush(), mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.92 });
+  registerStyledColors(g);                              // shrubs join the style re-grade
   const CAP=640; const m=new THREE.InstancedMesh(g, mat, CAP); m.castShadow=true; m.receiveShadow=true; m.count=0; scene.add(m);
   const d=new THREE.Object3D(); let n=0;
   for (const isl of ISLANDS){ const big=isl.r>80;
@@ -1613,8 +1629,9 @@ function buildTownMotifs(){
     }
   }
   if (!geos.length) return;
+  const merged=mergeGeos(geos); registerStyledColors(merged);   // town buildings join the style re-grade
   const mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.82 });
-  const mesh=new THREE.Mesh(mergeGeos(geos), mat); mesh.castShadow=true; mesh.receiveShadow=true; scene.add(mesh);
+  const mesh=new THREE.Mesh(merged, mat); mesh.castShadow=true; mesh.receiveShadow=true; scene.add(mesh);
 }
 
 // ---- fireworks: the current target island celebrates the boat's visit (Sprite particle pool) ----
@@ -2040,6 +2057,10 @@ function buildOcean() {
     const blended = mix(col, depthCol, float(0.30)).add(vec3(0.7,0.9,1.0).mul(cline).mul(0.5));
     col.assign(mix(col, blended, uBathy.mul(bRad)));
 
+    // art-style grade — desaturate toward luma + tint (so Ink/Monet etc. carry across the water too)
+    const _gl = dot(col, vec3(0.299,0.587,0.114));
+    col.assign(mix(vec3(_gl), col, uGradeSat).mul(uGradeTint));
+
     return col.mul(uDayBright);   // darken the sea at night
   });
 
@@ -2120,8 +2141,7 @@ function buildTerrain() {
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
   geo.setAttribute('arough', new THREE.BufferAttribute(rough,1));
-  terrainColorAttr = geo.getAttribute('color'); terrainBaseColors = colors.slice();   // keep base for style re-grade
-  applyTerrainStyle();                                                                 // grade to the active style
+  registerStyledColors(geo);                                                           // terrain joins the style re-grade
   geo.computeVertexNormals();
   // micro-normal detail: tilt land normals by a high-frequency noise gradient so flat slopes shimmer
   // with rocky/leafy texture under the moving sun — geometry & silhouette stay exactly the same.
@@ -2749,7 +2769,7 @@ function buildPanel() {
   // HUD visibility toggles
   let s = section(panel, 'Display');
   addSelect(s, 'Art style', P, 'style',
-    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.']],
+    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.'],['ink','Japanese Ink (sumi-e)'],['monet','Monet — Impressionist']],
     (v)=>setStyle(v));
   addToggle(s, 'Title', P, 'showTitle', applyHud);
   addToggle(s, 'Control hints', P, 'showHints', applyHud);
