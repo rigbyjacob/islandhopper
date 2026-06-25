@@ -209,41 +209,42 @@ window.addEventListener('unhandledrejection', (ev) => {
 const P = {
   hKp: 1.8, hKi: 0.05, hKd: 1.1,        // heading PID  (error rad -> rudder rad)
   sKp: 0.10, sKi: 0.03, sKd: 0.0,        // speed PID    (error u/s -> throttle 0..1)
-  desiredSpeed: 22,
+  desiredSpeed: 30,
   desiredHeadingDeg: 90,
   mode: 'tour',                          // 'tour' | 'hold' | 'goto'
   curOn: true,  curStrength: 6,  curDirDeg: 205,
   windOn: true, windStrength: 5, windDirDeg: 60,
   tideOn: true,
-  stormOn: false, stormIntensity: 0.7,
+  stormOn: false, stormIntensity: 0.05,
   waveHeight: 1.0,    // sea state / swell amplitude — independent of storm (low enough islands stay afloat)
   paused: false,
   // navigation + estimation
   usePlanner: true,                      // A* path planning (tour/goto)
   navOnEstimate: true,                   // steer using the Kalman position estimate vs. true position
-  feedForward: false,                    // pre-crab using the estimated current
+  feedForward: true,                     // pre-crab using the estimated current
   gpsNoise: 5,                           // GPS std-dev (world units)
-  showPath: true, pathFull: true, showGps: false,   // pathFull: whole route vs just the next-waypoint leg
+  showPath: true, pathFull: false, showGps: false,   // pathFull: whole route vs just the next-waypoint leg
   // path following + grounding
   lookahead: 26,                         // pure-pursuit lookahead (smaller = hugs line tighter)
   xteGain: 0.012,                        // cross-track correction gain (bigger = snaps to line harder)
   draft: 2.6,                            // min water depth the hull needs to float
   // sky & time
-  autoDay: true, timeOfDay: 9.5, dayLength: 120,   // hours; dayLength = real seconds per full day
+  autoDay: true, timeOfDay: 19.69, dayLength: 120,   // hours; dayLength = real seconds per full day
   // HUD visibility
-  showTitle: true, showHints: true, showTelemetry: true, showCompass: true, showLabels: true,
+  showTitle: false, showHints: false, showTelemetry: false, showCompass: false, showLabels: true,
   // recording transition shape: fade-out → hold-at-full → fade-in (seconds), plus ease curve
   transFadeOut: 0.4, transHold: 0.2, transFadeIn: 0.4, transEase: 1.0,  // ease 0=linear … 1=smoothstep
   // lighting
   shadowDepth: 0.6,   // 0 = flat (lots of sky fill) … 1 = deep contrast (little fill, dark shaded sides)
   bloom: false,       // HDR-ish glow post-process (guarded toggle)
+  style: 'tropical',  // art-style re-grade: tropical | photoreal | pissarro | gauguin
   // cinematic tour director
   cine: false,        // drive a perspective "director" camera that frames the boat cinematically
-  tourPace: false,    // stretch/compress boat speed so the whole route takes ~tourMinutes
-  tourMinutes: 6,     // target duration for the full route (soft deadline; PID stays in control)
-  cineStyle: 0.5,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
+  tourPace: true,     // stretch/compress boat speed so the whole route takes ~tourMinutes
+  tourMinutes: 1,     // target duration for the full route (soft deadline; PID stays in control)
+  cineStyle: 0.2,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
   cineView: 'follow', // director camera mode: 'follow' (slider) | 'side' | 'race'
-  bathy: false,       // bathymetric overlay — show underwater depth + contours
+  bathy: true,        // bathymetric overlay — show underwater depth + contours
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
   showClouds: true,   // clouds (can hide them for a clean debug view)
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
@@ -811,7 +812,7 @@ function stepDynamics(s, dt, t) {
 // Guidance — A* path + pure-pursuit, producing desired heading + speed
 // ============================================================================
 const tourNames = ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
-                   'St. Martin','Anguilla','Virgin Gorda','Tortola','St. Thomas','Culebra'];
+                   'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
 let route = tourNames.map(n => BYNAME[n]).filter(Boolean);
 let wpIdx = 0;
 
@@ -1210,6 +1211,46 @@ function buildLights() {
 }
 
 // ---- unified day/night + weather environment, run every frame ----
+// ============================================================================
+// Art-style re-grade — palette + material + lighting, layered ON TOP of the
+// day/night system (so dawn/dusk/storm still work; the style just tints the result).
+// ============================================================================
+const STYLES = {
+  tropical:  { label:'Tropical (game)',                    exposure:1.00, sat:1.00, contrast:1.00, warm:0.00,  ambient:1.00, lightTint:[1,1,1],          skyTint:[1,1,1] },
+  photoreal: { label:'Photorealistic',                     exposure:1.00, sat:0.92, contrast:1.06, warm:-0.015, ambient:0.98, lightTint:[1,0.99,0.97],   skyTint:[1,1,1] },
+  pissarro:  { label:'Pissarro — Caribbean Impressionist', exposure:1.09, sat:0.80, contrast:0.90, warm:0.05,  ambient:1.18, lightTint:[1.06,1.00,0.90], skyTint:[1.05,1.02,0.95] },
+  gauguin:   { label:'Gauguin — Post-Impressionist',       exposure:1.02, sat:1.40, contrast:1.12, warm:0.04,  ambient:0.92, lightTint:[1.07,0.98,0.84], skyTint:[1.06,0.98,0.90] },
+};
+function styleNow(){ return STYLES[P.style] || STYLES.tropical; }
+function gradeRGB(r, g, b, S){
+  const l = 0.299*r + 0.587*g + 0.114*b;                         // saturation about luma
+  r = l+(r-l)*S.sat; g = l+(g-l)*S.sat; b = l+(b-l)*S.sat;
+  r = (r-0.5)*S.contrast+0.5; g = (g-0.5)*S.contrast+0.5; b = (b-0.5)*S.contrast+0.5;   // contrast about mid
+  r += S.warm; b -= S.warm;                                      // warm/cool shift
+  return [clampJS(r,0,1), clampJS(g,0,1), clampJS(b,0,1)];
+}
+// terrain island colours are baked at build time; keep the un-graded "tropical" base so styles can
+// re-grade the existing buffer instantly (no expensive mesh rebuild on style switch)
+let terrainColorAttr=null, terrainBaseColors=null;
+function applyTerrainStyle(){
+  if (!terrainColorAttr || !terrainBaseColors) return;
+  const S=styleNow(), a=terrainColorAttr.array, base=terrainBaseColors;
+  for (let i=0;i<base.length;i+=3){ const g=gradeRGB(base[i],base[i+1],base[i+2],S); a[i]=g[0]; a[i+1]=g[1]; a[i+2]=g[2]; }
+  terrainColorAttr.needsUpdate=true;
+}
+// multiply the just-computed sky/light uniforms by the style tint (called at the end of each env update)
+function applyStyleLighting(){
+  const S=styleNow(), st=S.skyTint, lt=S.lightTint;
+  uZenith.value.set(uZenith.value.x*st[0],  uZenith.value.y*st[1],  uZenith.value.z*st[2]);
+  uHorizon.value.set(uHorizon.value.x*st[0], uHorizon.value.y*st[1], uHorizon.value.z*st[2]);
+  uSunCol.value.set(uSunCol.value.x*st[0],   uSunCol.value.y*st[1],  uSunCol.value.z*st[2]);
+  sunLight.color.setRGB(sunLight.color.r*lt[0], sunLight.color.g*lt[1], sunLight.color.b*lt[2]);
+  hemiLight.color.setRGB(hemiLight.color.r*lt[0], hemiLight.color.g*lt[1], hemiLight.color.b*lt[2]);
+  hemiLight.intensity *= S.ambient;
+  renderer.toneMappingExposure *= S.exposure;
+}
+function setStyle(name){ if (STYLES[name]) P.style=name; applyTerrainStyle(); saveSettings(); }
+
 function updateEnvironment(dt) {
   const stormTarget = P.stormOn ? P.stormIntensity : 0;
   stormFactor += (stormTarget - stormFactor) * Math.min(1, dt*0.6);
@@ -1299,6 +1340,7 @@ function updateEnvironment(dt) {
   sunLight.castShadow = day > 0.06;
 
   renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.4*sf);
+  applyStyleLighting();   // tint sky/lights/exposure for the selected art style (layers on top of day/night)
   if (skyMesh) skyMesh.position.set(controls.target.x, 0, controls.target.z);
   updateClouds(dt, sf, day);
   updateBoatShadow(day);
@@ -2017,6 +2059,8 @@ function buildTerrain() {
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
   geo.setAttribute('arough', new THREE.BufferAttribute(rough,1));
+  terrainColorAttr = geo.getAttribute('color'); terrainBaseColors = colors.slice();   // keep base for style re-grade
+  applyTerrainStyle();                                                                 // grade to the active style
   geo.computeVertexNormals();
   // micro-normal detail: tilt land normals by a high-frequency noise gradient so flat slopes shimmer
   // with rocky/leafy texture under the moving sun — geometry & silhouette stay exactly the same.
@@ -2643,6 +2687,9 @@ function buildPanel() {
 
   // HUD visibility toggles
   let s = section(panel, 'Display');
+  addSelect(s, 'Art style', P, 'style',
+    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.']],
+    (v)=>setStyle(v));
   addToggle(s, 'Title', P, 'showTitle', applyHud);
   addToggle(s, 'Control hints', P, 'showHints', applyHud);
   addToggle(s, 'PID telemetry graphs', P, 'showTelemetry', applyHud);
