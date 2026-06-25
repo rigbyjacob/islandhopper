@@ -1228,6 +1228,10 @@ const STYLES = {
   gauguin:   { label:'Gauguin — Post-Impressionist',       exposure:1.02, sat:1.40, contrast:1.12, warm:0.04,  ambient:0.92, lightTint:[1.07,0.98,0.84], skyTint:[1.06,0.98,0.90], sceneSat:1.00 },
   ink:       { label:'Japanese Ink (sumi-e)',              exposure:1.12, sat:0.05, contrast:1.55, warm:0.03,  ambient:1.30, lightTint:[1.02,1.00,0.94], skyTint:[1.07,1.05,0.97], sceneSat:0.06 },
   monet:     { label:'Monet — Impressionist',              exposure:1.10, sat:0.66, contrast:0.84, warm:-0.01, ambient:1.28, lightTint:[1.00,0.99,1.03], skyTint:[1.02,1.00,1.06], sceneSat:0.74 },
+  // Hokusai ukiyo-e — deep Prussian-blue sea + white foam under a PALE CREAM sky → water & sky graded separately
+  hokusai:   { label:'Hokusai — Great Wave (ukiyo-e)',     exposure:1.05, sat:0.82, contrast:1.32, warm:0.02,  ambient:1.12, lightTint:[1.05,1.00,0.88],
+               skyTint:[1.14,1.07,0.88], skySat:0.28,                  // pale warm-cream sky
+               waterTint:[0.72,0.88,1.20], waterSat:0.95, sceneSat:0.92 },   // Prussian-blue sea
 };
 function styleNow(){ return STYLES[P.style] || STYLES.tropical; }
 function gradeRGB(r, g, b, S){
@@ -1252,8 +1256,11 @@ function applySceneStyle(){
 function desatV3(v, sat){ const l=0.299*v.x+0.587*v.y+0.114*v.z; v.set(l+(v.x-l)*sat, l+(v.y-l)*sat, l+(v.z-l)*sat); }
 // applied at the end of each env update: tint + desaturate the sky/sun/light, set the water grade uniforms
 function applyStyleLighting(){
-  const S=styleNow(), st=S.skyTint, lt=S.lightTint, ss=S.sceneSat;
-  desatV3(uZenith.value, ss); desatV3(uHorizon.value, ss); desatV3(uSunCol.value, ss);
+  const S=styleNow(), st=S.skyTint, lt=S.lightTint;
+  const skySat = S.skySat ?? S.sceneSat;                         // sky/sun desaturation
+  const waterSat = S.waterSat ?? S.sceneSat;                     // water desaturation (independent of sky)
+  const wt = S.waterTint ?? S.skyTint;                           // water tint (independent of sky)
+  desatV3(uZenith.value, skySat); desatV3(uHorizon.value, skySat); desatV3(uSunCol.value, skySat);
   uZenith.value.set(uZenith.value.x*st[0],  uZenith.value.y*st[1],  uZenith.value.z*st[2]);
   uHorizon.value.set(uHorizon.value.x*st[0], uHorizon.value.y*st[1], uHorizon.value.z*st[2]);
   uSunCol.value.set(uSunCol.value.x*st[0],   uSunCol.value.y*st[1],  uSunCol.value.z*st[2]);
@@ -1261,8 +1268,8 @@ function applyStyleLighting(){
   hemiLight.color.setRGB(hemiLight.color.r*lt[0], hemiLight.color.g*lt[1], hemiLight.color.b*lt[2]);
   hemiLight.intensity *= S.ambient;
   renderer.toneMappingExposure *= S.exposure;
-  uGradeSat.value = ss;                                          // water shader desaturation
-  uGradeTint.value.set(st[0], st[1], st[2]);                     // water shader tint
+  uGradeSat.value = waterSat;                                    // water shader desaturation
+  uGradeTint.value.set(wt[0], wt[1], wt[2]);                     // water shader tint
 }
 function setStyle(name){ if (STYLES[name]) P.style=name; applySceneStyle(); saveSettings(); }
 
@@ -2769,7 +2776,7 @@ function buildPanel() {
   // HUD visibility toggles
   let s = section(panel, 'Display');
   addSelect(s, 'Art style', P, 'style',
-    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.'],['ink','Japanese Ink (sumi-e)'],['monet','Monet — Impressionist']],
+    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.'],['ink','Japanese Ink (sumi-e)'],['monet','Monet — Impressionist'],['hokusai','Hokusai — Great Wave']],
     (v)=>setStyle(v));
   addToggle(s, 'Title', P, 'showTitle', applyHud);
   addToggle(s, 'Control hints', P, 'showHints', applyHud);
