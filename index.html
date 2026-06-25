@@ -1526,7 +1526,7 @@ function updateClouds(dt, sf, day){
     const T = tint*bright*ao*sd;
     m.color.setRGB(b[0]*T, b[1]*T, Math.min(1,b[2]*T*1.04));
     m.opacity = op*0.95; }
-  if (cloudRainTex) cloudRainTex.offset.y -= dt*1.6;        // rain falling (scroll the shaft texture)
+  if (cloudRainTex) cloudRainTex.offset.y += dt*1.6;        // rain FALLING (scroll the shaft texture downward)
   // drift with the wind — direction AND speed now respond to the wind controls
   const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=6 + P.windStrength*2.4 + 26*sf;
   const sy=Math.max(_sun.y, 0.16), shadowOp = clampJS(day*1.1,0,1)*(1-0.55*sf)*0.22;
