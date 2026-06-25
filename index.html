@@ -1285,7 +1285,7 @@ function updateEnvironment(dt) {
   const sf = stormFactor;
   // sea state is its own control now (independent of storm). Drives both the GPU surface (uSea)
   // and the CPU sampler that floats the boat (seaAmp).
-  seaAmp = P.waveHeight;
+  seaAmp = P.waveHeight * (1 + 0.7*sf);     // storms whip up bigger seas
   uSea.value = seaAmp;
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   if (dipStick) dipStick.visible = uBathy.value > 0.04;                 // depth sounding shows with bathymetry
@@ -1376,7 +1376,8 @@ function updateEnvironment(dt) {
 
 // ---- puffy clouds (white → gray with storms, dimmer at night) ----
 let cloudGroups=[], cloudMats=[], cloudSprites=[], cloudBounds, cloudShadows=[], cloudShadowMat;
-let cloudTexSoft=null, cloudTexCartoon=null;
+let cloudTexSoft=null, cloudTexCartoon=null, cloudRainTex=null;
+let lightLight=null, boltMesh=null, lightT=0, lightDur=0, lightBaseY=300; const lightStrike=new THREE.Vector2();
 // cel-shaded puff: a soft round blob whose RGB is split into discrete light/mid/shadow
 // bands (light from top-left), so each sprite reads as a rounded cartoon puff.
 function makeCloudTexture(soft){
@@ -1419,8 +1420,16 @@ function makeCloudTexture(soft){
 }
 function setCloudStyle(){ const t = (P.cloudSoft!==false) ? cloudTexSoft : cloudTexCartoon;
   for (const s of cloudSprites){ s.material.map = t; s.material.needsUpdate = true; } }
+// vertical rain streaks for the storm-cloud rain shafts (tiled, scrolled downward each frame)
+function makeRainTexture(){
+  const W=64,H=128,c=document.createElement('canvas'); c.width=W;c.height=H; const x=c.getContext('2d');
+  x.strokeStyle='rgba(205,218,232,0.65)'; x.lineWidth=1;
+  for(let i=0;i<30;i++){ const px=Math.random()*W, len=24+Math.random()*70, y0=Math.random()*H;
+    x.globalAlpha=0.25+Math.random()*0.55; x.beginPath(); x.moveTo(px,y0); x.lineTo(px-2,y0+len); x.stroke(); }
+  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(3,2); return t;
+}
 function buildClouds(){
-  cloudTexSoft = makeCloudTexture(true); cloudTexCartoon = makeCloudTexture(false);
+  cloudTexSoft = makeCloudTexture(true); cloudTexCartoon = makeCloudTexture(false); cloudRainTex = makeRainTexture();
   const tex = (P.cloudSoft!==false) ? cloudTexSoft : cloudTexCartoon;
   // 3 shading tiers (kept as colour reference; each sprite now owns its own tinted material so
   // we can bake per-puff ambient occlusion on top of the tier colour)
@@ -1432,6 +1441,7 @@ function buildClouds(){
   cloudBounds={ minX:MAP.minX-700, maxX:MAP.maxX+700, minZ:MAP.minZ-700, maxZ:MAP.maxZ+700 };
   for (let i=0;i<20;i++){
     const grp=new THREE.Group(); const puffs=[];
+    grp.userData.storm = Math.pow(Math.random(), 1.6);   // 0..1 storm potential, biased toward gentle
     const w=130+Math.random()*120, baseY=300+Math.random()*170;
     // flatter shaded base row
     const nb=3+Math.floor(Math.random()*3);
@@ -1454,7 +1464,12 @@ function buildClouds(){
         occ += (1-dxz/reach) * clampJS(dy/30,0.2,1); }
       a.userData.ao = 1 - clampJS(occ*0.66, 0, 0.62);                     // stronger self-shadow (darken up to 62%)
     }
-    for (const s of puffs) cloudSprites.push(s);
+    for (const s of puffs){ s.userData.storm = grp.userData.storm; cloudSprites.push(s); }
+    // rain shaft hanging from the cloud base to the sea (open cylinder; hidden unless storming)
+    const shH = baseY*0.94;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(w*0.30, w*0.44, shH, 12, 1, true),
+      new THREE.MeshBasicMaterial({ map:cloudRainTex, color:0x8c9bb0, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide, fog:true }));
+    shaft.position.y = -shH/2; shaft.renderOrder=2; grp.add(shaft); grp.userData.rain = shaft;
     grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), baseY,
       cloudBounds.minZ+Math.random()*(cloudBounds.maxZ-cloudBounds.minZ));
     grp.userData.spd=0.5+Math.random()*0.8; grp.userData.w=w; scene.add(grp); cloudGroups.push(grp);
@@ -1463,18 +1478,26 @@ function buildClouds(){
       map:makeDotTexture(), color:0x09131d, transparent:true, opacity:0, depthWrite:false }));
     sh.rotation.x=-Math.PI/2; sh.renderOrder=1; scene.add(sh); cloudShadows.push(sh);
   }
+  // lightning: a localized flash point-light + a bright bolt column, reused for each strike
+  lightLight = new THREE.PointLight(0xdfe9ff, 0, 3200, 1.3); scene.add(lightLight);
+  boltMesh = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 0.6, 1, 6, 1),
+    new THREE.MeshBasicMaterial({ color:0xf2f6ff, transparent:true, opacity:0, depthWrite:false, fog:false }));
+  boltMesh.visible=false; boltMesh.renderOrder=6; scene.add(boltMesh);
 }
 function updateClouds(dt, sf, day){
   if(!cloudSprites.length) return;
   const cloudsOn = P.showClouds !== false;
   for (const g of cloudGroups) g.visible = cloudsOn;
   for (const sh of cloudShadows) sh.visible = cloudsOn;
-  if (!cloudsOn) return;
+  if (!cloudsOn){ if(lightLight) lightLight.intensity=0; if(boltMesh) boltMesh.visible=false; return; }
   const tint=lerp(1.0,0.34,sf), bright=0.10+0.90*day, op=(0.82+0.18*day);   // dark clouds at night (not glowing white)
   const cols=[[1,1,1],[0.90,0.94,1.0],[0.62,0.70,0.82]];   // brighter tops, darker shaded bases
   for (const s of cloudSprites){ const b=cols[s.userData.tier], ao=s.userData.ao, m=s.material;
-    m.color.setRGB(b[0]*tint*bright*ao, b[1]*tint*bright*ao, Math.min(1,b[2]*tint*bright*ao*1.04));
+    const sd = 1 - 0.74*sf*(s.userData.storm||0);          // storm cells go charcoal under the storm
+    const T = tint*bright*ao*sd;
+    m.color.setRGB(b[0]*T, b[1]*T, Math.min(1,b[2]*T*1.04));
     m.opacity = op*0.95; }
+  if (cloudRainTex) cloudRainTex.offset.y -= dt*1.6;        // rain falling (scroll the shaft texture)
   // drift with the wind — direction AND speed now respond to the wind controls
   const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=6 + P.windStrength*2.4 + 26*sf;
   const sy=Math.max(_sun.y, 0.16), shadowOp = clampJS(day*1.1,0,1)*(1-0.55*sf)*0.22;
@@ -1482,10 +1505,31 @@ function updateClouds(dt, sf, day){
     grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
     if(grp.position.x>cloudBounds.maxX)grp.position.x=cloudBounds.minX; if(grp.position.x<cloudBounds.minX)grp.position.x=cloudBounds.maxX;
     if(grp.position.z>cloudBounds.maxZ)grp.position.z=cloudBounds.minZ; if(grp.position.z<cloudBounds.minZ)grp.position.z=cloudBounds.maxZ;
+    const r=grp.userData.rain; if(r){ const ro=clampJS(sf*(grp.userData.storm||0)*0.7, 0, 0.6);   // rain shaft scales with storm × cell
+      r.material.opacity=ro; r.visible = ro>0.012; }
     const sh=cloudShadows[i]; if(sh){ const tproj=grp.position.y/sy;   // project the cloud down the sun ray to the sea
       sh.position.set(grp.position.x - _sun.x*tproj, 1.8, grp.position.z - _sun.z*tproj);
       const ss=grp.userData.w*1.25; sh.scale.set(ss, ss, 1);
-      sh.material.opacity = shadowOp; sh.visible = shadowOp>0.01; }
+      sh.material.opacity = clampJS(shadowOp + sf*(grp.userData.storm||0)*0.4, 0, 0.7); sh.visible = sh.material.opacity>0.01; }
+  }
+  // ---- lightning: random strikes under the stormiest cells; a bolt column + flash that lights the scene ----
+  if (lightLight){
+    if (lightT<=0 && sf>0.18 && Math.random() < sf*sf*dt*1.4){
+      let best=cloudGroups[0], bs=-1;                                   // weighted pick toward stormy cells
+      for (const g of cloudGroups){ const v=g.userData.storm*Math.random(); if(v>bs){ bs=v; best=g; } }
+      lightStrike.set(best.position.x, best.position.z); lightBaseY=best.position.y;
+      lightDur = 0.26 + Math.random()*0.20; lightT = lightDur;
+      boltMesh.position.set(best.position.x, best.position.y*0.5, best.position.z);
+      boltMesh.scale.set(1, best.position.y*0.94, 1);
+    }
+    if (lightT>0){ lightT -= dt;
+      const k = clampJS(lightT/Math.max(lightDur,1e-3), 0, 1);
+      const flick = k * (0.55 + 0.45*Math.sin(k*40));                   // flicker that fades out
+      lightLight.position.set(lightStrike.x, lightBaseY*0.5, lightStrike.y);
+      lightLight.intensity = flick * 2600;
+      boltMesh.material.opacity = clampJS(flick*1.6, 0, 1); boltMesh.visible = true;
+      renderer.toneMappingExposure *= (1 + flick*0.55);                 // brief whole-sky flash
+    } else { lightLight.intensity = 0; if (boltMesh) boltMesh.visible = false; }
   }
 }
 
