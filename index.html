@@ -1338,12 +1338,12 @@ function updateVehPath(v){
 //      (so it routes around islands/shoals). Rebuilt only when the sub's depth changes by > ~8u. ----
 let subBlocked=null, subDLAND=null, subGridDepth=null;
 function buildSubBlocked(depth){
-  const N=GRID.cols*GRID.rows, raw=new Uint8Array(N), thr=depth-3;   // need ~3u of water below the hull
+  const N=GRID.cols*GRID.rows, raw=new Uint8Array(N), thr=depth-6;   // keep ~6u of water below the hull (covers bob + margin)
   for(let r=0;r<GRID.rows;r++)for(let c=0;c<GRID.cols;c++){ const p=cellCenter(c,r);
     raw[gIdx(c,r)] = seabedHeight(p.x,p.z) > thr ? 1 : 0; }
-  const blk=raw.slice(), dist=new Int16Array(N).fill(9999), q=[], nb=[]; let head=0;   // inflate 1 ring
+  const blk=raw.slice(), dist=new Int16Array(N).fill(9999), q=[], nb=[]; let head=0;   // inflate 2 rings (~7u lateral clearance from slopes)
   for(let i=0;i<N;i++) if(raw[i]){dist[i]=0;q.push(i);}
-  while(head<q.length){ const ci=q[head++]; if(dist[ci]>=1)continue; const r=Math.floor(ci/GRID.cols),c=ci-r*GRID.cols;
+  while(head<q.length){ const ci=q[head++]; if(dist[ci]>=2)continue; const r=Math.floor(ci/GRID.cols),c=ci-r*GRID.cols;
     hexNbrs(c,r,nb); for(let k=0;k<nb.length;k+=2){const ni=gIdx(nb[k],nb[k+1]); if(dist[ni]>dist[ci]+1){dist[ni]=dist[ci]+1;blk[ni]=1;q.push(ni);}}}
   return blk;
 }
@@ -1390,10 +1390,10 @@ function _agentStep(v, dt){
     const isl=v.route[v.wpIdx], distIsl=Math.hypot(isl.x-v.pos.x, isl.z-v.pos.z);
     let aimx=isl.x, aimz=isl.z;
     if (v.id==='sub'){                                    // route AROUND geometry via the underwater A* grid
-      ensureSubGrid(v.pos.y);
+      ensureSubGrid(v.cruiseY);                          // grid at the NOMINAL depth (stable; bobbing won't thrash it)
       v._replanT=(v._replanT||0)-dt;
-      const depthMoved = v._planDepth===undefined || Math.abs(v.pos.y - v._planDepth) > 8;
-      if (!v.path || depthMoved || v._replanT<=0){ planSubPath(v, isl.x, isl.z); v._planDepth=v.pos.y; v._replanT=2.5; }
+      const depthMoved = v._planDepth===undefined || Math.abs(v.cruiseY - v._planDepth) > 8;
+      if (!v.path || depthMoved || v._replanT<=0){ planSubPath(v, isl.x, isl.z); v._planDepth=v.cruiseY; v._replanT=2.5; }
       const path=v.path||[];
       while (v.pathIdx<path.length-1 && Math.hypot(path[v.pathIdx].x-v.pos.x, path[v.pathIdx].z-v.pos.z) < 22) v.pathIdx++;
       const ap=path[Math.min(v.pathIdx, path.length-1)]; if (ap){ aimx=ap.x; aimz=ap.z; }
@@ -1413,7 +1413,7 @@ function _agentStep(v, dt){
   let targY;
   if (v.manual) targY=v._manAlt;
   else if (v.id==='ufo') targY=v.cruiseY+Math.sin(tt*1.3)*6;
-  else if (v.id==='sub') targY=v.cruiseY+Math.sin(tt*0.7)*3;
+  else if (v.id==='sub') targY=v.cruiseY+Math.sin(tt*0.7)*1.5;   // gentle bob (kept small so the hull stays within its depth-grid clearance)
   else targY=v.cruiseY;
   v.pos.y += (targY-v.pos.y)*Math.min(1,dt*1.6);
   v.pitch += (clampJS((targY-v.pos.y)*0.02,-0.3,0.3) - v.pitch)*Math.min(1,dt*4);
