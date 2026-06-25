@@ -35,6 +35,10 @@ open: serve
 refresh: serve
     open "{{url}}"
 
+# Live-reload: bump the touchfile so any open localhost tab reloads itself (no need to re-focus the browser)
+reload:
+    @date +%s > reload.txt && echo "reload triggered"
+
 # Stop, then start fresh
 restart: stop serve
 

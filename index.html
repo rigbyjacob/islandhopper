@@ -3180,5 +3180,23 @@ function drawCompass(){
   ccx.fillStyle='#c79a44'; ccx.beginPath(); ccx.arc(cx,cy,3,0,7); ccx.fill();
 }
 </script>
+<!-- Dev live-reload: poll a touchfile and reload when it changes. Localhost-only, so it does nothing
+     when opened via file:// or deployed. Trigger with `just reload` (or `touch reload.txt`). -->
+<script>
+(function(){
+  if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
+  let last = null;
+  async function poll(){
+    try {
+      const r = await fetch('reload.txt?_=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      const v = r.headers.get('Last-Modified') || await r.text();
+      if (last !== null && v !== last) { location.reload(); return; }
+      last = v;
+    } catch(_) {}
+  }
+  setInterval(poll, 1000); poll();
+})();
+</script>
 </body>
 </html>
