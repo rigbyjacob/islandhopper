@@ -1284,9 +1284,18 @@ function updateEnvironment(dt) {
   const stormTarget = P.stormOn ? P.stormIntensity : 0;
   stormFactor += (stormTarget - stormFactor) * Math.min(1, dt*0.6);
   const sf = stormFactor;
+  // localStorm = how hard the storm is felt AT THE BOAT (proximity to a storm cell). The per-cloud cells
+  // still use sf (so distant cells stay dark & raining), but the AMBIENT weather — sky darkening, sea
+  // state, exposure, fog — rides localStorm, so you can leave the storm on yet only get caught in it
+  // when you sail under a storm cloud.
+  let _bp = 0;
+  for (const g of cloudGroups){ const s = g.userData.storm||0; if (s<0.05) continue;
+    const d = Math.hypot(boat3.x-g.position.x, boat3.z-g.position.z), R = g.userData.w*1.7;
+    _bp = Math.max(_bp, s*clampJS(1 - d/R, 0, 1)); }
+  const localStorm = sf * _bp;
   // sea state is its own control now (independent of storm). Drives both the GPU surface (uSea)
   // and the CPU sampler that floats the boat (seaAmp).
-  seaAmp = P.waveHeight * (1 + 1.0*sf);     // storms whip up bigger seas
+  seaAmp = P.waveHeight * (1 + 1.0*localStorm);     // rough seas only near a storm cell
   uSea.value = seaAmp;
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   if (dipStick) dipStick.visible = uBathy.value > 0.04;                 // depth sounding shows with bathymetry
@@ -1303,19 +1312,19 @@ function updateEnvironment(dt) {
   _cHor.copy(C.horNight).lerp(C.horDay, day).lerp(C.horGold, warm);
   _cSun.copy(C.sunDay).lerp(C.sunGold, warm);
   _cLight.copy(C.ltNight).lerp(C.ltDay, day).lerp(C.ltGold, warm*0.8);
-  if (sf>0){ _cZen.lerp(C.stormGray, sf*0.92); _cHor.lerp(C.stormGray, sf*0.88); _cLight.lerp(C.stormGray, sf*0.78); }
+  if (localStorm>0){ _cZen.lerp(C.stormGray, localStorm*0.92); _cHor.lerp(C.stormGray, localStorm*0.88); _cLight.lerp(C.stormGray, localStorm*0.78); }
 
   uZenith.value.set(_cZen.r,_cZen.g,_cZen.b);
   uHorizon.value.set(_cHor.r,_cHor.g,_cHor.b);
   uSunDir.value.copy(_sun);
   uSunCol.value.set(_cSun.r,_cSun.g,_cSun.b);
-  uSunInt.value  = (0.25 + 1.5*day) * (1 - 0.7*sf);
-  uDayBright.value = (0.09 + 0.91*day) * (1 - 0.45*sf);   // much darker at night so shallows/foam don't glow
+  uSunInt.value  = (0.25 + 1.5*day) * (1 - 0.7*localStorm);
+  uDayBright.value = (0.09 + 0.91*day) * (1 - 0.45*localStorm);   // much darker at night so shallows/foam don't glow
   uNight.value = clampJS((0.14 - e) / 0.18, 0, 1);                 // lights come on at dusk
   // moon — opposite the sun, so it's up at night. Soft cool directional light + sky disk; fades with
   // night fraction and how high the moon is, dimmed by storm cloud.
   _moon.set(-Math.sin(phi), Math.cos(phi), -0.28).normalize();
-  const moonStr = uNight.value * clampJS(_moon.y, 0, 1) * (1 - 0.7*sf);
+  const moonStr = uNight.value * clampJS(_moon.y, 0, 1) * (1 - 0.7*localStorm);
   uMoonDir.value.copy(_moon);
   uMoonInt.value = moonStr;
   if (moonLight){
@@ -1335,7 +1344,7 @@ function updateEnvironment(dt) {
     for (const L of boatLights){ L.mat.opacity = lit*fk*0.95; L.flame.color.setRGB(lit, lit*0.62*fk, lit*0.28); L.light.intensity = lit*fk*14.0; }
   }
 
-  if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b); fog.near=lerp(1500,560,sf); fog.far=lerp(4200,1900,sf); }
+  if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b); fog.near=lerp(1500,560,localStorm); fog.far=lerp(4200,1900,localStorm); }
   if (seaSkirt){ const db=uDayBright.value; seaSkirt.material.color.setRGB(0.03*db,0.16*db,0.28*db);
     seaSkirt.position.x=controls.target.x; seaSkirt.position.z=controls.target.z; }
 
@@ -1343,8 +1352,8 @@ function updateEnvironment(dt) {
   // Shadow depth: less hemisphere fill → darker shaded sides → more dimensional, less flat midday
   // look. A floor keeps night islands from going pure black; the sun gets a touch stronger to match.
   const fill = lerp(1.0, 0.32, clampJS(P.shadowDepth,0,1));
-  sunLight.intensity = (0.25 + (2.4+0.5*P.shadowDepth)*day) * (1 - 0.65*sf);
-  hemiLight.intensity = (0.42 + 0.62*fill*day) * (1 - 0.4*sf);     // floor (0.42) so night islands aren't pure black
+  sunLight.intensity = (0.25 + (2.4+0.5*P.shadowDepth)*day) * (1 - 0.65*localStorm);
+  hemiLight.intensity = (0.42 + 0.62*fill*day) * (1 - 0.4*localStorm);     // floor (0.42) so night islands aren't pure black
   hemiLight.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
   const D=780;
   // Shadow-map texel snapping: the shadow frustum follows the boat, so without snapping it slides
@@ -1368,7 +1377,7 @@ function updateEnvironment(dt) {
   sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
   sunLight.castShadow = day > 0.06;
 
-  renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.55*sf);   // storms dim the scene more
+  renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.55*localStorm);   // storms dim the scene only near a cell
   applyStyleLighting();   // tint sky/lights/exposure for the selected art style (layers on top of day/night)
   if (skyMesh) skyMesh.position.set(controls.target.x, 0, controls.target.z);
   updateClouds(dt, sf, day);
