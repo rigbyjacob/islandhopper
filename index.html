@@ -1466,7 +1466,7 @@ function buildClouds(){
   cloudMats=[]; cloudSprites=[];
   const mkSprite=(tier)=>{ const m=new THREE.SpriteMaterial({ map:tex, color:new THREE.Color(tierCols[tier]),
       transparent:true, opacity:0.92, depthWrite:false, fog:true }); const s=new THREE.Sprite(m);
-    s.userData.tier=tier; s.userData.ao=1; return s; };
+    s.userData.tier=tier; s.userData.ao=1; s.renderOrder=4; return s; };   // above the rain (1) so clouds occlude falling rain
   cloudBounds={ minX:MAP.minX-700, maxX:MAP.maxX+700, minZ:MAP.minZ-700, maxZ:MAP.maxZ+700 };
   for (let i=0;i<20;i++){
     const grp=new THREE.Group(); const puffs=[];
@@ -1498,7 +1498,7 @@ function buildClouds(){
     const shH = baseY*0.94;
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(w*0.30, w*0.44, shH, 12, 1, true),
       new THREE.MeshBasicMaterial({ map:cloudRainTex, color:0x8c9bb0, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide, fog:true }));
-    shaft.position.y = -shH/2; shaft.renderOrder=2; grp.add(shaft); grp.userData.rain = shaft;
+    shaft.position.y = -shH/2; shaft.renderOrder=1; grp.add(shaft); grp.userData.rain = shaft;
     grp.position.set(cloudBounds.minX+Math.random()*(cloudBounds.maxX-cloudBounds.minX), baseY,
       cloudBounds.minZ+Math.random()*(cloudBounds.maxZ-cloudBounds.minZ));
     grp.userData.spd=0.5+Math.random()*0.8; grp.userData.w=w; scene.add(grp); cloudGroups.push(grp);
@@ -1574,11 +1574,11 @@ function buildRain(){
   const N=420;
   const g=new THREE.PlaneGeometry(1,1);
   const mat=new THREE.MeshBasicMaterial({ map:makeStreakTexture(), color:0xcdddf0, transparent:true, opacity:0.6, depthWrite:false, side:THREE.DoubleSide, fog:true });
-  rainMesh=new THREE.InstancedMesh(g, mat, N); rainMesh.frustumCulled=false; rainMesh.count=0; rainMesh.renderOrder=3; scene.add(rainMesh);
+  rainMesh=new THREE.InstancedMesh(g, mat, N); rainMesh.frustumCulled=false; rainMesh.count=0; rainMesh.renderOrder=1; scene.add(rainMesh);
   for(let i=0;i<N;i++) rainDrops.push({ x:0,y:0,z:0, active:false, spd:120+Math.random()*90, len:5+Math.random()*11, wid:0.16+Math.random()*0.18 });
   const ringTex=makeRingTexture(), rg=new THREE.PlaneGeometry(1,1); rg.rotateX(-Math.PI/2);
   for(let i=0;i<80;i++){ const m=new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ map:ringTex, color:0xdaeaf8, transparent:true, opacity:0, depthWrite:false, fog:true }));
-    m.visible=false; m.renderOrder=3; scene.add(m); splashPool.push({ mesh:m, life:0, dur:0.5 }); }
+    m.visible=false; m.renderOrder=1; scene.add(m); splashPool.push({ mesh:m, life:0, dur:0.5 }); }
 }
 function spawnSplash(x,y,z){ for(const s of splashPool){ if(s.life<=0){ s.dur=0.42+Math.random()*0.26; s.life=s.dur;
   s.mesh.position.set(x, y+0.15, z); s.mesh.scale.set(2,2,1); s.mesh.material.opacity=0.6; s.mesh.visible=true; return; } } }
