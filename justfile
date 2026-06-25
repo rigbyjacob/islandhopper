@@ -22,7 +22,7 @@ serve:
     if [ -f "{{pidf}}" ] && kill -0 "$(cat {{pidf}})" 2>/dev/null; then
       echo "already running (pid $(cat {{pidf}})) → {{url}}"; exit 0
     fi
-    nohup uv run --no-project --python 3.14 python -m http.server {{port}} --directory "{{justfile_directory()}}" > "{{logf}}" 2>&1 &
+    nohup uv run --python 3.14 python -m http.server {{port}} --directory "{{justfile_directory()}}" > "{{logf}}" 2>&1 &
     echo $! > "{{pidf}}"
     sleep 0.6
     echo "serving {{justfile_directory()}} → {{url}}  (pid $(cat {{pidf}}))"
