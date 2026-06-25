@@ -250,6 +250,7 @@ const P = {
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
   aspect: 'fill',     // viewport aspect lock: 'fill' | '1:1' | '3:2' | '4:3' | '4:5' | '16:9' | '1.85:1' | '2.39:1'
   grid: 'off',        // composition overlay (UI only, NOT recorded): off|thirds|golden|center|diagonal|safe
+  outline: true,      // woodblock ink outlines (Sobel edge post-pass) — only active on ink/hokusai styles
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
@@ -1068,6 +1069,7 @@ async function init() {
   replan(boat3);
   applyTourPacing();   // if the user had pacing enabled, set the speed for the route now
   if (P.rainLens) enableRain();   // build the rain post-process now (it only renders while storming)
+  enableOutline();                // build the woodblock outline pass (only renders for ink/hokusai styles)
 
   let firstFrame = true, fpsT = 0, fpsN = 0;
 
@@ -1111,11 +1113,13 @@ async function init() {
     else if (flyMode) updateFlyCam(dt);
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
     const useRain = rainActive && rainPost && stormFactor > 0.01;   // rain-on-lens only while storming
+    const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
     try {
       if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
+      else if (useOutline){ outlineScenePass.camera = activeCam; outlineScenePass.scene = scene; outlinePost.render(); }
       else if (bloomActive && bloomPost && !fpsMode && !cineMode && !flyMode) bloomPost.render();
       else renderer.render(scene, activeCam);
-    } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; if (fpsMode) setView(false); }
+    } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; outlineActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
     updateLabels();   // sprite labels (handles its own showLabels gating)
@@ -1226,12 +1230,12 @@ const STYLES = {
   photoreal: { label:'Photorealistic',                     exposure:1.00, sat:0.92, contrast:1.06, warm:-0.015, ambient:0.98, lightTint:[1,0.99,0.97],   skyTint:[1,1,1],          sceneSat:1.00 },
   pissarro:  { label:'Pissarro — Caribbean Impressionist', exposure:1.09, sat:0.80, contrast:0.90, warm:0.05,  ambient:1.18, lightTint:[1.06,1.00,0.90], skyTint:[1.05,1.02,0.95], sceneSat:1.00 },
   gauguin:   { label:'Gauguin — Post-Impressionist',       exposure:1.02, sat:1.40, contrast:1.12, warm:0.04,  ambient:0.92, lightTint:[1.07,0.98,0.84], skyTint:[1.06,0.98,0.90], sceneSat:1.00 },
-  ink:       { label:'Japanese Ink (sumi-e)',              exposure:1.12, sat:0.05, contrast:1.55, warm:0.03,  ambient:1.30, lightTint:[1.02,1.00,0.94], skyTint:[1.07,1.05,0.97], sceneSat:0.06 },
+  ink:       { label:'Japanese Ink (sumi-e)',              exposure:1.12, sat:0.05, contrast:1.55, warm:0.03,  ambient:1.30, lightTint:[1.02,1.00,0.94], skyTint:[1.07,1.05,0.97], sceneSat:0.06, outline:0.95 },
   monet:     { label:'Monet — Impressionist',              exposure:1.10, sat:0.66, contrast:0.84, warm:-0.01, ambient:1.28, lightTint:[1.00,0.99,1.03], skyTint:[1.02,1.00,1.06], sceneSat:0.74 },
   // Hokusai ukiyo-e — deep Prussian-blue sea + white foam under a PALE CREAM sky → water & sky graded separately
   hokusai:   { label:'Hokusai — Great Wave (ukiyo-e)',     exposure:1.05, sat:0.82, contrast:1.32, warm:0.02,  ambient:1.12, lightTint:[1.05,1.00,0.88],
                skyTint:[1.14,1.07,0.88], skySat:0.28,                  // pale warm-cream sky
-               waterTint:[0.72,0.88,1.20], waterSat:0.95, sceneSat:0.92 },   // Prussian-blue sea
+               waterTint:[0.72,0.88,1.20], waterSat:0.95, sceneSat:0.92, outline:0.78 },   // Prussian-blue sea + ink outlines
 };
 function styleNow(){ return STYLES[P.style] || STYLES.tropical; }
 function gradeRGB(r, g, b, S){
@@ -1270,6 +1274,7 @@ function applyStyleLighting(){
   renderer.toneMappingExposure *= S.exposure;
   uGradeSat.value = waterSat;                                    // water shader desaturation
   uGradeTint.value.set(wt[0], wt[1], wt[2]);                     // water shader tint
+  uOutline.value = (P.outline === false) ? 0 : (S.outline || 0); // woodblock ink-outline strength
 }
 function setStyle(name){ if (STYLES[name]) P.style=name; applySceneStyle(); saveSettings(); }
 
@@ -1733,7 +1738,7 @@ function buildNavVisuals() {
   for (let i=0;i<DASHMAX;i++){ const b=i*4; idx[i*6]=b; idx[i*6+1]=b+1; idx[i*6+2]=b+2; idx[i*6+3]=b; idx[i*6+4]=b+2; idx[i*6+5]=b+3; }
   rg.setIndex(new THREE.BufferAttribute(idx,1));
   pathRibbon = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: 0xffe1a0, transparent: true,
-    opacity: 0.7, depthTest: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));   // glowing dashes
+    opacity: 0.7, depthTest: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));   // glowing dashes — depth-tested so the hull & wave crests occlude them (sunken look, not floating over the ship)
   pathRibbon.frustumCulled = false; pathRibbon.renderOrder = 5; scene.add(pathRibbon);
 
   // target glow: a soft warm pulsing halo on the sea around the target island
@@ -2312,13 +2317,38 @@ function followCamera(s, dt) {
   controls.target.x += (s.x - controls.target.x)*k*0.7;
   controls.target.z += (s.z - controls.target.z)*k*0.7;
 }
+// Camera hand-off: when leaving fly/director back to orbit, re-aim the orbit camera at the same place &
+// general direction the previous view was looking, so the switch doesn't jump.
+const _hv = new THREE.Vector3();
+function handoffToOrbit(fromCam){
+  if (!fromCam || !controls) return;
+  fromCam.updateMatrixWorld();
+  const pos = fromCam.getWorldPosition(new THREE.Vector3());
+  const dir = fromCam.getWorldDirection(_hv);
+  let t = (Math.abs(dir.y) > 1e-3) ? (-pos.y/dir.y) : -1;     // where the look ray meets the sea plane
+  if (!(t > 20 && t < 4000)) t = 500;
+  const look = pos.clone().addScaledVector(dir, t);
+  controls.target.set(look.x, 0, look.z);
+  camera.position.copy(pos);
+  controls.update();
+}
 // free-fly "plane" camera: WASD / arrows to move, Q/Space up, E/C down, Shift to boost, drag to look
 function setFly(on){
+  const from = activeCam || camera;                          // hand off from whatever view we're in
   flyMode = on; controls.enabled = !on && !fpsMode && !cineMode;
   if (on){ if (fpsMode) setView(false); if (cineMode) setCine(false);
-    flyState.pos.set(200,460,700); flyState.yaw=-1.9; flyState.pitch=-0.55; flyState.keys={}; }   // reset to an overview
+    from.updateMatrixWorld();
+    flyState.pos.copy(from.getWorldPosition(new THREE.Vector3()));
+    const d = from.getWorldDirection(_hv);
+    flyState.yaw = Math.atan2(d.z, d.x);                     // start looking the same direction
+    flyState.pitch = clampJS(Math.asin(clampJS(d.y,-1,1)), -1.4, 1.4);
+    flyState.pos.y = Math.max(flyState.pos.y, 6);
+    flyState.keys = {};
+  } else {
+    handoffToOrbit(flyCam);                                  // return to orbit at the same spot
+  }
   const app=document.getElementById('app'); if(app) app.style.cursor = on ? 'grab' : '';
-  if (ui.flyBtn) ui.flyBtn.textContent = on ? '✈ Flying — P to exit' : '✈ Fly the map (P)';
+  if (ui.flyBtn) ui.flyBtn.textContent = on ? '✈ Flying — F to exit' : '✈ Fly the map (F)';
 }
 function updateFlyCam(dt){
   const K=flyState.keys, boost=K['shift']?2.6:1.0, sp=620*boost*dt;
@@ -2473,8 +2503,18 @@ function triggerHelicopter(){   // manual: orbit the current/next target island
 }
 function setCineView(v){ P.cineView = v; for (const k in ui.cineViewBtns) ui.cineViewBtns[k].classList.toggle('active', k===v); saveSettings(); }
 function setCine(on){
+  const from = activeCam || camera;
   cineMode = on;
-  if (on){ if (fpsMode) setView(false); cineInit = false; }
+  if (on){
+    if (fpsMode) setView(false);
+    // seed the director from the current view so it EASES in from here (no high swoop-in jump)
+    from.updateMatrixWorld();
+    _cP.copy(from.getWorldPosition(new THREE.Vector3()));
+    _cL.copy(_cP).addScaledVector(from.getWorldDirection(_hv), 300);
+    _cPv.set(0,0,0); _cLv.set(0,0,0); cineInit = true;
+  } else if (!fpsMode && !flyMode){
+    handoffToOrbit(cineCam);                                 // return to orbit at the same spot
+  }
   controls.enabled = !cineMode && !fpsMode;
   if (ui.cineTog) ui.cineTog.classList.toggle('on', on);
 }
@@ -2535,12 +2575,12 @@ function initInput() {
       gotoTarget = { x: pt.x, z: pt.z }; setMode('goto');
     }
   });
-  // crow's-nest view: 'V' toggles, drag to look around. Fly view: 'P' toggles, WASD/arrows to move, drag to look.
+  // crow's-nest view: 'V' toggles, drag to look around. Fly view: 'F' toggles, WASD/arrows to move, drag to look.
   const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA');
   window.addEventListener('keydown', (e) => {
     if (typing(e)) return;
     if (e.key === 'v' || e.key === 'V') setView(!fpsMode);
-    if (e.key === 'p' || e.key === 'P') setFly(!flyMode);
+    if (e.key === 'f' || e.key === 'F') setFly(!flyMode);
     if (flyMode){ flyState.keys[e.key.toLowerCase()] = true; if(e.key===' ') e.preventDefault(); }
   });
   window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; });
@@ -2737,6 +2777,31 @@ async function enableRain(){
 }
 function disableRain(){ rainActive = false; }
 
+// ============================================================================
+// Woodblock ink outlines — a luminance-Sobel edge-detection post-pass (same PostProcessing mechanics as
+// the rain pass). Draws dark ink contours where the image gradient is steep (island/foam/ship edges).
+// Only rendered for woodblock styles (sumi-e, Hokusai); strength rides uOutline.
+// ============================================================================
+let outlinePost = null, outlineActive = false, outlineScenePass = null;
+const uOutline = uniform(0.0);
+async function enableOutline(){
+  if (outlinePost){ outlineActive = true; return; }
+  try {
+    outlineScenePass = pass(scene, camera);
+    const col = outlineScenePass.getTextureNode();
+    const ts = vec2(1.0,1.0).div(screenSize);                                   // one-texel offsets
+    const L = (ox,oy)=> dot(col.sample(screenUV.add(vec2(ts.x.mul(ox), ts.y.mul(oy)))).xyz, vec3(0.299,0.587,0.114));
+    const tl=L(-1,-1), tc=L(0,-1), tr=L(1,-1), ml=L(-1,0), mr=L(1,0), bl=L(-1,1), bc=L(0,1), br=L(1,1);
+    const gx = tr.add(mr.mul(2.0)).add(br).sub(tl).sub(ml.mul(2.0)).sub(bl);    // Sobel X
+    const gy = bl.add(bc.mul(2.0)).add(br).sub(tl).sub(tc.mul(2.0)).sub(tr);    // Sobel Y
+    const edge = length(vec2(gx, gy));
+    const lineAmt = smoothstep(0.16, 0.52, edge).mul(uOutline);                 // ink line strength
+    const pp = new THREE.PostProcessing(renderer);
+    pp.outputNode = mix(col, vec3(0.04,0.035,0.03), lineAmt);                   // dark sumi ink, not pure black
+    outlinePost = pp; outlineActive = true; console.log('outline enabled');
+  } catch(e){ console.warn('outline setup failed', e); outlineActive=false; outlinePost=null; }
+}
+
 // persist all panel settings between refreshes
 const SETTINGS_KEY = 'pidHelmsman.v1';
 function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
@@ -2792,7 +2857,7 @@ function buildPanel() {
   ui.viewBtn = el('div','btn', el('div','btns',s)); ui.viewBtn.textContent = 'View: Orbit 🗺';
   ui.viewBtn.onclick = () => setView(!fpsMode);
   const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
-  ui.flyBtn = el('div','btn', el('div','btns',s)); ui.flyBtn.textContent = '✈ Fly the map (P)';
+  ui.flyBtn = el('div','btn', el('div','btns',s)); ui.flyBtn.textContent = '✈ Fly the map (F)';
   ui.flyBtn.onclick = () => setFly(!flyMode);
   const fhint = el('div','read',s); fhint.innerHTML = '<b>WASD</b>/arrows move · <b>Q/E</b> up·down · <b>Shift</b> boost · drag to look';
 
@@ -2936,6 +3001,7 @@ function buildPanel() {
   addSlider(s, 'Day length', P, 'dayLength', 20, 600, 10, v=>v.toFixed(0)+'s');
   addSlider(s, 'Shadow depth', P, 'shadowDepth', 0, 1, 0.05, v=>v.toFixed(2));
   ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
+  addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
 
   // Actions
   s = section(panel, '');
