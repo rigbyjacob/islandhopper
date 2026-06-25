@@ -16,6 +16,13 @@
   #grid svg { display: block; width: 100%; height: 100%; }
   #grid line, #grid rect { stroke: rgba(255,255,255,.42); stroke-width: 1; }
 
+  /* Brady-Bunch 4-up grid labels (overlay only; the split render is on the canvas) */
+  #fleetgrid { position: fixed; inset: 0; z-index: 5; display: none; pointer-events: none;
+    grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  #fleetgrid > div { border: 1px solid rgba(255,255,255,.14); padding: 8px 0 0 10px; }
+  #fleetgrid .lab { display: inline-block; font-size: 12.5px; font-weight: 650; color: #eaf6ff;
+    text-shadow: 0 1px 3px rgba(0,0,0,.85); background: rgba(8,20,33,.55); padding: 2px 9px; border-radius: 6px; }
+
   #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; }
   .ilabel { position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
     font-size: 11px; font-weight: 600; letter-spacing: .2px; color: #f4fbff;
@@ -110,6 +117,12 @@
 <body>
 <div id="app"></div>
 <div id="grid"></div>
+<div id="fleetgrid">
+  <div><span class="lab">⚓ Ship</span></div>
+  <div><span class="lab">▮ Submarine</span></div>
+  <div><span class="lab">✈ Plane</span></div>
+  <div><span class="lab">🛸 UFO</span></div>
+</div>
 <div id="labels"></div>
 
 <div class="hud" id="title">
@@ -1051,7 +1064,7 @@ async function init() {
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain(); buildDipStick();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
-  buildShrubs(); buildTownMotifs();
+  buildShrubs(); buildTownMotifs(); buildVehicles();
   applySceneStyle();   // grade terrain + vegetation + towns to the active art style
   buildNavVisuals();
   buildWake();
@@ -1110,17 +1123,21 @@ async function init() {
     updateNavVisuals(dt);
     updateNavDebug();
     updateFireworks(dt);
+    updateVehicles(dt);   // submarine / plane / UFO agents + their chase cameras
     controls.update();
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
+    const fleetSingle = (fleetView!=='off' && fleetView!=='grid') ? fleetCam(fleetView) : null;
+    if (fleetSingle) activeCam = fleetSingle;   // looking through one vehicle's director cam
     const useRain = rainActive && rainPost && stormFactor > 0.01;   // rain-on-lens only while storming
     const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
     try {
-      if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
+      if (fleetView==='grid'){ renderFleetGrid(); }
+      else if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
       else if (useOutline){ outlineScenePass.camera = activeCam; outlineScenePass.scene = scene; outlinePost.render(); }
-      else if (bloomActive && bloomPost && !fpsMode && !cineMode && !flyMode) bloomPost.render();
+      else if (bloomActive && bloomPost && !fpsMode && !cineMode && !flyMode && !fleetSingle) bloomPost.render();
       else renderer.render(scene, activeCam);
     } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; outlineActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
@@ -1226,6 +1243,149 @@ function buildLights() {
 }
 
 // ---- unified day/night + weather environment, run every frame ----
+// ============================================================================
+// Multi-vehicle fleet — independent PID-driven agents sharing the world: a submarine,
+// a plane and a UFO (plus the ship). Each runs its own route; view any one through a
+// cinematic director chase cam, or all four in a Brady-Bunch 2×2 grid.
+// ============================================================================
+const FLEET = [];
+let fleetView = 'off';   // 'off' | 'ship' | 'sub' | 'plane' | 'ufo' | 'grid'
+const manualKeys = {};   // WASD/Q/E state for piloting the focused vehicle
+function islandPt(name){ const i = ISLANDS.find(s=>s.name===name); return i ? {x:i.x, z:i.z} : null; }
+function routeFrom(names){ const r = names.map(islandPt).filter(Boolean); return r.length ? r : ISLANDS.slice(0,5).map(i=>({x:i.x,z:i.z})); }
+
+function buildSubMesh(){
+  const g=new THREE.Group();
+  const hullMat=new THREE.MeshStandardMaterial({color:0x394049, roughness:0.55, metalness:0.35});
+  const hull=new THREE.Mesh(new THREE.CylinderGeometry(2.0,2.0,16,16), hullMat); hull.rotation.z=Math.PI/2; g.add(hull);
+  for (const sx of [8,-8]){ const cap=new THREE.Mesh(new THREE.SphereGeometry(2.0,14,12), hullMat); cap.position.x=sx; cap.scale.x=1.4; g.add(cap); }
+  const tower=new THREE.Mesh(new THREE.BoxGeometry(3.2,2.6,1.8), hullMat); tower.position.set(0,2.2,0); g.add(tower);
+  const peri=new THREE.Mesh(new THREE.CylinderGeometry(0.25,0.25,2,8), hullMat); peri.position.set(0,4,0); g.add(peri);
+  const fin=new THREE.Mesh(new THREE.BoxGeometry(2.4,0.3,5), hullMat); fin.position.set(-7.5,0,0); g.add(fin);
+  const fy=new THREE.Mesh(new THREE.BoxGeometry(2.0,4,0.3), hullMat); fy.position.set(-7.5,0,0); g.add(fy);
+  g.traverse(o=>{ if(o.isMesh){o.castShadow=true;} }); return g;
+}
+function buildPlaneMesh(){
+  const g=new THREE.Group();
+  const body=new THREE.MeshStandardMaterial({color:0xe8eef2, roughness:0.5, metalness:0.2});
+  const trim=new THREE.MeshStandardMaterial({color:0xc7402f, roughness:0.5});
+  const fus=new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.1,14,14), body); fus.rotation.z=Math.PI/2; g.add(fus);
+  const nose=new THREE.Mesh(new THREE.ConeGeometry(1.1,3,14), body); nose.rotation.z=-Math.PI/2; nose.position.x=8.5; g.add(nose);
+  const wing=new THREE.Mesh(new THREE.BoxGeometry(3.6,0.3,20), trim); wing.position.set(0,0,0); g.add(wing);
+  const tailH=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.25,7), trim); tailH.position.set(-6,0.4,0); g.add(tailH);
+  const tailV=new THREE.Mesh(new THREE.BoxGeometry(2.2,3,0.25), trim); tailV.position.set(-6,1.6,0); g.add(tailV);
+  g.traverse(o=>{ if(o.isMesh){o.castShadow=true;} }); return g;
+}
+function buildUfoMesh(){
+  const g=new THREE.Group();
+  const metal=new THREE.MeshStandardMaterial({color:0xb9c2cc, roughness:0.25, metalness:0.85});
+  const lower=new THREE.Mesh(new THREE.ConeGeometry(11,3.4,28), metal); lower.rotation.x=Math.PI; lower.position.y=-0.4; g.add(lower);
+  const upper=new THREE.Mesh(new THREE.ConeGeometry(11,2.0,28), metal); upper.position.y=0.9; g.add(upper);
+  const dome=new THREE.Mesh(new THREE.SphereGeometry(4.5,20,14,0,Math.PI*2,0,Math.PI/2),
+    new THREE.MeshStandardMaterial({color:0x8fd6ff, roughness:0.1, metalness:0.2, transparent:true, opacity:0.7})); dome.position.y=1.8; g.add(dome);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(8.5,0.7,8,28),
+    new THREE.MeshBasicMaterial({color:0x66ffd0, transparent:true, opacity:0.9, blending:THREE.AdditiveBlending, depthWrite:false}));
+  ring.rotation.x=Math.PI/2; ring.position.y=-1.2; g.add(ring); g.userData.ring=ring;
+  g.traverse(o=>{ if(o.isMesh && o.material.metalness>0){o.castShadow=true;} }); return g;
+}
+function makeAgent(o){
+  const cam=new THREE.PerspectiveCamera(55,1,0.5,30000);
+  const v={ id:o.id, pos:new THREE.Vector3(o.x,o.y,o.z), yaw:o.yaw||0, pitch:0, roll:0, speed:0,
+    route:o.route, wpIdx:0, cruiseY:o.cruiseY, cruiseSpeed:o.cruiseSpeed, turnRate:o.turnRate, accelK:o.accelK,
+    arriveR:o.arriveR||60, bank:o.bank||0, mesh:o.mesh, cam, _cp:new THREE.Vector3(), _cl:new THREE.Vector3(),
+    camInit:false, hpid:new PID(), spid:new PID(), manual:false, camDist:o.camDist, camHigh:o.camHigh, label:o.label };
+  return v;
+}
+function buildVehicles(){
+  const shipCam=new THREE.PerspectiveCamera(52,1,0.5,26000);
+  FLEET.push({ id:'ship', label:'Ship', ship:true, cam:shipCam, _cp:new THREE.Vector3(), _cl:new THREE.Vector3(), camInit:false, camDist:55, camHigh:22 });
+  const defs=[
+    { id:'sub',   label:'Submarine', cruiseY:-14, cruiseSpeed:26,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:46, camHigh:16, mesh:buildSubMesh(),
+      route:routeFrom(['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts']) },
+    { id:'plane', label:'Plane',     cruiseY:95,  cruiseSpeed:70,  turnRate:0.5,  accelK:0.5, arriveR:95, bank:1, camDist:78, camHigh:26, mesh:buildPlaneMesh(),
+      route:routeFrom(['St. Thomas','Tortola','Anguilla','St. Martin','St. Barths','Antigua']) },
+    { id:'ufo',   label:'UFO',       cruiseY:135, cruiseSpeed:130, turnRate:1.6,  accelK:5.0, arriveR:75, camDist:62, camHigh:30, mesh:buildUfoMesh(),
+      route:routeFrom(['Antigua','Guadeloupe (N)','St. Kitts','Anguilla','Barbuda','Montserrat']) },
+  ];
+  for (const d of defs){ const w=d.route[0]||{x:0,z:0}; const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); scene.add(v.mesh); FLEET.push(v); }
+}
+function _agentStep(v, dt){
+  v.manual = (fleetView === v.id);   // the focused single vehicle is hand-piloted
+  const tt=clock.elapsedTime;
+  if (v.manual){
+    const K=manualKeys, boost=K['shift']?2.2:1, mt=v.turnRate*1.7;
+    const lf=K['a']||K['arrowleft'], rt=K['d']||K['arrowright'];
+    if (lf) v.yaw=wrap(v.yaw - mt*dt); if (rt) v.yaw=wrap(v.yaw + mt*dt);
+    if (K['w']||K['arrowup']) v.speed=Math.min(v.speed + v.cruiseSpeed*3*dt*boost, v.cruiseSpeed*1.8*boost);
+    else if (K['s']||K['arrowdown']) v.speed=Math.max(v.speed - v.cruiseSpeed*3*dt, -v.cruiseSpeed*0.5);
+    else v.speed *= Math.pow(0.22, dt);                       // coast to a stop (snappy = saucery)
+    if (v._manAlt===undefined) v._manAlt=v.pos.y;
+    if (K['q']||K[' ']) v._manAlt += 70*dt*boost;
+    if (K['e']||K['c']) v._manAlt -= 70*dt*boost;
+    v.roll += (((lf?0.4:(rt?-0.4:0))*(v.bank?1:0.4)) - v.roll)*Math.min(1,dt*5);
+  } else {
+    v._manAlt=undefined;
+    if (!v.route.length) return;
+    const tgt=v.route[v.wpIdx], dx=tgt.x-v.pos.x, dz=tgt.z-v.pos.z, dist=Math.hypot(dx,dz);
+    if (dist < v.arriveR) v.wpIdx=(v.wpIdx+1)%v.route.length;
+    const desYaw=Math.atan2(dz,dx), yErr=wrap(desYaw-v.yaw);
+    const rate=v.hpid.step(yErr, v.yaw, dt, 2.2, 0.0, 0.5, -v.turnRate, v.turnRate, true);
+    v.yaw=wrap(v.yaw+rate*dt);
+    v.roll += ((-rate*(v.bank?2.4:0)) - v.roll)*Math.min(1,dt*4);
+    const sErr=v.cruiseSpeed-v.speed;
+    const acc=v.spid.step(sErr, v.speed, dt, v.accelK, 0, 0, -v.cruiseSpeed*5, v.cruiseSpeed*5, false);
+    v.speed=Math.max(0, v.speed+acc*dt);
+    if (v.id==='ufo' && dist < v.arriveR*1.8) v.speed *= Math.pow(0.015, dt);   // saucery dart-and-hover stop
+  }
+  v.pos.x += Math.cos(v.yaw)*v.speed*dt; v.pos.z += Math.sin(v.yaw)*v.speed*dt;
+  let targY;
+  if (v.manual) targY=v._manAlt;
+  else if (v.id==='ufo') targY=v.cruiseY+Math.sin(tt*1.3)*6;
+  else if (v.id==='sub') targY=v.cruiseY+Math.sin(tt*0.7)*3;
+  else targY=v.cruiseY;
+  v.pos.y += (targY-v.pos.y)*Math.min(1,dt*1.6);
+  v.pitch += (clampJS((targY-v.pos.y)*0.02,-0.3,0.3) - v.pitch)*Math.min(1,dt*4);
+  v.mesh.position.copy(v.pos);
+  v.mesh.rotation.set(0,0,0); v.mesh.rotateY(-v.yaw); v.mesh.rotateZ(v.pitch); v.mesh.rotateX(v.roll);
+  if (v.id==='ufo'){ v.mesh.rotateY(tt*1.4); if (v.mesh.userData.ring) v.mesh.userData.ring.material.opacity=0.6+0.35*Math.sin(tt*6); }
+}
+function _vehPose(v){
+  if (v.ship) return { x:boat3.x, y:waveHeightJS(boat3.x,boat3.z,clock.elapsedTime)+3, z:boat3.z, yaw:boat3.psi };
+  return { x:v.pos.x, y:v.pos.y, z:v.pos.z, yaw:v.yaw };
+}
+const _vDesP=new THREE.Vector3(), _vDesL=new THREE.Vector3();
+function _vehCam(v, dt){
+  const p=_vehPose(v), cy=Math.cos(p.yaw), sy=Math.sin(p.yaw);
+  _vDesP.set(p.x - cy*v.camDist, p.y + v.camHigh, p.z - sy*v.camDist);
+  _vDesL.set(p.x + cy*10, p.y, p.z + sy*10);
+  if (!v.camInit){ v._cp.copy(_vDesP); v._cl.copy(_vDesL); v.camInit=true; }
+  const k=1-Math.pow(0.0009, dt);
+  v._cp.lerp(_vDesP,k); v._cl.lerp(_vDesL,k);
+  v.cam.position.copy(v._cp); v.cam.lookAt(v._cl);
+  const _vp=computeViewport(); v.cam.aspect=_vp.w/_vp.h; v.cam.updateProjectionMatrix();   // single-view aspect (grid overrides)
+}
+function updateVehicles(dt){ for (const v of FLEET){ if (!v.ship) _agentStep(v, dt); _vehCam(v, dt); } }
+function fleetCam(id){ const v=FLEET.find(x=>x.id===id); return v ? v.cam : null; }
+const _gsz=new THREE.Vector2();
+function renderFleetGrid(){   // Brady-Bunch 2×2: ship / sub / plane / UFO
+  renderer.getSize(_gsz); const W=_gsz.x, H=_gsz.y, hw=W/2, hh=H/2;
+  const cams=[fleetCam('ship'),fleetCam('sub'),fleetCam('plane'),fleetCam('ufo')];
+  const quads=[[0,hh],[hw,hh],[0,0],[hw,0]];   // three viewport origin = bottom-left → TL,TR,BL,BR
+  renderer.setScissorTest(true);
+  for (let i=0;i<4;i++){ const c=cams[i]; if(!c) continue; const q=quads[i];
+    c.aspect=hw/hh; c.updateProjectionMatrix();
+    renderer.setViewport(q[0],q[1],hw,hh); renderer.setScissor(q[0],q[1],hw,hh);
+    renderer.render(scene, c); }
+  renderer.setScissorTest(false); renderer.setViewport(0,0,W,H);
+}
+function setFleetView(v){
+  fleetView = v; const active = (v!=='off');
+  if (active){ if (fpsMode) setView(false); if (flyMode) setFly(false); if (cineMode) setCine(false); }
+  controls.enabled = !active && !fpsMode && !cineMode && !flyMode;
+  if (ui.fleetBtns) for (const k in ui.fleetBtns) ui.fleetBtns[k].classList.toggle('active', k===v);
+  const fg=document.getElementById('fleetgrid'); if (fg) fg.style.display = (v==='grid') ? 'grid' : 'none';
+}
+
 // ============================================================================
 // Art-style re-grade — palette + material + lighting, layered ON TOP of the
 // day/night system (so dawn/dusk/storm still work; the style just tints the result).
@@ -2758,8 +2918,9 @@ function initInput() {
     if (e.key === 'v' || e.key === 'V') setView(!fpsMode);
     if (e.key === 'f' || e.key === 'F') setFly(!flyMode);
     if (flyMode){ flyState.keys[e.key.toLowerCase()] = true; if(e.key===' ') e.preventDefault(); }
+    if (fleetView!=='off' && fleetView!=='grid'){ manualKeys[e.key.toLowerCase()] = true; if(e.key===' '||e.key.indexOf('Arrow')===0) e.preventDefault(); }
   });
-  window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; });
+  window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; manualKeys[e.key.toLowerCase()] = false; });
   let dragging=false, lx=0, ly=0;
   renderer.domElement.addEventListener('pointerdown', (e)=>{ if(fpsMode||flyMode){ dragging=true; lx=e.clientX; ly=e.clientY; } });
   window.addEventListener('pointerup', ()=>{ dragging=false; });
@@ -3038,6 +3199,16 @@ function buildPanel() {
   ui.flyBtn = el('div','btn', el('div','btns',s)); ui.flyBtn.textContent = '✈ Fly the map (F)';
   ui.flyBtn.onclick = () => setFly(!flyMode);
   const fhint = el('div','read',s); fhint.innerHTML = '<b>WASD</b>/arrows move · <b>Q/E</b> up·down · <b>Shift</b> boost · drag to look';
+
+  // Fleet — independent vehicles + Brady-Bunch grid
+  s = section(panel, 'Fleet (multi-vehicle)');
+  ui.fleetBtns = {};
+  const fleetRow = el('div','btns',s);
+  for (const [k,lbl] of [['off','Normal'],['ship','Ship'],['sub','Sub'],['plane','Plane'],['ufo','UFO'],['grid','◳ 4-up grid']]){
+    const b=el('div','btn',fleetRow); b.textContent=lbl; b.onclick=()=>setFleetView(k); ui.fleetBtns[k]=b;
+  }
+  ui.fleetBtns['off'].classList.add('active');
+  el('div','read',s).innerHTML = 'each vehicle self-navigates its own route · pilot the focused one with <b>WASD/Q/E</b>';
 
   // Cinematic tour director
   s = section(panel, 'Cinematic tour');
