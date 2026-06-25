@@ -8,8 +8,13 @@
   :root { color-scheme: dark; --pad: 12px; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #06121f;
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  #app { position: fixed; inset: 0; }
+  #app { position: fixed; inset: 0; background: #000; }
   canvas { display: block; }
+
+  /* composition grid overlay — UI layer above the canvas, never part of the video recording */
+  #grid { position: fixed; pointer-events: none; z-index: 5; display: none; overflow: hidden; }
+  #grid svg { display: block; width: 100%; height: 100%; }
+  #grid line, #grid rect { stroke: rgba(255,255,255,.42); stroke-width: 1; }
 
   #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; }
   .ilabel { position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
@@ -104,6 +109,7 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="grid"></div>
 <div id="labels"></div>
 
 <div class="hud" id="title">
@@ -241,6 +247,8 @@ const P = {
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
   showClouds: true,   // clouds (can hide them for a clean debug view)
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
+  aspect: 'fill',     // viewport aspect lock: 'fill' | '1:1' | '3:2' | '4:3' | '4:5' | '16:9' | '1.85:1' | '2.39:1'
+  grid: 'off',        // composition overlay (UI only, NOT recorded): off|thirds|golden|center|diagonal|safe
 };
 const DEFAULTS = JSON.parse(JSON.stringify(P));
 
@@ -1044,6 +1052,7 @@ async function init() {
   buildLabels();
   buildPanel();
   applyHud();        // reflect any restored HUD-visibility settings
+  onResize();        // apply any restored aspect-ratio lock + composition grid
   initInput();
 
   BLOCKED = buildBlocked();
@@ -2337,14 +2346,48 @@ function setCine(on){
   controls.enabled = !cineMode && !fpsMode;
   if (ui.cineTog) ui.cineTog.classList.toggle('on', on);
 }
+const ASPECTS = { 'fill':0, '1:1':1, '3:2':3/2, '4:3':4/3, '4:5':4/5, '16:9':16/9, '1.85:1':1.85, '2.39:1':2.39 };
+// Largest pixel box of the chosen aspect that fits the window, centred (letter/pillar-boxed).
+function computeViewport(){
+  const WW=window.innerWidth, HH=window.innerHeight, R=ASPECTS[P.aspect]||0;
+  if (!R) return { w:WW, h:HH, l:0, t:0 };
+  let w=WW, h=Math.round(WW/R); if (h>HH){ h=HH; w=Math.round(HH*R); }
+  return { w, h, l:Math.round((WW-w)/2), t:Math.round((HH-h)/2) };
+}
 function onResize() {
-  const aspect = window.innerWidth/window.innerHeight, view = 380;
+  const vp = computeViewport(), aspect = vp.w/vp.h, view = 380;
   camera.left=-view*aspect; camera.right=view*aspect; camera.top=view; camera.bottom=-view;
   camera.updateProjectionMatrix();
   if (fpsCam) { fpsCam.aspect = aspect; fpsCam.updateProjectionMatrix(); }
   if (cineCam) { cineCam.aspect = aspect; cineCam.updateProjectionMatrix(); }
   if (flyCam) { flyCam.aspect = aspect; flyCam.updateProjectionMatrix(); }
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(vp.w, vp.h);
+  const cv = renderer.domElement;
+  cv.style.position='absolute'; cv.style.left=vp.l+'px'; cv.style.top=vp.t+'px';
+  layoutGrid(vp);
+}
+
+// ---- composition grid overlay (UI only — drawn in a DOM/SVG layer, NOT composited into the recording) ----
+function layoutGrid(vp){
+  vp = vp || computeViewport();
+  const g = document.getElementById('grid'); if (!g) return;
+  g.style.left=vp.l+'px'; g.style.top=vp.t+'px'; g.style.width=vp.w+'px'; g.style.height=vp.h+'px';
+  drawGrid(vp.w, vp.h);
+}
+function drawGrid(W, H){
+  const g = document.getElementById('grid'); if (!g) return;
+  const t = P.grid;
+  if (!t || t==='off'){ g.innerHTML=''; g.style.display='none'; return; }
+  g.style.display='block';
+  const L=[], V=f=>L.push(`<line x1="${(f*W).toFixed(1)}" y1="0" x2="${(f*W).toFixed(1)}" y2="${H}"/>`),
+        Hl=f=>L.push(`<line x1="0" y1="${(f*H).toFixed(1)}" x2="${W}" y2="${(f*H).toFixed(1)}"/>`),
+        seg=(x1,y1,x2,y2)=>L.push(`<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`);
+  if (t==='thirds'){ V(1/3); V(2/3); Hl(1/3); Hl(2/3); }
+  else if (t==='golden'){ const a=0.5-0.5/1.618, b=0.5+0.5/1.618; V(a); V(b); Hl(a); Hl(b); }   // phi grid (.191/.809-ish via 1/φ)
+  else if (t==='center'){ V(0.5); Hl(0.5); }
+  else if (t==='diagonal'){ const d=Math.max(W,H); seg(0,0,d,d); seg(W,0,W-d,d); seg(0,H,d,H-d); seg(W,H,W-d,H-d); }   // diagonal method (45° from each corner)
+  else if (t==='safe'){ const r=(m)=>L.push(`<rect x="${(W*m).toFixed(1)}" y="${(H*m).toFixed(1)}" width="${(W*(1-2*m)).toFixed(1)}" height="${(H*(1-2*m)).toFixed(1)}" fill="none"/>`); r(0.05); r(0.10); V(0.5); Hl(0.5); }
+  g.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${L.join('')}</svg>`;
 }
 
 // ============================================================================
@@ -2402,16 +2445,26 @@ function startRecording(){
   const mime = pickRecMime(); if (!mime){ if(ui.recBtn) ui.recBtn.textContent='Unsupported'; return; }
   recMime = mime; recChunks = [];
   const src = renderer.domElement;
-  recCanvas = document.createElement('canvas'); recCanvas.width = src.width; recCanvas.height = src.height;
+  // The renderer canvas is sized in DEVICE pixels (CSS px × devicePixelRatio). Maximized on a 4K display
+  // at dpr 2 that's 7680×4320 — past what the H.264/VP9 hardware encoder will accept, so MediaRecorder
+  // errors immediately and dumps a broken/empty file (the "instant download" bug). Cap the capture buffer
+  // to a safe 4K box (even dims required by the codecs); drawImage already rescales src → recCanvas.
+  const MAXW = 3840, MAXH = 2160;
+  const fit = Math.min(1, MAXW/src.width, MAXH/src.height);
+  recCanvas = document.createElement('canvas');
+  recCanvas.width  = Math.max(2, Math.round(src.width  * fit / 2) * 2);
+  recCanvas.height = Math.max(2, Math.round(src.height * fit / 2) * 2);
   recCtx = recCanvas.getContext('2d');
   // Manual-frame capture: with no fps arg the track only emits a frame when we call
   // requestFrame(), so the gradual fade is sampled once per rendered frame (not undersampled).
   let stream; try { stream = recCanvas.captureStream(); recTrack = stream.getVideoTracks()[0]; } catch(e){ console.warn(e); return; }
   try { mediaRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16_000_000 }); }
   catch(e){ mediaRecorder = new MediaRecorder(stream); }
+  mediaRecorder.onerror = (e) => { console.warn('MediaRecorder error', e.error||e); if(ui.recBtn) ui.recBtn.textContent='Rec error'; recState='idle'; recChunks=[]; updateRecUI(); };
   mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recChunks.push(e.data); };
   mediaRecorder.onstop = () => {
     const blob = new Blob(recChunks, { type: recMime }), ext = recMime.indexOf('mp4')>=0?'mp4':'webm';
+    if (blob.size < 1024){ if(ui.recBtn) ui.recBtn.textContent='Empty — no frames'; recState='idle'; updateRecUI(); return; }   // don't download a broken/empty clip
     const url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = 'caribbean-helmsman-' + Date.now() + '.' + ext;
     document.body.appendChild(a); a.click();
@@ -2668,6 +2721,13 @@ function buildPanel() {
   ui.segBtn = el('div','btn',crow); ui.segBtn.textContent = '❚❚ Pause seg'; ui.segBtn.style.display = 'none';
   ui.segBtn.onclick = () => { if (recState==='recording') pauseSegment(); else if (recState==='paused') resumeSegment(); };
   el('div','read',cap).innerHTML = 'record → pause seg → reposition → resume';
+  // frame the shot: lock the canvas to a fixed aspect (letterboxed) + optional composition grid (UI only)
+  addSelect(cap, 'Aspect ratio', P, 'aspect',
+    [['fill','Fill window'],['1:1','1:1 square'],['3:2','3:2'],['4:3','4:3'],['4:5','4:5 portrait'],['16:9','16:9'],['1.85:1','1.85:1 cinema'],['2.39:1','2.39:1 scope']],
+    ()=>onResize());
+  addSelect(cap, 'Comp. grid', P, 'grid',
+    [['off','Off'],['thirds','Rule of thirds'],['golden','Golden ratio'],['center','Center cross'],['diagonal','Diagonal method'],['safe','Safe margins']],
+    ()=>layoutGrid());
   // transition shape — fade-out / hold / fade-in seconds + ease curve
   addSlider(cap, 'Fade-out',  P, 'transFadeOut', 0.05, 2.5, 0.05, v=>v.toFixed(2)+'s');
   addSlider(cap, 'Hold',      P, 'transHold',    0,    2.5, 0.05, v=>v.toFixed(2)+'s');
@@ -2812,6 +2872,16 @@ function addToggle(parent, label, obj, key, onChange){
   el('div','box',t); const l=el('div','lab',t); l.textContent=label;
   t.onclick=()=>{ obj[key]=!obj[key]; t.classList.toggle('on',obj[key]); if(onChange) onChange(obj[key]); saveSettings(); };
   return t;
+}
+// labelled <select>; options = array of [value,label] (or plain strings)
+function addSelect(parent, label, obj, key, options, onChange){
+  const row=el('div','row',parent); const lab=el('label','',row); lab.textContent=label;
+  const sel=document.createElement('select'); sel.className='routesel'; sel.style.gridColumn='1 / 3';
+  for (const o of options){ const v=Array.isArray(o)?o[0]:o, tx=Array.isArray(o)?o[1]:o;
+    const opt=document.createElement('option'); opt.value=v; opt.textContent=tx; sel.appendChild(opt); }
+  sel.value=obj[key];
+  sel.onchange=()=>{ obj[key]=sel.value; if(onChange) onChange(sel.value); saveSettings(); };
+  row.appendChild(sel); return sel;
 }
 
 function updateReadouts(){
