@@ -1300,7 +1300,7 @@ function buildVehicles(){
   const shipCam=new THREE.PerspectiveCamera(52,1,0.5,26000);
   FLEET.push({ id:'ship', label:'Ship', ship:true, cam:shipCam, _cp:new THREE.Vector3(), _cl:new THREE.Vector3(), camInit:false, camDist:55, camHigh:22 });
   const defs=[
-    { id:'sub',   label:'Submarine', cruiseY:-14, cruiseSpeed:26,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:46, camHigh:16, mesh:buildSubMesh(),
+    { id:'sub',   label:'Submarine', cruiseY:-34, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:20, mesh:buildSubMesh(),
       route:routeFrom(['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts']) },
     { id:'plane', label:'Plane',     cruiseY:95,  cruiseSpeed:70,  turnRate:0.5,  accelK:0.5, arriveR:95, bank:1, camDist:78, camHigh:26, mesh:buildPlaneMesh(),
       route:routeFrom(['St. Thomas','Tortola','Anguilla','St. Martin','St. Barths','Antigua']) },
@@ -1309,8 +1309,11 @@ function buildVehicles(){
   ];
   for (const d of defs){ const w=d.route[0]||{x:0,z:0}; const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); scene.add(v.mesh); FLEET.push(v); }
 }
+const _MKEYS=['w','a','s','d','q','e','c',' ','arrowup','arrowdown','arrowleft','arrowright'];
+function _piloting(){ for (const k of _MKEYS) if (manualKeys[k]) return true; return false; }
 function _agentStep(v, dt){
-  v.manual = (fleetView === v.id);   // the focused single vehicle is hand-piloted
+  // focused vehicle is autonomous UNTIL you actually press a movement key (then you pilot it)
+  v.manual = (fleetView === v.id) && _piloting();
   const tt=clock.elapsedTime;
   if (v.manual){
     const K=manualKeys, boost=K['shift']?2.2:1, mt=v.turnRate*1.7;
@@ -1331,7 +1334,7 @@ function _agentStep(v, dt){
     const desYaw=Math.atan2(dz,dx), yErr=wrap(desYaw-v.yaw);
     const rate=v.hpid.step(yErr, v.yaw, dt, 2.2, 0.0, 0.5, -v.turnRate, v.turnRate, true);
     v.yaw=wrap(v.yaw+rate*dt);
-    v.roll += ((-rate*(v.bank?2.4:0)) - v.roll)*Math.min(1,dt*4);
+    v.roll += ((rate*(v.bank?2.4:0)) - v.roll)*Math.min(1,dt*4);   // bank INTO the turn (real-plane direction)
     const sErr=v.cruiseSpeed-v.speed;
     const acc=v.spid.step(sErr, v.speed, dt, v.accelK, 0, 0, -v.cruiseSpeed*5, v.cruiseSpeed*5, false);
     v.speed=Math.max(0, v.speed+acc*dt);
@@ -1381,6 +1384,7 @@ function renderFleetGrid(){   // Brady-Bunch 2×2: ship / sub / plane / UFO
 function setFleetView(v){
   fleetView = v; const active = (v!=='off');
   if (active){ if (fpsMode) setView(false); if (flyMode) setFly(false); if (cineMode) setCine(false); }
+  else if (P.cine && !cineMode){ setCine(true); }   // back to Normal → restore the Director camera
   controls.enabled = !active && !fpsMode && !cineMode && !flyMode;
   if (ui.fleetBtns) for (const k in ui.fleetBtns) ui.fleetBtns[k].classList.toggle('active', k===v);
   const fg=document.getElementById('fleetgrid'); if (fg) fg.style.display = (v==='grid') ? 'grid' : 'none';
