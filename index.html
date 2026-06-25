@@ -1732,12 +1732,16 @@ let labelEls = [], cityLabelEls = [];
 // In-scene sprite labels (constant screen size via sizeAttenuation:false) so the VIDEO RECORDER
 // captures them — HTML overlays weren't in the WebGPU canvas. White text tinted per-sprite (orange =
 // current target). depthTest off so they're never hidden behind terrain.
-function makeLabelSprite(text, color, sizeY){
+function makeLabelSprite(text, color, sizeY, grad){
   const cv=document.createElement('canvas'), ctx=cv.getContext('2d');
   const font='bold 40px ui-sans-serif, system-ui, -apple-system, sans-serif';
   ctx.font=font; const w=Math.ceil(ctx.measureText(text).width)+28, h=60;
   cv.width=w; cv.height=h; ctx.font=font; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.shadowColor='rgba(0,8,18,0.95)'; ctx.shadowBlur=7; ctx.shadowOffsetY=1; ctx.fillStyle='#ffffff';
+  ctx.shadowColor='rgba(0,8,18,0.95)'; ctx.shadowBlur=7; ctx.shadowOffsetY=1;
+  // grad = [topCss, bottomCss] paints a vertical gradient INTO the glyphs (sprite color stays white)
+  let fill = '#ffffff';
+  if (grad){ const g=ctx.createLinearGradient(0,h*0.18,0,h*0.82); g.addColorStop(0,grad[0]); g.addColorStop(1,grad[1]); fill=g; }
+  ctx.fillStyle=fill;
   ctx.fillText(text, w/2, h/2+1); ctx.shadowBlur=0; ctx.fillText(text, w/2, h/2+1);
   const tex=new THREE.CanvasTexture(cv); tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true;
   const mat=new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:true, depthWrite:false, sizeAttenuation:true });
@@ -1756,14 +1760,17 @@ function buildDipStick(){
   const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.85, depthTest:false });
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,-seabedY,8), poleMat);
   pole.position.set(X, seabedY/2, Z); pole.renderOrder=18; g.add(pole);
-  const ringGeo = new THREE.TorusGeometry(2.6,0.4,6,18); ringGeo.rotateX(Math.PI/2);
-  const ringMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, depthTest:false });
+  const ringMat = new THREE.MeshBasicMaterial({ color:0xffffff, depthTest:false });
   let lastLabelY = 1e9;
+  // The vertical scale is exponential-saturating (compressM), so deep rings bunch together. Give each ring
+  // a radius PROPORTIONAL to its true depth → a nested funnel where even vertically-close rings stay distinct.
   const tick=(m, txt, force)=>{ const y=-compressM(m);
-    const ring=new THREE.Mesh(ringGeo, ringMat); ring.position.set(X,y,Z); ring.renderOrder=19; g.add(ring);
+    const rad = 1.8 + 6.0*(maxM>0 ? m/maxM : 0);                          // surface ≈1.8u → seabed ≈7.8u
+    const rg = new THREE.TorusGeometry(rad, 0.32, 6, 22); rg.rotateX(Math.PI/2);
+    const ring=new THREE.Mesh(rg, ringMat); ring.position.set(X,y,Z); ring.renderOrder=19; g.add(ring);
     if (txt && (force || Math.abs(y-lastLabelY) > 7)){                    // skip labels that would collide
-      const lab=makeLabelSprite(txt, 0xfff0c8, 6.5); lab.material.depthTest=false;   // draw on top (underwater → would otherwise be hidden)
-      lab.position.set(X+8, y, Z); g.add(lab); lastLabelY=y; }
+      const lab=makeLabelSprite(txt, 0xffffff, 6.5, ['#ffffff','#ff8a1e']); lab.material.depthTest=false;   // white→orange so it reads against the white rings
+      lab.position.set(X+8+rad*0.5, y, Z); g.add(lab); lastLabelY=y; }   // offset further out as rings widen
   };
   tick(0, null);                                               // surface ring, no label
   for (let m=500; m<maxM-250; m+=500) tick(m, (m===500||m===1000) ? (m+' m') : null);   // label only 500 & 1000
@@ -2508,6 +2515,16 @@ function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify
 function loadSettings(){ try { const s = localStorage.getItem(SETTINGS_KEY);
   if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; P.cine = false; P.bloom = false; } } catch(_){ } }   // don't auto-restore pause / director cam / bloom
 
+// Snapshot every control value + the active route into one portable, shareable object.
+// Transient/session-only flags are forced to their resting state so exported defaults are clean.
+function collectSettings(){
+  const settings = JSON.parse(JSON.stringify(P));
+  settings.paused = false; settings.cine = false; settings.bloom = false;
+  return { version: SETTINGS_KEY, savedAt: new Date().toISOString(),
+           route: (typeof currentRouteNames==='function' ? currentRouteNames() : undefined),
+           settings };
+}
+
 function applyHud(){
   const set=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display = on?'':'none'; };
   set('title',P.showTitle); set('hint',P.showHints); set('telemetry',P.showTelemetry);
@@ -2700,6 +2717,28 @@ function buildPanel() {
     Object.assign(P, JSON.parse(JSON.stringify(DEFAULTS)));
     try { localStorage.removeItem(SETTINGS_KEY); } catch(_){}
     location.reload();
+  };
+
+  // Capture the current UI/control state as a portable JSON blob: downloads a file
+  // AND copies to clipboard. Hand the JSON back to bake these in as the app defaults.
+  const exportBtn = el('div','btn',acts); exportBtn.textContent='⬇ Export settings (JSON)';
+  exportBtn.title = 'Save every current setting + the active route as JSON you can share or bake in as defaults';
+  exportBtn.onclick=()=>{
+    const blob = collectSettings();
+    const json = JSON.stringify(blob, null, 2);
+    // download a file
+    try {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([json], {type:'application/json'}));
+      a.download = 'pid-helmsman-settings.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+    } catch(_){}
+    // copy to clipboard too
+    try { navigator.clipboard && navigator.clipboard.writeText(json); } catch(_){}
+    const old = exportBtn.textContent;
+    exportBtn.textContent = '✓ Saved + copied'; exportBtn.classList.add('active');
+    setTimeout(()=>{ exportBtn.textContent = old; exportBtn.classList.remove('active'); }, 1600);
   };
 
   setMode(P.mode);
