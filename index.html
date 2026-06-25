@@ -1253,10 +1253,11 @@ let dirSubjectId = 'ship';   // who the Director camera films (ship, or a focuse
 function _dirSubject(){
   if (dirSubjectId!=='ship'){ const v=FLEET.find(x=>x.id===dirSubjectId);
     if (v && !v.ship){ const w=v.route && v.route[v.wpIdx]; const tgt = w ? {x:w.x,z:w.z,r:40} : {x:v.pos.x,z:v.pos.z,r:40};
-      const scale = v.id==='sub'?0.42 : v.id==='plane'?1.3 : v.id==='ufo'?1.1 : 1;
-      return { x:v.pos.x, z:v.pos.z, y:v.pos.y, psi:v.yaw, path:v.path||null, tgt, scale }; } }
+      const scale  = v.id==='sub'?0.55 : v.id==='plane'?1.3 : v.id==='ufo'?1.1 : 1;   // chase DISTANCE scale
+      const hscale = v.id==='sub'?0.22 : v.id==='plane'?1.2 : v.id==='ufo'?1.0 : 1;   // chase HEIGHT scale (sub rides low/underwater)
+      return { x:v.pos.x, z:v.pos.z, y:v.pos.y, psi:v.yaw, path:v.path||null, tgt, scale, hscale }; } }
   const t=clock.elapsedTime, tg=(route[wpIdx]||activeTarget());
-  return { x:boat3.x, z:boat3.z, y:waveHeightJS(boat3.x,boat3.z,t), psi:boat3.psi, path:path, tgt:tg, scale:1 };
+  return { x:boat3.x, z:boat3.z, y:waveHeightJS(boat3.x,boat3.z,t), psi:boat3.psi, path:path, tgt:tg, scale:1, hscale:1 };
 }
 function islandPt(name){ const i = ISLANDS.find(s=>s.name===name); return i ? {x:i.x, z:i.z} : null; }
 function routeFrom(names){ const r = names.map(islandPt).filter(Boolean); return r.length ? r : ISLANDS.slice(0,5).map(i=>({x:i.x,z:i.z})); }
@@ -1307,7 +1308,7 @@ function buildVehicles(){
   const shipCam=new THREE.PerspectiveCamera(52,1,0.5,26000);
   FLEET.push({ id:'ship', label:'Ship', ship:true, cam:shipCam, _cp:new THREE.Vector3(), _cl:new THREE.Vector3(), camInit:false, camDist:55, camHigh:22 });
   const defs=[
-    { id:'sub',   label:'Submarine', cruiseY:-24, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:24, mesh:buildSubMesh(),
+    { id:'sub',   label:'Submarine', cruiseY:-34, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:18, mesh:buildSubMesh(),
       routeNames:['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts'] },
     { id:'plane', label:'Plane',     cruiseY:95,  cruiseSpeed:70,  turnRate:0.5,  accelK:0.5, arriveR:95, bank:1, camDist:78, camHigh:26, mesh:buildPlaneMesh(),
       routeNames:['St. Thomas','Tortola','Anguilla','St. Martin','St. Barths','Antigua'] },
@@ -2816,7 +2817,7 @@ function springVec(pos, vel, target, omega, dt){
   }
 }
 function cineDesired(){
-  const S = _dirSubject(), sc = S.scale;                      // subject = ship or the focused vehicle
+  const S = _dirSubject(), sc = S.scale, hc = S.hscale;       // subject = ship or the focused vehicle (distance + height scales)
   const bx = S.x, bz = S.z, by = S.y;
   const ch = Math.cos(S.psi), sh = Math.sin(S.psi);           // heading unit
   const rx = sh, rz = -ch;                                    // starboard (right of heading)
@@ -2827,16 +2828,16 @@ function cineDesired(){
   const sgn = (sum > 0) ? -1 : 1;
   // ---- SIDE: profile the subject from the side, framing the islands beyond it ----
   if (P.cineView === 'side'){
-    _cDesP.set(bx + rx*128*sc*sgn, by + 46*sc, bz + rz*128*sc*sgn);
-    const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+26)_cDesP.y=tH+26;
-    _cDesL.set(bx + ch*8, by + 7, bz + sh*8);
+    _cDesP.set(bx + rx*128*sc*sgn, by + 46*hc, bz + rz*128*sc*sgn);
+    const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+26*hc)_cDesP.y=tH+26*hc;
+    _cDesL.set(bx + ch*8, by + 7*hc, bz + sh*8);
     return;
   }
   // ---- RACE: tucked in close behind & to one side, low, zoomed — feel the action ----
   if (P.cineView === 'race'){
-    _cDesP.set(bx - ch*46*sc + rx*20*sc*sgn, by + 17*sc, bz - sh*46*sc + rz*20*sc*sgn);
-    const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+12)_cDesP.y=tH+12;
-    _cDesL.set(bx + ch*34, by + 9, bz + sh*34);              // look ahead down the course
+    _cDesP.set(bx - ch*46*sc + rx*20*sc*sgn, by + 17*hc, bz - sh*46*sc + rz*20*sc*sgn);
+    const tH=terrainHeight(_cDesP.x,_cDesP.z); if(_cDesP.y<tH+12*hc)_cDesP.y=tH+12*hc;
+    _cDesL.set(bx + ch*34, by + 9*hc, bz + sh*34);              // look ahead down the course
     return;
   }
   // ---- FOLLOW (Adams↔Bresson slider) ----
@@ -2863,10 +2864,10 @@ function cineDesired(){
   const swing  = clampJS(turn/0.6, -1, 1) * 95;
   // rule-of-thirds: push the look target sideways so the boat sits ~a third off-centre
   const thirdOff = lerp(42, 82, blend) * (turn>=0?1:-1);
-  _cDesP.set(bx - ch*back*sc + rx*swing*sc, by + hgt*sc, bz - sh*back*sc + rz*swing*sc);
-  const tH = terrainHeight(_cDesP.x, _cDesP.z); if (_cDesP.y < tH+30) _cDesP.y = tH+30;   // don't clip an island
+  _cDesP.set(bx - ch*back*sc + rx*swing*sc, by + hgt*hc, bz - sh*back*sc + rz*swing*sc);
+  const tH = terrainHeight(_cDesP.x, _cDesP.z); if (_cDesP.y < tH+30*hc) _cDesP.y = tH+30*hc;   // don't clip terrain
   // horizon-on-a-third: aim the look point low (subject + a touch up) and lead it ahead
-  _cDesL.set(bx + ch*lead*sc + rx*thirdOff, by + 8, bz + sh*lead + rz*thirdOff);
+  _cDesL.set(bx + ch*lead*sc + rx*thirdOff, by + 8*hc, bz + sh*lead + rz*thirdOff);
 }
 function updateCineCam(dt){
   // ---- helicopter showcase: when the boat reaches the FINAL island of the route, orbit the island
