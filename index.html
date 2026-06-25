@@ -350,7 +350,7 @@ function gebcoMetres(x,z){ const M=BATHY_META;
   const a=BATHY[r0*M.w+c0], b=BATHY[r0*M.w+c1], c=BATHY[r1*M.w+c0], d=BATHY[r1*M.w+c1];
   return (a*(1-tx)+b*tx)*(1-tz) + (c*(1-tx)+d*tx)*tz; }
 // compress 0..~8300 m of real depth into a viewable 0..60 world units (banks/shelves get the fine end)
-function compressM(dm){ return 110*(1-Math.exp(-Math.max(0,dm)/720)); }   // deeper seabed → real room for the submarine
+function compressM(dm){ return 80*(1-Math.exp(-Math.max(0,dm)/640)); }   // slightly decompressed (was 60) → room for the submarine; keep the real GEBCO shape
 function gebcoDepthWorld(x,z){ return compressM(-gebcoMetres(x,z)); }
 function buildTerrainField(){
   let minX=1e9,maxX=-1e9,minZ=1e9,maxZ=-1e9;
@@ -386,12 +386,9 @@ function buildTerrainField(){
       // NAV depth (grounding + A*): a simple, predictable navigable shelf — shallow at the coast,
       // ~11u offshore so open water is never wrongly blocked. Keeps pathfinding stable & deterministic.
       Hh[i] = -Math.min(dOut[i]*CELL*0.45, 11);
-      // VISUAL seabed: real GEBCO bathymetry (compressed), but RAMPED UP toward the coast so islands get a
-      // sloping underwater skirt instead of a vertical cliff dropping straight to the deep abyss (which read
-      // as clipped, flat-bottomed prisms once the seabed was decompressed).
+      // VISUAL seabed: REAL GEBCO bathymetry (compressed), so the translucent water reveals true topography
       const gd = gebcoDepthWorld(wx, wz);
-      const shelf = dOut[i]*CELL*0.8;                    // shallow at the shore → rises to the GEBCO depth offshore
-      Hsea[i] = -Math.max(1.0, Math.min(gd, shelf) + (fbm(wx*0.05, wz*0.05)-0.5)*1.4);
+      Hsea[i] = -Math.max(1.0, gd + (fbm(wx*0.05, wz*0.05)-0.5)*1.4);
     }
   }
   TF={GX0,GZ0,GW,GH,CELL,H:Hh,Hsea};
@@ -1225,7 +1222,7 @@ function buildSeaSkirt() {
   // ties. Orthographic depth (linear) resolves them; the director's perspective depth (1/z, little
   // precision at range) can't → z-fight flicker that appeared only with the director camera. Keeping
   // the planes from intersecting kills it at the source. (Far edge is past the fog, so no seam.)
-  seaSkirt.position.y = -66; seaSkirt.renderOrder = -5; scene.add(seaSkirt);   // below the deepest GEBCO seabed (~-60) so it never occludes the bathymetry
+  seaSkirt.position.y = -88; seaSkirt.renderOrder = -5; scene.add(seaSkirt);   // BELOW the deepest decompressed GEBCO seabed (~-80) so it never clips/occludes the bathymetry
 }
 function buildLights() {
   sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
@@ -1310,7 +1307,7 @@ function buildVehicles(){
   const shipCam=new THREE.PerspectiveCamera(52,1,0.5,26000);
   FLEET.push({ id:'ship', label:'Ship', ship:true, cam:shipCam, _cp:new THREE.Vector3(), _cl:new THREE.Vector3(), camInit:false, camDist:55, camHigh:22 });
   const defs=[
-    { id:'sub',   label:'Submarine', cruiseY:-30, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:26, mesh:buildSubMesh(),
+    { id:'sub',   label:'Submarine', cruiseY:-24, cruiseSpeed:24,  turnRate:0.5,  accelK:0.6, arriveR:55, camDist:50, camHigh:24, mesh:buildSubMesh(),
       routeNames:['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts'] },
     { id:'plane', label:'Plane',     cruiseY:95,  cruiseSpeed:70,  turnRate:0.5,  accelK:0.5, arriveR:95, bank:1, camDist:78, camHigh:26, mesh:buildPlaneMesh(),
       routeNames:['St. Thomas','Tortola','Anguilla','St. Martin','St. Barths','Antigua'] },
@@ -2378,7 +2375,7 @@ function buildBathyTexture(){
   const W=900, H=800, data=new Uint8Array(W*H*4);
   for (let j=0;j<H;j++) for (let i=0;i<W;i++){
     const x=lerp(BATHY_RGN.x0,BATHY_RGN.x1,i/(W-1)), z=lerp(BATHY_RGN.z0,BATHY_RGN.z1,j/(H-1));
-    const depth=clampJS(-seabedHeight(x,z), 0, 110), v=Math.round(depth/110*255), k=(j*W+i)*4;   // 0..110u compressed depth
+    const depth=clampJS(-seabedHeight(x,z), 0, 80), v=Math.round(depth/80*255), k=(j*W+i)*4;   // 0..80u compressed depth
     data[k]=v; data[k+1]=v; data[k+2]=v; data[k+3]=255;
   }
   // force the outer border to "deep" so ClampToEdge beyond the tile reads as uniform abyss (never streaks)
