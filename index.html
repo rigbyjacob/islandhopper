@@ -1048,6 +1048,7 @@ async function init() {
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildTerrain(); buildDipStick();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
+  buildShrubs(); buildTownMotifs();
   buildNavVisuals();
   buildWake();
   buildLabels();
@@ -1554,6 +1555,66 @@ function buildPalms(){
     }
   }
   for (const slot of meshes){ slot.m.count=slot.n; slot.m.instanceMatrix.needsUpdate=true; }
+}
+
+// ---- low shrub / bush ground cover: merged blobby geometry, scattered densely on lowlands ----
+function makeBush(){
+  const geos=[];
+  for (let i=0;i<3;i++){ const s=new THREE.IcosahedronGeometry(0.55+Math.random()*0.3, 0);
+    s.translate((Math.random()-0.5)*0.7, 0.4+Math.random()*0.25, (Math.random()-0.5)*0.7);
+    setGeoColor(s, i%2 ? 0x396e2f : 0x47853a); geos.push(s); }
+  return mergeGeos(geos);
+}
+function buildShrubs(){
+  const g=makeBush(), mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.92 });
+  const CAP=640; const m=new THREE.InstancedMesh(g, mat, CAP); m.castShadow=true; m.receiveShadow=true; m.count=0; scene.add(m);
+  const d=new THREE.Object3D(); let n=0;
+  for (const isl of ISLANDS){ const big=isl.r>80;
+    const cap = big ? Math.min(Math.round(isl.r*1.8), 240) : Math.min(Math.round(isl.r*1.1), 28);
+    let p=0, tr=0;
+    while (p<cap && tr<cap*20 && n<CAP){ tr++;
+      const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*isl.r*(big?0.74:0.95);
+      const x=isl.x+Math.cos(a)*rr, z=isl.z+Math.sin(a)*rr, hh=terrainHeight(x,z);
+      if (hh<2.2 || hh>12) continue;                              // lowland cover, clear of the wave wash
+      d.position.set(x, hh-0.1, z); d.rotation.set(0, Math.random()*Math.PI*2, 0);
+      const s=0.7+Math.random()*0.9; d.scale.set(s, s*(0.7+Math.random()*0.5), s); d.updateMatrix();
+      m.setMatrixAt(n++, d.matrix); p++;
+    }
+  }
+  m.count=n; m.instanceMatrix.needsUpdate=true;
+}
+
+// ---- colonial town motifs: clustered pastel buildings + a church steeple, near the city markers ----
+function buildTownMotifs(){
+  const wallCols=[0xead6b8,0xe8b7a0,0xcfe0d0,0xf0d59a,0xd8b0c8,0xefe6d2], roofCol=0x8a4b39;
+  const churchCol=0xf3efe6, spireCol=0x9a5a3a;
+  const onLand=(x,z)=>terrainHeight(x,z)>2.0;
+  const geos=[];
+  for (const ct of CITIES){
+    if (ct.w<3) continue;
+    const count=clampJS(Math.round(Math.sqrt(ct.w)*1.4), 2, 16), spread=4+Math.sqrt(ct.w)*2.0;
+    let placed=0, tries=0;
+    while (placed<count && tries<count*16){ tries++;
+      const a=Math.random()*Math.PI*2, rr=Math.pow(Math.random(),0.7)*spread;
+      const x=ct.x+Math.cos(a)*rr, z=ct.z+Math.sin(a)*rr; if (!onLand(x,z)) continue;
+      const base=terrainHeight(x,z);
+      const w=1.4+Math.random()*1.6, dp=1.4+Math.random()*1.6, h=1.6+Math.random()*(2.0+ct.w*0.04);
+      const b=new THREE.BoxGeometry(w,h,dp); b.translate(x, base+h/2, z); setGeoColor(b, wallCols[(Math.random()*wallCols.length)|0]); geos.push(b);
+      const rf=new THREE.ConeGeometry(Math.max(w,dp)*0.62, 0.8+Math.random()*0.6, 4); rf.rotateY(Math.PI/4); rf.translate(x, base+h+0.4, z); setGeoColor(rf, roofCol); geos.push(rf);
+      placed++;
+    }
+    if (ct.w>=8){                                                  // a church/landmark tower for sizable towns
+      let cx=ct.x, cz=ct.z, ok=onLand(cx,cz), t=0;
+      while (!ok && t<12){ t++; const a=Math.random()*Math.PI*2, rr=Math.random()*spread*0.5; cx=ct.x+Math.cos(a)*rr; cz=ct.z+Math.sin(a)*rr; ok=onLand(cx,cz); }
+      if (ok){ const base=terrainHeight(cx,cz);
+        const tower=new THREE.BoxGeometry(1.5,5.0,1.5); tower.translate(cx, base+2.5, cz); setGeoColor(tower, churchCol); geos.push(tower);
+        const spire=new THREE.ConeGeometry(1.1,2.4,4); spire.rotateY(Math.PI/4); spire.translate(cx, base+5.0+1.2, cz); setGeoColor(spire, spireCol); geos.push(spire);
+      }
+    }
+  }
+  if (!geos.length) return;
+  const mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.82 });
+  const mesh=new THREE.Mesh(mergeGeos(geos), mat); mesh.castShadow=true; mesh.receiveShadow=true; scene.add(mesh);
 }
 
 // ---- fireworks: the current target island celebrates the boat's visit (Sprite particle pool) ----
