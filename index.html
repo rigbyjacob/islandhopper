@@ -1157,6 +1157,10 @@ const uMoonDir = uniform(new THREE.Vector3(0, 1, 0));
 const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
 const uBathy   = uniform(0.0);   // bathymetry overlay strength (0 off → 1 on)
+const uTargetPos  = uniform(new THREE.Vector2(0,0));   // target-island glow: centre, colour, pulse, falloff radius
+const uTargetCol  = uniform(new THREE.Vector3(1,0.5,0.15));
+const uTargetGlow = uniform(0.0);
+const uTargetRad  = uniform(120.0);
 
 let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt, oceanMat;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
@@ -1865,39 +1869,7 @@ function stepEstimator(dt) {
 }
 
 let pathRibbon, estRing, gpsPings = [], gpsPtr = 0;
-let targetGlow, glowRings=[], glowKey=''; const _glowCol = new THREE.Color();
-// Build a flat glowing ribbon that traces an OFFSET of a coastline ring (a "contour" hugging the island).
-// pts = array of [x,z] (world). offset = distance outside the coast; width = ribbon thickness. Absolute XZ.
-function _ribbonInto(mesh, pts, offset, width){
-  let R = pts;
-  if (R.length>1 && R[0][0]===R[R.length-1][0] && R[0][1]===R[R.length-1][1]) R = R.slice(0,-1);   // drop closing dup
-  const step = Math.max(1, Math.floor(R.length/120)), Pp=[];                                       // decimate to ~120 pts
-  for (let i=0;i<R.length;i+=step) Pp.push(R[i]);
-  const N = Pp.length; if (N<3){ mesh.visible=false; return; } mesh.visible=true;
-  let cx=0, cz=0; for (const p of Pp){ cx+=p[0]; cz+=p[1]; } cx/=N; cz/=N;
-  const nrm=(i)=>{ const a=Pp[(i-1+N)%N], b=Pp[i], c=Pp[(i+1)%N];
-    let tx=c[0]-a[0], tz=c[1]-a[1]; const tl=Math.hypot(tx,tz)||1; tx/=tl; tz/=tl;
-    let nx=tz, nz=-tx;                                                    // perpendicular to the tangent
-    if (nx*(b[0]-cx)+nz*(b[1]-cz) < 0){ nx=-nx; nz=-nz; }                 // flip to point OUTWARD from centroid
-    return [nx,nz]; };
-  const io=offset-width/2, oo=offset+width/2, pos=new Float32Array(N*18); let o=0;
-  const push=(x,z)=>{ pos[o++]=x; pos[o++]=0; pos[o++]=z; };
-  for (let i=0;i<N;i++){ const i2=(i+1)%N, a=Pp[i], b=Pp[i2], na=nrm(i), nb=nrm(i2);
-    const aix=a[0]+na[0]*io, aiz=a[1]+na[1]*io, aox=a[0]+na[0]*oo, aoz=a[1]+na[1]*oo;
-    const bix=b[0]+nb[0]*io, biz=b[1]+nb[1]*io, box=b[0]+nb[0]*oo, boz=b[1]+nb[1]*oo;
-    push(aix,aiz); push(aox,aoz); push(box,boz);                         // triangle 1
-    push(aix,aiz); push(box,boz); push(bix,biz);                         // triangle 2
-  }
-  if (mesh.geometry) mesh.geometry.dispose();
-  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos,3)); mesh.geometry=g;
-}
-function setTargetGlowShape(ring, cx, cz, fallbackR){
-  let pts = ring;
-  if (!pts || pts.length<6){ pts=[]; const Rr=Math.max(fallbackR||26, 18);   // circle fallback (goto targets)
-    for (let a=0;a<56;a++){ const th=a/56*Math.PI*2; pts.push([cx+Math.cos(th)*Rr, cz+Math.sin(th)*Rr]); } }
-  const offs=[7,16,27];
-  for (let k=0;k<glowRings.length;k++) _ribbonInto(glowRings[k], pts, offs[k], 5);
-}
+const _glowCol = new THREE.Color();   // target glow is now drawn in the ocean shader (uTarget* uniforms)
 function buildNavVisuals() {
   // planned route as a ribbon of forward-tapering "wedge" dashes lying on the water (world-space width,
   // so perspective foreshortens them). The boat EATS dashes as it passes — only the path ahead draws.
@@ -1911,14 +1883,7 @@ function buildNavVisuals() {
     opacity: 0.7, depthTest: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));   // glowing dashes — depth-tested so the hull & wave crests occlude them (sunken look, not floating over the ship)
   pathRibbon.frustumCulled = false; pathRibbon.renderOrder = 5; scene.add(pathRibbon);
 
-  // target glow: warm pulsing contours that trace the target island's actual coastline shape
-  targetGlow = new THREE.Group(); targetGlow.renderOrder = 3; glowRings = [];
-  for (let k=0;k<3;k++){
-    const m = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({
-      color:0xff7a2e, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide, fog:false }));
-    m.frustumCulled=false; m.renderOrder=3; targetGlow.add(m); glowRings.push(m);
-  }
-  scene.add(targetGlow);
+  // (target glow is drawn in the ocean shader — see the uTarget* uniforms — so there's no geometry here)
 
   estRing = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.4, 8, 20),
     new THREE.MeshBasicMaterial({ color: 0x7be08a, transparent: true, opacity: 0.85 }));
@@ -1977,22 +1942,19 @@ function updateNavVisuals(dt) {
     else m.material.opacity = 0; }
   if (estRing && kf) { const e = kf.est; estRing.position.set(e.px, 2.2, e.pz);
     estRing.visible = P.showGps; }    // toggled by "Show GPS fixes"
-  if (targetGlow) {
-    const show = (P.mode !== 'hold');
-    targetGlow.visible = show;
-    if (show) {
-      let tx, tz, rad, ring=null, key;
-      if (P.mode === 'tour') { const isl = route[wpIdx]; tx=isl.x; tz=isl.z; rad=Math.max(isl.r,22); ring=isl.ring; key='t:'+(isl.name||wpIdx); }
-      else { const tg = activeTarget(); tx=tg.x; tz=tg.z; rad=26; key='g:'+Math.round(tx)+','+Math.round(tz); }
-      if (key !== glowKey){ glowKey=key; setTargetGlowShape(ring, tx, tz, rad); }   // rebuild contours only on target change
-      const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7), yw = waveHeightJS(tx, tz, tt);
-      targetGlow.position.set(0, yw + 1.0, 0);   // contour geometry is in absolute XZ — just lift to the wave surface
-      _glowCol.setHSL(0.045 + 0.03*Math.sin(tt*0.5), 0.95, 0.58);   // warm red↔amber drift
-      for (let k=0;k<glowRings.length;k++){ const m=glowRings[k];
-        m.material.color.copy(_glowCol);
-        m.material.opacity = (0.5 - k*0.13) * (0.55 + 0.45*pulse);   // inner contour brightest, all pulsing
-      }
-    }
+  {
+    // target glow — drive the ocean-shader contour glow toward the target island (smooth, per-pixel)
+    if (P.mode !== 'hold') {
+      let tx, tz, rad;
+      if (P.mode === 'tour') { const isl = route[wpIdx]; tx=isl.x; tz=isl.z; rad=Math.max(isl.r,22); }
+      else { const tg = activeTarget(); tx=tg.x; tz=tg.z; rad=26; }
+      const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7);
+      uTargetPos.value.set(tx, tz);
+      uTargetRad.value = Math.max(rad*2.6, 90);                      // falloff radius scales with island size
+      _glowCol.setHSL(0.045 + 0.03*Math.sin(tt*0.5), 0.95, 0.6);     // warm red↔amber drift
+      uTargetCol.value.set(_glowCol.r, _glowCol.g, _glowCol.b);
+      uTargetGlow.value = 0.55 + 0.45*pulse;                         // pulse the brightness
+    } else { uTargetGlow.value = 0; }
   }
   updateWake(boat3, clock.elapsedTime);
 }
@@ -2246,6 +2208,14 @@ function buildOcean() {
     // art-style grade — desaturate toward luma + tint (so Ink/Monet etc. carry across the water too)
     const _gl = dot(col, vec3(0.299,0.587,0.114));
     col.assign(mix(vec3(_gl), col, uGradeSat).mul(uGradeTint));
+
+    // ---- target glow: warm iso-depth contours that hug the target island, drawn per-pixel (smooth, no
+    //      geometry/segmentation), localized by a soft radial falloff and pulsed from JS via uTargetGlow ----
+    const _td   = vec2(positionWorld.x.sub(uTargetPos.x), positionWorld.z.sub(uTargetPos.y)).length();
+    const _tprx = smoothstep(uTargetRad, uTargetRad.mul(0.28), _td);          // 1 near the target → 0 far away
+    const _tband= depthN.mul(20.0);                                           // tighter contour spacing than the bathy overlay
+    const _tline= oneMinus(smoothstep(0.0, 0.11, abs(sin(_tband.mul(3.14159265)))));
+    col.addAssign(uTargetCol.mul(_tline.mul(_tprx).mul(uTargetGlow)));
 
     return col.mul(uDayBright);   // darken the sea at night
   });
