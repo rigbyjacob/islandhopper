@@ -386,9 +386,12 @@ function buildTerrainField(){
       // NAV depth (grounding + A*): a simple, predictable navigable shelf — shallow at the coast,
       // ~11u offshore so open water is never wrongly blocked. Keeps pathfinding stable & deterministic.
       Hh[i] = -Math.min(dOut[i]*CELL*0.45, 11);
-      // VISUAL seabed: REAL GEBCO bathymetry (compressed), so the translucent water reveals true topography
+      // VISUAL seabed: real GEBCO bathymetry (compressed), but RAMPED UP toward the coast so islands get a
+      // sloping underwater skirt instead of a vertical cliff dropping straight to the deep abyss (which read
+      // as clipped, flat-bottomed prisms once the seabed was decompressed).
       const gd = gebcoDepthWorld(wx, wz);
-      Hsea[i] = -Math.max(1.0, gd + (fbm(wx*0.05, wz*0.05)-0.5)*1.4);
+      const shelf = dOut[i]*CELL*0.8;                    // shallow at the shore → rises to the GEBCO depth offshore
+      Hsea[i] = -Math.max(1.0, Math.min(gd, shelf) + (fbm(wx*0.05, wz*0.05)-0.5)*1.4);
     }
   }
   TF={GX0,GZ0,GW,GH,CELL,H:Hh,Hsea};
@@ -1325,11 +1328,9 @@ function makeVehLine(color){   // debug polyline of a vehicle's route/path (show
   l.frustumCulled=false; l.renderOrder=6; l.visible=false; scene.add(l); return l;
 }
 function updateVehPath(v){
-  if (!v.pathLine) return;
+  if (!v.pathLine || v.id==='sub') { if (v.pathLine) v.pathLine.visible=false; return; }   // sub uses the wedge ribbon
   if (!P.debugNav){ if (v.pathLine.visible) v.pathLine.visible=false; return; }
-  let pts;
-  if (v.id==='sub' && v.path && v.path.length>1) pts=v.path;                 // sub: its full A* path
-  else { const w=v.route && v.route[v.wpIdx]; pts = w ? [{x:v.pos.x,z:v.pos.z},{x:w.x,z:w.z}] : null; }   // others: line to target
+  const w=v.route && v.route[v.wpIdx]; const pts = w ? [{x:v.pos.x,z:v.pos.z},{x:w.x,z:w.z}] : null;   // line to target
   if (!pts || pts.length<2){ v.pathLine.visible=false; return; }
   const y=v.pos.y+0.5, arr=v.pathLine.geometry.attributes.position.array, n=Math.min(pts.length,256);
   for (let i=0;i<n;i++){ arr[i*3]=pts[i].x; arr[i*3+1]=y; arr[i*3+2]=pts[i].z; }
@@ -2112,7 +2113,7 @@ function stepEstimator(dt) {
   }
 }
 
-let pathRibbon, estRing, gpsPings = [], gpsPtr = 0;
+let pathRibbon, subRibbon, estRing, gpsPings = [], gpsPtr = 0;
 const _glowCol = new THREE.Color();
 let targetRing = null, targetRingKey = '';
 // soft vertical gradient (bright at the water line → fades up): the glow band's "rising" look
@@ -2149,18 +2150,20 @@ function setTargetRing(ring, cx, cz, fallbackR){
   const g=_ringGeom(pts, 8, 4.5);
   if(g){ if(targetRing.geometry) targetRing.geometry.dispose(); targetRing.geometry=g; targetRing.visible=true; } else targetRing.visible=false;
 }
-function buildNavVisuals() {
-  // planned route as a ribbon of forward-tapering "wedge" dashes lying on the water (world-space width,
-  // so perspective foreshortens them). The boat EATS dashes as it passes — only the path ahead draws.
-  const DASHMAX = 460;   // enough dashes to show the whole global loop when "full path" is on
-  const rg = new THREE.BufferGeometry();
-  rg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DASHMAX*4*3), 3));
-  const idx = new Uint16Array(DASHMAX*6);
+// a ribbon of forward-tapering "wedge" dashes lying on the water; the vehicle EATS dashes as it passes
+function makeRibbonMesh(color){
+  const DASHMAX=460, rg=new THREE.BufferGeometry();
+  rg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DASHMAX*4*3),3));
+  const idx=new Uint16Array(DASHMAX*6);
   for (let i=0;i<DASHMAX;i++){ const b=i*4; idx[i*6]=b; idx[i*6+1]=b+1; idx[i*6+2]=b+2; idx[i*6+3]=b; idx[i*6+4]=b+2; idx[i*6+5]=b+3; }
   rg.setIndex(new THREE.BufferAttribute(idx,1));
-  pathRibbon = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: 0xffe1a0, transparent: true,
-    opacity: 0.7, depthTest: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));   // glowing dashes — depth-tested so the hull & wave crests occlude them (sunken look, not floating over the ship)
-  pathRibbon.frustumCulled = false; pathRibbon.renderOrder = 5; scene.add(pathRibbon);
+  const m=new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0.7,
+    depthTest:true, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending }));
+  m.frustumCulled=false; m.renderOrder=5; scene.add(m); return m;
+}
+function buildNavVisuals() {
+  pathRibbon = makeRibbonMesh(0xffe1a0);   // ship route (warm gold)
+  subRibbon  = makeRibbonMesh(0x9fe6ff);   // submarine route (cool cyan)
 
   // target glow: one smooth vertical glowing band hugging the target island's coastline (stands above the water)
   targetRing = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({
@@ -2177,44 +2180,50 @@ function buildNavVisuals() {
       color: 0xffd27f, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
     m.position.y = 1.6; m.userData.life = 0; scene.add(m); gpsPings.push(m); }
 }
-function updatePathLine() {
-  if (!pathRibbon) return;
-  const pts = path, show = P.showPath && pts && pts.length > 1;
-  pathRibbon.visible = show;
-  if (!show){ pathRibbon.geometry.setDrawRange(0,0); return; }
-  // cumulative arc-length of each path vertex
+// Fill a wedge-dash ribbon from `pts`, with the vehicle at (ex,ez) "eating" passed dashes, laid at height
+// yLevel. If `gate` is given (pathFull off), the dashes stop at the next waypoint instead of the full route.
+function fillRibbon(ribbon, pts, ex, ez, yLevel, gate){
+  if (!ribbon) return;
+  const show = P.showPath && pts && pts.length > 1;
+  ribbon.visible = show;
+  if (!show){ ribbon.geometry.setDrawRange(0,0); return; }
   const segS=[0]; let acc=0;
   for (let i=0;i<pts.length-1;i++){ acc += Math.hypot(pts[i+1].x-pts[i].x, pts[i+1].z-pts[i].z); segS.push(acc); }
   const total=acc;
-  // boat progress = arc-length of its nearest point on the path (everything behind is "eaten")
   let bestD=Infinity, bestS=0;
   for (let i=0;i<pts.length-1;i++){ const a=pts[i],b=pts[i+1], abx=b.x-a.x,abz=b.z-a.z, L2=abx*abx+abz*abz||1e-6;
-    const tt=clampJS(((boat3.x-a.x)*abx+(boat3.z-a.z)*abz)/L2,0,1), px=a.x+abx*tt,pz=a.z+abz*tt, d=Math.hypot(boat3.x-px,boat3.z-pz);
+    const tt=clampJS(((ex-a.x)*abx+(ez-a.z)*abz)/L2,0,1), px=a.x+abx*tt,pz=a.z+abz*tt, d=Math.hypot(ex-px,ez-pz);
     if(d<bestD){ bestD=d; bestS=segS[i]+tt*Math.hypot(abx,abz); } }
   const at=(s)=>{ s=clampJS(s,0,total); let i=0; while(i<segS.length-1 && segS[i+1]<s) i++;
     const a=pts[i], b=pts[Math.min(i+1,pts.length-1)], segl=Math.max(segS[i+1]-segS[i],1e-6), tt=(s-segS[i])/segl;
     let dx=b.x-a.x, dz=b.z-a.z, dl=Math.hypot(dx,dz)||1; return { x:a.x+dx*tt, z:a.z+dz*tt, dx:dx/dl, dz:dz/dl }; };
-  const arr = pathRibbon.geometry.attributes.position.array;
-  const dash=10, gap=7, wB=4.6, wF=1.4, y=0.45, DASHMAX=460;  // sit low at the water surface (sunken)
-  // "full" → draw the whole route ahead; otherwise stop at the next waypoint (the current target gate)
+  const arr = ribbon.geometry.attributes.position.array;
+  const dash=10, gap=7, wB=4.6, wF=1.4, y=yLevel, DASHMAX=460;
   let capS = total;
-  if (P.pathFull === false && P.mode==='tour' && route[wpIdx]){
-    const g = routeGate(wpIdx); let bd=Infinity;
+  if (gate){ let bd=Infinity;
     for (let i=0;i<pts.length-1;i++){ const a=pts[i],b=pts[i+1], abx=b.x-a.x,abz=b.z-a.z, L2=abx*abx+abz*abz||1e-6;
-      const tt=clampJS(((g.x-a.x)*abx+(g.z-a.z)*abz)/L2,0,1), px=a.x+abx*tt,pz=a.z+abz*tt, d=Math.hypot(g.x-px,g.z-pz), arc=segS[i]+tt*Math.hypot(abx,abz);
+      const tt=clampJS(((gate.x-a.x)*abx+(gate.z-a.z)*abz)/L2,0,1), px=a.x+abx*tt,pz=a.z+abz*tt, d=Math.hypot(gate.x-px,gate.z-pz), arc=segS[i]+tt*Math.hypot(abx,abz);
       if (d<bd && arc>bestS){ bd=d; capS=arc+dash; } }
   }
-  let s = bestS + 20, di = 0;                                 // begin well ahead of the bow → boat eats dashes earlier
+  let s = bestS + 20, di = 0;
   while (s < Math.min(total, capS) && di < DASHMAX){
     const p0=at(s), p1=at(s+dash), nx=-p0.dz, nz=p0.dx, b=di*12;
-    arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y; arr[b+2 ]=p0.z-nz*wB*0.5;   // back-left  (wide)
-    arr[b+3 ]=p0.x+nx*wB*0.5; arr[b+4 ]=y; arr[b+5 ]=p0.z+nz*wB*0.5;   // back-right
-    arr[b+6 ]=p1.x+nx*wF*0.5; arr[b+7 ]=y; arr[b+8 ]=p1.z+nz*wF*0.5;   // front-right (narrow → wedge)
-    arr[b+9 ]=p1.x-nx*wF*0.5; arr[b+10]=y; arr[b+11]=p1.z-nz*wF*0.5;   // front-left
+    arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y; arr[b+2 ]=p0.z-nz*wB*0.5;
+    arr[b+3 ]=p0.x+nx*wB*0.5; arr[b+4 ]=y; arr[b+5 ]=p0.z+nz*wB*0.5;
+    arr[b+6 ]=p1.x+nx*wF*0.5; arr[b+7 ]=y; arr[b+8 ]=p1.z+nz*wF*0.5;
+    arr[b+9 ]=p1.x-nx*wF*0.5; arr[b+10]=y; arr[b+11]=p1.z-nz*wF*0.5;
     di++; s += dash+gap;
   }
-  pathRibbon.geometry.setDrawRange(0, di*6);
-  pathRibbon.geometry.attributes.position.needsUpdate = true;
+  ribbon.geometry.setDrawRange(0, di*6);
+  ribbon.geometry.attributes.position.needsUpdate = true;
+}
+function updatePathLine() {
+  fillRibbon(pathRibbon, path, boat3.x, boat3.z, 0.45,
+    (P.pathFull===false && P.mode==='tour' && route[wpIdx]) ? routeGate(wpIdx) : null);
+  // submarine route ribbon — same wedge markers + same Show-path / Full-route controls, at the sub's depth
+  const sub = (typeof FLEET!=='undefined') ? FLEET.find(v=>v.id==='sub') : null;
+  if (subRibbon) fillRibbon(subRibbon, sub&&sub.path, sub?sub.pos.x:0, sub?sub.pos.z:0, sub?sub.pos.y+0.6:0.45,
+    (sub && P.pathFull===false && sub.route && sub.route[sub.wpIdx]) ? sub.route[sub.wpIdx] : null);
 }
 function spawnGpsPing(x,z){ if(!P.showGps) return; const m = gpsPings[gpsPtr]; gpsPtr = (gpsPtr+1)%gpsPings.length;
   m.position.set(x, 1.6, z); m.userData.life = 1; }
