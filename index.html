@@ -1501,17 +1501,22 @@ function updateClouds(dt, sf, day){
   // drift with the wind — direction AND speed now respond to the wind controls
   const wx=Math.cos(d2r(P.windDirDeg)), wz=Math.sin(d2r(P.windDirDeg)), spd=6 + P.windStrength*2.4 + 26*sf;
   const sy=Math.max(_sun.y, 0.16), shadowOp = clampJS(day*1.1,0,1)*(1-0.55*sf)*0.22;
+  let localRain = 0;   // how strongly the BOAT sits under a storm cell → drives rain-on-lens (not global storm)
   for (let i=0;i<cloudGroups.length;i++){ const grp=cloudGroups[i];
     grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
     if(grp.position.x>cloudBounds.maxX)grp.position.x=cloudBounds.minX; if(grp.position.x<cloudBounds.minX)grp.position.x=cloudBounds.maxX;
     if(grp.position.z>cloudBounds.maxZ)grp.position.z=cloudBounds.minZ; if(grp.position.z<cloudBounds.minZ)grp.position.z=cloudBounds.maxZ;
-    const r=grp.userData.rain; if(r){ const ro=clampJS(sf*(0.32+0.68*(grp.userData.storm||0))*0.85, 0, 0.72);   // more clouds rain at high storm
+    const sCell=grp.userData.storm||0;
+    const r=grp.userData.rain; if(r){ const ro=clampJS(sf*(0.32+0.68*sCell)*0.85, 0, 0.72);   // more clouds rain at high storm
       r.material.opacity=ro; r.visible = ro>0.012; }
+    if (sCell>0.05){ const dd=Math.hypot(boat3.x-grp.position.x, boat3.z-grp.position.z), R=grp.userData.w*1.7;   // rain reaches ~1.7× cloud width
+      localRain = Math.max(localRain, sCell * clampJS(1 - dd/R, 0, 1)); }
     const sh=cloudShadows[i]; if(sh){ const tproj=grp.position.y/sy;   // project the cloud down the sun ray to the sea
       sh.position.set(grp.position.x - _sun.x*tproj, 1.8, grp.position.z - _sun.z*tproj);
       const ss=grp.userData.w*1.25; sh.scale.set(ss, ss, 1);
       sh.material.opacity = clampJS(shadowOp + sf*(grp.userData.storm||0)*0.4, 0, 0.7); sh.visible = sh.material.opacity>0.01; }
   }
+  uRain.value = clampJS(sf * localRain * 1.6, 0, 1);   // rain-on-lens ONLY when the boat is under/near a storm cell
   // ---- lightning: random strikes under the stormiest cells; a bolt column + flash that lights the scene ----
   if (lightLight){
     if (lightT<=0 && sf>0.15 && Math.random() < sf*sf*dt*2.8){       // more frequent strikes in heavy storms
