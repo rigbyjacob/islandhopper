@@ -1165,7 +1165,7 @@ const C = {
   horNight:new THREE.Color(0x0a1830), horDay:new THREE.Color(0x9cc8ea), horGold:new THREE.Color(0xff7e3c),   // less washed-out daytime horizon
   sunDay:new THREE.Color(0xfff3d4),   sunGold:new THREE.Color(0xff7a30),
   ltNight:new THREE.Color(0x3b4f86),  ltDay:new THREE.Color(0xfff2da),  ltGold:new THREE.Color(0xff9a52),
-  stormGray:new THREE.Color(0x55606a),
+  stormGray:new THREE.Color(0x3c444e),   // darker so heavy storms genuinely dim the sky
 };
 const _cZen=new THREE.Color(), _cHor=new THREE.Color(), _cSun=new THREE.Color(), _cLight=new THREE.Color();
 
@@ -1285,7 +1285,7 @@ function updateEnvironment(dt) {
   const sf = stormFactor;
   // sea state is its own control now (independent of storm). Drives both the GPU surface (uSea)
   // and the CPU sampler that floats the boat (seaAmp).
-  seaAmp = P.waveHeight * (1 + 0.7*sf);     // storms whip up bigger seas
+  seaAmp = P.waveHeight * (1 + 1.0*sf);     // storms whip up bigger seas
   uSea.value = seaAmp;
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   if (dipStick) dipStick.visible = uBathy.value > 0.04;                 // depth sounding shows with bathymetry
@@ -1302,7 +1302,7 @@ function updateEnvironment(dt) {
   _cHor.copy(C.horNight).lerp(C.horDay, day).lerp(C.horGold, warm);
   _cSun.copy(C.sunDay).lerp(C.sunGold, warm);
   _cLight.copy(C.ltNight).lerp(C.ltDay, day).lerp(C.ltGold, warm*0.8);
-  if (sf>0){ _cZen.lerp(C.stormGray, sf*0.75); _cHor.lerp(C.stormGray, sf*0.65); _cLight.lerp(C.stormGray, sf*0.6); }
+  if (sf>0){ _cZen.lerp(C.stormGray, sf*0.92); _cHor.lerp(C.stormGray, sf*0.88); _cLight.lerp(C.stormGray, sf*0.78); }
 
   uZenith.value.set(_cZen.r,_cZen.g,_cZen.b);
   uHorizon.value.set(_cHor.r,_cHor.g,_cHor.b);
@@ -1367,7 +1367,7 @@ function updateEnvironment(dt) {
   sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
   sunLight.castShadow = day > 0.06;
 
-  renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.4*sf);
+  renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.55*sf);   // storms dim the scene more
   applyStyleLighting();   // tint sky/lights/exposure for the selected art style (layers on top of day/night)
   if (skyMesh) skyMesh.position.set(controls.target.x, 0, controls.target.z);
   updateClouds(dt, sf, day);
@@ -1441,7 +1441,7 @@ function buildClouds(){
   cloudBounds={ minX:MAP.minX-700, maxX:MAP.maxX+700, minZ:MAP.minZ-700, maxZ:MAP.maxZ+700 };
   for (let i=0;i<20;i++){
     const grp=new THREE.Group(); const puffs=[];
-    grp.userData.storm = Math.pow(Math.random(), 1.6);   // 0..1 storm potential, biased toward gentle
+    grp.userData.storm = Math.pow(Math.random(), 1.15);  // 0..1 storm potential (less biased → more cells storm up)
     const w=130+Math.random()*120, baseY=300+Math.random()*170;
     // flatter shaded base row
     const nb=3+Math.floor(Math.random()*3);
@@ -1493,7 +1493,7 @@ function updateClouds(dt, sf, day){
   const tint=lerp(1.0,0.34,sf), bright=0.10+0.90*day, op=(0.82+0.18*day);   // dark clouds at night (not glowing white)
   const cols=[[1,1,1],[0.90,0.94,1.0],[0.62,0.70,0.82]];   // brighter tops, darker shaded bases
   for (const s of cloudSprites){ const b=cols[s.userData.tier], ao=s.userData.ao, m=s.material;
-    const sd = 1 - 0.74*sf*(s.userData.storm||0);          // storm cells go charcoal under the storm
+    const sd = 1 - sf*(0.42 + 0.5*(s.userData.storm||0));   // ALL clouds darken in a heavy storm, storm cells → charcoal
     const T = tint*bright*ao*sd;
     m.color.setRGB(b[0]*T, b[1]*T, Math.min(1,b[2]*T*1.04));
     m.opacity = op*0.95; }
@@ -1505,7 +1505,7 @@ function updateClouds(dt, sf, day){
     grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
     if(grp.position.x>cloudBounds.maxX)grp.position.x=cloudBounds.minX; if(grp.position.x<cloudBounds.minX)grp.position.x=cloudBounds.maxX;
     if(grp.position.z>cloudBounds.maxZ)grp.position.z=cloudBounds.minZ; if(grp.position.z<cloudBounds.minZ)grp.position.z=cloudBounds.maxZ;
-    const r=grp.userData.rain; if(r){ const ro=clampJS(sf*(grp.userData.storm||0)*0.7, 0, 0.6);   // rain shaft scales with storm × cell
+    const r=grp.userData.rain; if(r){ const ro=clampJS(sf*(0.32+0.68*(grp.userData.storm||0))*0.85, 0, 0.72);   // more clouds rain at high storm
       r.material.opacity=ro; r.visible = ro>0.012; }
     const sh=cloudShadows[i]; if(sh){ const tproj=grp.position.y/sy;   // project the cloud down the sun ray to the sea
       sh.position.set(grp.position.x - _sun.x*tproj, 1.8, grp.position.z - _sun.z*tproj);
@@ -1514,7 +1514,7 @@ function updateClouds(dt, sf, day){
   }
   // ---- lightning: random strikes under the stormiest cells; a bolt column + flash that lights the scene ----
   if (lightLight){
-    if (lightT<=0 && sf>0.18 && Math.random() < sf*sf*dt*1.4){
+    if (lightT<=0 && sf>0.15 && Math.random() < sf*sf*dt*2.8){       // more frequent strikes in heavy storms
       let best=cloudGroups[0], bs=-1;                                   // weighted pick toward stormy cells
       for (const g of cloudGroups){ const v=g.userData.storm*Math.random(); if(v>bs){ bs=v; best=g; } }
       lightStrike.set(best.position.x, best.position.z); lightBaseY=best.position.y;
@@ -1526,9 +1526,9 @@ function updateClouds(dt, sf, day){
       const k = clampJS(lightT/Math.max(lightDur,1e-3), 0, 1);
       const flick = k * (0.55 + 0.45*Math.sin(k*40));                   // flicker that fades out
       lightLight.position.set(lightStrike.x, lightBaseY*0.5, lightStrike.y);
-      lightLight.intensity = flick * 2600;
-      boltMesh.material.opacity = clampJS(flick*1.6, 0, 1); boltMesh.visible = true;
-      renderer.toneMappingExposure *= (1 + flick*0.55);                 // brief whole-sky flash
+      lightLight.intensity = flick * 4200;
+      boltMesh.material.opacity = clampJS(flick*1.8, 0, 1); boltMesh.visible = true;
+      renderer.toneMappingExposure *= (1 + flick*1.0);                  // bright whole-sky flash that pops against the dark storm
     } else { lightLight.intensity = 0; if (boltMesh) boltMesh.visible = false; }
   }
 }
