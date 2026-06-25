@@ -257,7 +257,8 @@ const P = {
   tourMinutes: 1,     // target duration for the full route (soft deadline; PID stays in control)
   cineStyle: 0.2,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
   cineView: 'follow', // director camera mode: 'follow' (slider) | 'side' | 'race'
-  bathy: true,        // bathymetric overlay — show underwater depth + contours
+  bathy: true,        // bathymetric overlay — show underwater depth ramp
+  contours: false,    // iso-depth contour LINES — independent of the bathymetry ramp
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
   showClouds: true,   // clouds (can hide them for a clean debug view)
   cloudSoft: true,    // cloud look: true = soft naturalistic, false = cartoon cel-shaded puffs
@@ -710,6 +711,35 @@ function tourFollowPath(bx, bz){
 // ---- navigation debug overlay: the A* grid (blocked = red, open water shaded by distance-to-land),
 //      the raw grid path (yellow, angular) vs the simplified path (green), and start/gate markers ----
 let navOverlay=null, navRawLine=null, navSimpLine=null, navMarkStart=null, navMarkGate=null, navMarkTgt=null;
+// ---- submarine debug overlay: the sub's OWN depth grid (blocked cells) + its A* plan, drawn at the sub's depth ----
+let subNavOverlay=null, subNavGridDepth=null, subNavLine=null;
+function buildSubNavGrid(){
+  if (subNavOverlay){ scene.remove(subNavOverlay); subNavOverlay.traverse(o=>{ o.geometry&&o.geometry.dispose(); o.material&&o.material.dispose&&o.material.dispose(); }); subNavOverlay=null; subNavLine=null; }
+  if (!subBlocked) return;
+  const grp=new THREE.Group(); grp.renderOrder=30;
+  const N=GRID.cols*GRID.rows, y=(subGridDepth||-34)+1; let nb=0; for(let i=0;i<N;i++) if(subBlocked[i]) nb++;
+  const geo=new THREE.CircleGeometry(GRID.size*0.92, 6, Math.PI/6); geo.rotateX(-Math.PI/2);
+  const blk=new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({color:0x2aa0ff,transparent:true,opacity:0.38,depthTest:false}), nb||1);
+  blk.renderOrder=30; const d=new THREE.Object3D(); let bi=0;
+  for(let r=0;r<GRID.rows;r++)for(let c=0;c<GRID.cols;c++){ const i=gIdx(c,r); if(!subBlocked[i])continue; const p=cellCenter(c,r);
+    d.position.set(p.x,y,p.z); d.updateMatrix(); blk.setMatrixAt(bi++, d.matrix); }
+  blk.instanceMatrix.needsUpdate=true; grp.add(blk);
+  const g2=new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(2000*3),3));
+  subNavLine=new THREE.Line(g2, new THREE.LineBasicMaterial({color:0x9fe6ff,transparent:true,depthTest:false})); subNavLine.renderOrder=32; subNavLine.frustumCulled=false; grp.add(subNavLine);
+  scene.add(grp); subNavOverlay=grp; subNavGridDepth=subGridDepth;
+}
+function updateSubNavDebug(){
+  if (P.debugNav && subBlocked && subGridDepth!==subNavGridDepth) buildSubNavGrid();   // rebuild on depth change
+  if (!subNavOverlay) return;
+  subNavOverlay.visible = !!P.debugNav;
+  if (!P.debugNav) return;
+  const sub = FLEET.find(v=>v.id==='sub');
+  if (sub && sub.path && sub.path.length>1 && subNavLine){
+    const a=subNavLine.geometry.attributes.position.array, n=Math.min(sub.path.length,2000), y=(subGridDepth||-34)+1.6;
+    for(let i=0;i<n;i++){ a[i*3]=sub.path[i].x; a[i*3+1]=y; a[i*3+2]=sub.path[i].z; }
+    subNavLine.geometry.setDrawRange(0,n); subNavLine.geometry.attributes.position.needsUpdate=true; subNavLine.visible=true;
+  } else if (subNavLine) subNavLine.visible=false;
+}
 function buildNavGrid(){
   const grp=new THREE.Group(); grp.visible=false; grp.renderOrder=30;
   const N=GRID.cols*GRID.rows; let nb=0; for(let i=0;i<N;i++) if(BLOCKED[i]) nb++;
@@ -1124,6 +1154,7 @@ async function init() {
     updateNavDebug();
     updateFireworks(dt);
     updateVehicles(dt);   // submarine / plane / UFO agents + their chase cameras
+    updateSubNavDebug();  // sub's depth grid + plan in the nav-debug overlay (after the sub has planned this frame)
     controls.update();
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
@@ -1173,6 +1204,8 @@ const uMoonDir = uniform(new THREE.Vector3(0, 1, 0));
 const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
 const uBathy   = uniform(0.0);   // bathymetry overlay strength (0 off → 1 on)
+const uContour = uniform(0.0);   // iso-depth contour LINES strength — independent of the bathymetry ramp
+const uHokusai = uniform(0.0);   // Hokusai ukiyo-e water recolor + foam boost (1 when that style is active)
 const uTargetPos  = uniform(new THREE.Vector2(0,0));   // target-island glow: centre, colour, pulse, falloff radius
 const uTargetCol  = uniform(new THREE.Vector3(1,0.5,0.15));
 const uTargetGlow = uniform(0.0);
@@ -1457,7 +1490,10 @@ function setFleetView(v){
     // single view = the FULL Director filming the chosen subject (ship for Normal/Ship, else the vehicle)
     dirSubjectId = (v==='off'||v==='ship') ? 'ship' : v;
     if (fpsMode) setView(false); if (flyMode) setFly(false);
-    cineInit = false;                                  // re-swoop onto the new subject
+    // switching subjects: if we're ALREADY filming, glide from the current camera pose (no sky re-swoop);
+    // if we're not yet in cine, setCine() below seeds the start from the current view.
+    if (cineMode){ cineCam.updateMatrixWorld(); _cP.copy(cineCam.getWorldPosition(new THREE.Vector3())); _cPv.set(0,0,0); _cLv.set(0,0,0); cineInit = true; }
+    else cineInit = false;
     if (v==='off' || v==='ship'){ if (P.cine && !cineMode) setCine(true); }
     else { if (!cineMode) setCine(true); }             // a focused vehicle is always filmed by the Director
   }
@@ -1481,10 +1517,12 @@ const STYLES = {
   gauguin:   { label:'Gauguin — Post-Impressionist',       exposure:1.02, sat:1.40, contrast:1.12, warm:0.04,  ambient:0.92, lightTint:[1.07,0.98,0.84], skyTint:[1.06,0.98,0.90], sceneSat:1.00, outline:0.85 },
   ink:       { label:'Japanese Ink (sumi-e)',              exposure:1.12, sat:0.05, contrast:1.55, warm:0.03,  ambient:1.30, lightTint:[1.02,1.00,0.94], skyTint:[1.07,1.05,0.97], sceneSat:0.06, outline:0.95 },
   monet:     { label:'Monet — Impressionist',              exposure:1.10, sat:0.66, contrast:0.84, warm:-0.01, ambient:1.28, lightTint:[1.00,0.99,1.03], skyTint:[1.02,1.00,1.06], sceneSat:0.74 },
-  // Hokusai ukiyo-e — deep Prussian-blue sea + white foam under a PALE CREAM sky → water & sky graded separately
-  hokusai:   { label:'Hokusai — Great Wave (ukiyo-e)',     exposure:1.05, sat:0.82, contrast:1.32, warm:0.02,  ambient:1.12, lightTint:[1.05,1.00,0.88],
-               skyTint:[1.14,1.07,0.88], skySat:0.28,                  // pale warm-cream sky
-               waterTint:[0.72,0.88,1.20], waterSat:0.95, sceneSat:0.92, outline:0.78 },   // Prussian-blue sea + ink outlines
+  // Hokusai ukiyo-e — the WATER is recoloured to the actual Great Wave palette in-shader (uHokusai):
+  // deep Prussian blue #1B3A4B → seafoam #A3D2CA → sky-blue #A7C7E7, with boosted white foam crests.
+  // Here we only set the PALE CREAM sky + ink outlines and leave the water tint neutral so the in-shader recolor reads true.
+  hokusai:   { label:'Hokusai — Great Wave (ukiyo-e)',     exposure:1.04, sat:0.90, contrast:1.34, warm:0.01,  ambient:1.10, lightTint:[1.05,1.00,0.88],
+               skyTint:[1.16,1.08,0.86], skySat:0.24,                  // pale warm-cream sky (the Great Wave's negative space)
+               waterTint:[1.0,1.0,1.0], waterSat:1.0, sceneSat:0.94, outline:0.82 },   // water handled by uHokusai recolor; ink outlines on
 };
 function styleNow(){ return STYLES[P.style] || STYLES.tropical; }
 function gradeRGB(r, g, b, S){
@@ -1524,6 +1562,7 @@ function applyStyleLighting(){
   uGradeSat.value = waterSat;                                    // water shader desaturation
   uGradeTint.value.set(wt[0], wt[1], wt[2]);                     // water shader tint
   uOutline.value = (P.outline === false) ? 0 : (S.outline || 0); // woodblock ink-outline strength
+  uHokusai.value = (P.style === 'hokusai') ? 1 : 0;              // in-shader Great-Wave water recolor + foam boost
 }
 function setStyle(name){ if (STYLES[name]) P.style=name; applySceneStyle(); saveSettings(); }
 
@@ -1545,6 +1584,7 @@ function updateEnvironment(dt) {
   seaAmp = P.waveHeight * (1 + 1.0*localStorm);     // rough seas only near a storm cell
   uSea.value = seaAmp;
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
+  uContour.value += ((P.contours?1:0) - uContour.value) * Math.min(1, dt*4);   // smooth contour-line fade (independent toggle)
   if (dipStick) dipStick.visible = uBathy.value > 0.04;                 // depth sounding shows with bathymetry
   uRain.value = stormFactor;                                            // rain-on-lens intensity follows the storm
 
@@ -2385,10 +2425,44 @@ function buildBathyTexture(){
   t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.minFilter=t.magFilter=THREE.LinearFilter;
   return t;
 }
+// ---- Hokusai foam-claw texture: white claws with a DARK INDIGO KEYLINE baked into the ART (so every tendril has a
+// real edge — noise alone can't leave a rim). Tileable (wrap copies). Stamped along the wave crests in the shader. ----
+function buildHokusaiFoamTexture(){
+  const S=512, cv=document.createElement('canvas'); cv.width=cv.height=S;
+  const g=cv.getContext('2d'); g.clearRect(0,0,S,S);
+  const DARK='#14305c', WHITE='#f7f2e6';
+  g.lineJoin='round'; g.lineCap='round';
+  // one foam "claw": a curling comma tail rising into a cluster of beads, white-filled with a dark keyline stroke
+  function claw(px,py,rot,sc){
+    g.save(); g.translate(px,py); g.rotate(rot); g.scale(sc,sc);
+    g.fillStyle=WHITE; g.strokeStyle=DARK; g.lineWidth=5.5;
+    g.beginPath();                                   // comma/curl body
+    g.moveTo(0,10);
+    g.quadraticCurveTo(3,-4, 13,-12);
+    g.quadraticCurveTo(22,-20, 18,-31);
+    g.quadraticCurveTo(14,-40, 4,-39);
+    g.quadraticCurveTo(-4,-38, -2,-29);
+    g.quadraticCurveTo(2,-18, -5,-10);
+    g.quadraticCurveTo(-11,-2, -7,9);
+    g.closePath(); g.fill(); g.stroke();
+    for(const [bx,by,r] of [[9,-33,6.5],[1,-37,5],[-5,-31,4.5],[13,-27,4.5],[5,-24,3.8],[16,-34,3.4]]){
+      g.beginPath(); g.arc(bx,by,r,0,7); g.fill(); g.stroke(); }   // bead curl tips
+    g.restore();
+  }
+  let seed=7; const rnd=()=>{ seed=(seed*48271)%2147483647; return seed/2147483647; };
+  for(let i=0;i<24;i++){ const px=rnd()*S, py=rnd()*S, rot=rnd()*6.2832, sc=0.5+rnd()*0.75;
+    for(const dx of [-S,0,S]) for(const dy of [-S,0,S]) claw(px+dx,py+dy,rot,sc); }   // wrap copies → seamless tile
+  const tex=new THREE.CanvasTexture(cv);
+  tex.wrapS=tex.wrapT=THREE.RepeatWrapping; tex.colorSpace=THREE.SRGBColorSpace;
+  // NO mipmaps — mip-blur was eating the thin dark keyline at distance, leaving soft white blobs. Linear keeps the rim crisp.
+  tex.generateMipmaps=false; tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter; tex.anisotropy=8; tex.needsUpdate=true;
+  return tex;
+}
 function buildOcean() {
   const geo = new THREE.PlaneGeometry(5600, 4000, 540, 380);   // wide enough to cover past Puerto Rico
   geo.rotateX(-Math.PI/2); geo.translate(MAP.cx, 0, MAP.cz);
   const bathyTex = buildBathyTexture();
+  const hkFoamTex = buildHokusaiFoamTexture();   // pre-drawn Hokusai claws (white + dark keyline) stamped on the crests
   // soft CIRCULAR bathymetry border, centred on the seabed mesh, kept inside the data region so it never
   // hits the texture edge (which caused the white contour ring). Large radius — fades far out in deep water.
   const BCX=MAP.cx, BCZ=MAP.cz, BR0=1150, BR1=1560;
@@ -2434,6 +2508,19 @@ function buildOcean() {
     const patch2 = fbm2(xz.mul(0.075).add(drift.mul(0.05)));
     col.assign(col.mul(float(0.84).add(patch.mul(0.26)).add(patch2.mul(0.08))));   // calmer light/dark
 
+    // ---- Hokusai "Great Wave" water recolor (uHokusai) — the real ukiyo-e palette, driven by WAVE HEIGHT ----
+    // (the Great Wave's sea is deep Prussian blue everywhere; seafoam appears only as the swell rises to its crest)
+    // troughs/flats = deep Prussian blue #1B3A4B → mid blue → seafoam #A3D2CA at the crests. Foam (white + sky-blue
+    // #A7C7E7 shadow) is added separately below. Bias toward deep blue so the bulk of the sea reads dark and carved.
+    // Hokusai's signature progression: dark INDIGO troughs → vivid COBALT body → pale blue ONLY at the crest tips.
+    // Bias the mapping dark (input range shifted high) so ordinary/flat water sits in the deep indigo-cobalt range —
+    // the print is overwhelmingly deep blue, with pale tones reserved for the curling crest edges and foam.
+    const hkT = smoothstep(-0.2, 2.6, wh);                                          // most water → deep; only tall crests go pale
+    const hk = mix(vec3(0.063,0.157,0.337), vec3(0.149,0.322,0.580), smoothstep(0.0,0.5,hkT)).toVar();   // deep indigo #102856 → cobalt #264f94
+    hk.assign(mix(hk, vec3(0.275,0.490,0.710), smoothstep(0.52,0.84,hkT)));         // → mid cobalt #467db5
+    hk.assign(mix(hk, vec3(0.655,0.780,0.906), smoothstep(0.88,1.0,hkT)));          // → pale sky-blue #A7C7E7 only at the crest tips
+    col.assign(mix(col, hk, uHokusai));
+
     // big low-frequency dark mottle (applied as a MULTIPLY at the end so it survives bright sun)
     const mottle = smoothstep(0.56, 0.28, fbm2(xz.mul(0.011).add(drift.mul(0.03))));
 
@@ -2442,18 +2529,21 @@ function buildOcean() {
     const sss = smoothstep(-0.2,1.3,wh).mul(clamp(dot(viewDir, sunDir), 0.0, 1.0));
     col.addAssign(vec3(0.0,0.20,0.17).mul(sss).mul(uSunInt).mul(0.16));
 
+    // ukiyo-e is FLAT painted colour, not glossy water — when Hokusai is active, suppress the glossy
+    // sky-fresnel + sun glitter so the deep-blue / seafoam palette reads as solid woodblock areas.
+    const hkFlat = oneMinus(uHokusai.mul(0.88));
     // fresnel sky reflection (horizon/zenith blend), capped so it isn't a hard mirror
     const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 4.0);
-    col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.55), 0.0, 0.55)));   // less satin sky-sheen at grazing angles
+    col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.55), 0.0, 0.55).mul(hkFlat)));   // less satin sky-sheen at grazing angles
 
     // sun reflection — broad lobes so the glittering sun path reads at distance, plus a tight glint
     const halfv = normalize(viewDir.add(sunDir));
     const hN = max(dot(n, halfv), 0.0);
-    col.addAssign(uSunCol.mul(pow(hN, 48.0).mul(0.14).mul(uSunInt)));    // dim narrow sheen (no broad white glitter patch)
-    col.addAssign(uSunCol.mul(pow(hN, 140.0).mul(0.38).mul(uSunInt)));   // tight glitter only
+    col.addAssign(uSunCol.mul(pow(hN, 48.0).mul(0.14).mul(uSunInt)).mul(hkFlat));    // dim narrow sheen (no broad white glitter patch)
+    col.addAssign(uSunCol.mul(pow(hN, 140.0).mul(0.38).mul(uSunInt)).mul(hkFlat));   // tight glitter only
     // sea-of-diamonds sparkle — subtle noise-gated glints, confined to the tightest glint zone
     const spk = vnoise(xz.mul(0.45).add(vec2(time.mul(0.7), time.mul(-0.5))));
-    col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 150.0).mul(smoothstep(0.66,0.92,spk)).mul(uSunInt).mul(0.8)));
+    col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 150.0).mul(smoothstep(0.66,0.92,spk)).mul(uSunInt).mul(0.8)).mul(hkFlat));
 
     // fake wave self-shadowing — darken points blocked from the sun by a crest toward the sun
     const sunH = normalize(vec2(uSunDir.x, uSunDir.z));
@@ -2466,14 +2556,35 @@ function buildOcean() {
     // foam / whitecaps on steeper crest tops, broken up by aperiodic noise
     const fnoise = fbm2(xz.mul(0.09).add(drift.mul(0.6)));
     const clump  = smoothstep(0.34, 0.7, fbm2(xz.mul(0.022)));
-    const crest = smoothstep(0.68,1.20,wh).mul(smoothstep(0.96,0.74,n.y));   // more whitecaps along the swell crests
-    const whitecap = clamp(crest.mul(smoothstep(0.45,0.80, fnoise)).mul(clump), 0.0, 1.0);
+    // Hokusai foams far more readily — lower the crest threshold and amplify so the swells grow the iconic white claws
+    const crestLo = mix(float(0.68), float(0.54), uHokusai);
+    const crest = smoothstep(crestLo,1.20,wh).mul(smoothstep(0.96,0.74,n.y));   // more whitecaps along the swell crests
+    // solid whitecap clumps make blobs — fade them out under Hokusai so the lacy FINGERS below carry the foam instead
+    const wcBase = crest.mul(smoothstep(0.45,0.80, fnoise)).mul(clump);
+    // under Hokusai the broad crest whitecap is cut WAY down (it was reading as solid bands) — the lacy FINGERS below
+    // carry nearly all the foam, so the sea stays deep blue with thin white tendrils rather than white stripes.
+    const whitecap = clamp(wcBase.mul(oneMinus(uHokusai)), 0.0, 1.0);   // non-Hokusai whitecap; Hokusai foam is the froth block below
     // shoreline foam — a broken band hugging the islands that LAPS in and out (sin travelling up the
     // shore-proximity gradient), brighter and wider than before so the coast reads as surf, not a flat edge
     const lap = sin(sp.mul(42.0).sub(time.mul(2.3))).mul(0.5).add(0.5);
     const shoreFoam = smoothstep(0.72,0.985,sp).mul(smoothstep(0.26,0.66, fnoise)).mul(float(0.5).add(lap.mul(0.7)));
+    const foamCol = mix(vec3(0.95,0.98,1.0), vec3(0.965,0.940,0.860), uHokusai);   // warm cream foam for Hokusai, cold white otherwise
     const foam = clamp(max(whitecap, shoreFoam), 0.0, 1.0);
-    col.assign(mix(col, vec3(0.95,0.98,1.0), foam));
+    col.assign(mix(col, foamCol, foam));
+    // ---- Hokusai froth as INK: render the frilly noise as DARK woodblock LINEWORK (not white). White-on-white was
+    // invisible; dark ink on the pale crest masses reads like the print's keyblock froth lines. Warped fbm, thresholded. ----
+    const fwA = fbm2(xz.mul(0.16).add(drift.mul(0.5)));
+    const fwB = fbm2(xz.mul(0.16).add(vec2(4.7,2.1)).add(drift.mul(0.5)));
+    const fwarp = vec2(fwA.sub(0.5), fwB.sub(0.5)).mul(3.0);
+    const froth = fbm2(xz.mul(0.40).add(fwarp).add(drift.mul(0.7)));                  // warped lacy field (the red debug proved it's rich)
+    // The froth FIELD was always fine — every failure was COLOUR: dark ink on dark water, or white on white crests.
+    // Fix: a WHITE claw CORE with a slightly WIDER DARK-INDIGO RIM (the wider dark mask shows as a keyline around the
+    // white), gated by WAVE HEIGHT — n.y slope barely fires on these flat swells, but height does. White-on-blue reads.
+    const frothBand = smoothstep(-0.15, 1.05, wh).mul(uHokusai);                      // foam concentrates on higher water
+    const inkMask   = clamp(smoothstep(0.40, 0.47, froth).mul(frothBand), 0.0, 1.0);  // wider  → dark keyline rim
+    const whiteMask = clamp(smoothstep(0.50, 0.57, froth).mul(frothBand), 0.0, 1.0);  // narrower → white claw core
+    col.assign(mix(col, vec3(0.043,0.110,0.255), inkMask.mul(0.92)));                 // 1) dark indigo keyline first
+    col.assign(mix(col, foamCol, whiteMask));                                         // 2) white claw on top → ink rim remains
 
     // FINAL multiplicative wave shade + low-freq mottle — darkens troughs on the FINISHED colour so the
     // dapple reads in full sun, not just inside cloud shadows. whN = wave height in base units.
@@ -2492,8 +2603,10 @@ function buildOcean() {
     // soft CIRCULAR fade (a round border reads nicer than a rectangle)
     const _dx = positionWorld.x.sub(BCX), _dz = positionWorld.z.sub(BCZ);
     const bRad = oneMinus(smoothstep(float(BR0), float(BR1), vec2(_dx,_dz).length()));
-    const blended = mix(col, depthCol, float(0.30)).add(vec3(0.7,0.9,1.0).mul(cline).mul(0.5));
+    const blended = mix(col, depthCol, float(0.30));
     col.assign(mix(col, blended, uBathy.mul(bRad)));
+    // surface iso-depth contour LINES — own toggle (uContour), drawn whether or not the bathy ramp is on
+    col.assign(mix(col, col.add(vec3(0.62,0.84,1.0).mul(cline)), uContour.mul(bRad).mul(0.55)));
 
     // art-style grade — desaturate toward luma + tint (so Ink/Monet etc. carry across the water too)
     const _gl = dot(col, vec3(0.299,0.587,0.114));
@@ -3263,7 +3376,7 @@ function buildPanel() {
   // HUD visibility toggles
   let s = section(panel, 'Display');
   addSelect(s, 'Art style', P, 'style',
-    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.'],['ink','Japanese Ink (sumi-e)'],['monet','Monet — Impressionist'],['hokusai','Hokusai — Great Wave']],
+    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.'],['monet','Monet — Impressionist'],['ink','Japanese Ink (sumi-e)'],['hokusai','Hokusai — Great Wave']],
     (v)=>setStyle(v));
   addToggle(s, 'Title', P, 'showTitle', applyHud);
   addToggle(s, 'Control hints', P, 'showHints', applyHud);
@@ -3271,6 +3384,7 @@ function buildPanel() {
   addToggle(s, 'Compass', P, 'showCompass', applyHud);
   addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
+  addToggle(s, 'Depth contour lines', P, 'contours');
   addToggle(s, 'Clouds', P, 'showClouds');
   addToggle(s, 'Soft clouds (off = cartoon)', P, 'cloudSoft', ()=>setCloudStyle());
   addToggle(s, 'Rain particles + splashes', P, 'showRainParticles');
