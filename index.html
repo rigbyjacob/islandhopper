@@ -1870,6 +1870,15 @@ function stepEstimator(dt) {
 
 let pathRibbon, estRing, gpsPings = [], gpsPtr = 0;
 const _glowCol = new THREE.Color();   // target glow is now drawn in the ocean shader (uTarget* uniforms)
+let targetBeacon = null;   // upward volumetric glow plume so the target reads above the waves
+function makeBeaconTexture(){
+  const N=128, c=document.createElement('canvas'); c.width=c.height=N; const x=c.getContext('2d');
+  const g=x.createRadialGradient(N/2,N*0.66,2, N/2,N*0.62,N*0.52);   // brightest low (at the water/rings) → fades up & out
+  g.addColorStop(0.0,'rgba(255,255,255,0.95)'); g.addColorStop(0.32,'rgba(255,255,255,0.42)');
+  g.addColorStop(0.7,'rgba(255,255,255,0.12)'); g.addColorStop(1.0,'rgba(255,255,255,0)');
+  x.fillStyle=g; x.fillRect(0,0,N,N);
+  return new THREE.CanvasTexture(c);
+}
 function buildNavVisuals() {
   // planned route as a ribbon of forward-tapering "wedge" dashes lying on the water (world-space width,
   // so perspective foreshortens them). The boat EATS dashes as it passes — only the path ahead draws.
@@ -1883,7 +1892,10 @@ function buildNavVisuals() {
     opacity: 0.7, depthTest: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));   // glowing dashes — depth-tested so the hull & wave crests occlude them (sunken look, not floating over the ship)
   pathRibbon.frustumCulled = false; pathRibbon.renderOrder = 5; scene.add(pathRibbon);
 
-  // (target glow is drawn in the ocean shader — see the uTarget* uniforms — so there's no geometry here)
+  // target glow: contours in the ocean shader (uTarget* uniforms) + an upward glow plume that clears the waves
+  targetBeacon = new THREE.Sprite(new THREE.SpriteMaterial({ map:makeBeaconTexture(), color:0xff7a2e,
+    transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending, fog:true }));
+  targetBeacon.renderOrder = 3; targetBeacon.visible = false; scene.add(targetBeacon);
 
   estRing = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.4, 8, 20),
     new THREE.MeshBasicMaterial({ color: 0x7be08a, transparent: true, opacity: 0.85 }));
@@ -1954,7 +1966,15 @@ function updateNavVisuals(dt) {
       _glowCol.setHSL(0.045 + 0.03*Math.sin(tt*0.5), 0.95, 0.6);     // warm red↔amber drift
       uTargetCol.value.set(_glowCol.r, _glowCol.g, _glowCol.b);
       uTargetGlow.value = 0.55 + 0.45*pulse;                         // pulse the brightness
-    } else { uTargetGlow.value = 0; }
+      if (targetBeacon){                                            // upward glow plume — rises above the waves
+        const bw = Math.max(rad*2.4, 70), bh = bw*1.35, yw = waveHeightJS(tx, tz, tt);
+        targetBeacon.position.set(tx, yw + bh*0.4, tz);             // base near the water, plume rising up
+        targetBeacon.scale.set(bw, bh, 1);
+        targetBeacon.material.color.copy(_glowCol);
+        targetBeacon.material.opacity = 0.22 + 0.16*pulse;
+        targetBeacon.visible = true;
+      }
+    } else { uTargetGlow.value = 0; if (targetBeacon) targetBeacon.visible = false; }
   }
   updateWake(boat3, clock.elapsedTime);
 }
