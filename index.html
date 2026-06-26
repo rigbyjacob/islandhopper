@@ -348,6 +348,16 @@ function seaSurfaceY(wx, wz, t){
   for (let i=0;i<3;i++){ const g=gerstnerJS(px,pz,t); px=wx-g.dx; pz=wz-g.dz; }
   return gerstnerJS(px,pz,t).dy;
 }
+// Jacobian determinant of the horizontal Gerstner map (mirrors GPU waveFold): <1 compressing, →0/neg = breaking.
+function foldJS(x, z, t){
+  let jxx=0, jxz=0, jzz=0; const chop=uChop.value;
+  for (const w of WAVES){ const ph=(x*w.nx + z*w.ny)*w.freq + t*w.speed;
+    const s = Math.sin(ph)*w.amp*w.freq*chop;
+    jxx += -s*w.nx*w.nx; jxz += -s*w.nx*w.ny; jzz += -s*w.ny*w.ny; }
+  const E = seaAmp*waveEnvJS(x,z,t);
+  const a = 1+E*jxx, b = 1+E*jzz, c = E*jxz;
+  return a*b - c*c;
+}
 
 function waveHeightJS(x, z, t) {
   let h = 0;
@@ -1278,6 +1288,9 @@ const uSunScreenUV = uniform(new THREE.Vector2(0.5, 0.5));   // sun position in 
 const uSunOnScreen = uniform(0.0); // 1 when the sun is in front of the camera & roughly on screen, else 0
 const _curveInsts = [];          // base transforms of instanced decorations (palms/shrubs) so they can re-curve each frame
 const uHokusai = uniform(0.0);   // Hokusai ukiyo-e water recolor + foam boost (1 when that style is active)
+// amplitude-weighted wave TRAVEL direction (xz) — lets the shader tell the BACK (rising) face from the
+// FRONT (breaking) face, so foam can sit on the back like the Great Wave while the front underbelly stays deep blue
+const uWaveDir = uniform((()=>{ let x=0,z=0; for(const w of WAVES){ x+=-w.nx*w.amp; z+=-w.ny*w.amp; } const l=Math.hypot(x,z)||1; return new THREE.Vector2(x/l, z/l); })());
 const uTargetPos  = uniform(new THREE.Vector2(0,0));   // target-island glow: centre, colour, pulse, falloff radius
 const uTargetCol  = uniform(new THREE.Vector3(1,0.5,0.15));
 const uTargetGlow = uniform(0.0);
@@ -1604,6 +1617,9 @@ const STYLES = {
   gauguin:   { label:'Gauguin — Post-Impressionist',       exposure:1.02, sat:1.40, contrast:1.12, warm:0.04,  ambient:0.92, lightTint:[1.07,0.98,0.84], skyTint:[1.06,0.98,0.90], sceneSat:1.00, outline:0.85 },
   ink:       { label:'Japanese Ink (sumi-e)',              exposure:1.12, sat:0.05, contrast:1.55, warm:0.03,  ambient:1.30, lightTint:[1.02,1.00,0.94], skyTint:[1.07,1.05,0.97], sceneSat:0.06, outline:0.95 },
   monet:     { label:'Monet — Impressionist',              exposure:1.10, sat:0.66, contrast:0.84, warm:-0.01, ambient:1.28, lightTint:[1.00,0.99,1.03], skyTint:[1.02,1.00,1.06], sceneSat:0.74 },
+  // Van Gogh — Starry-Night post-impressionism: vivid ultramarine/cobalt water swirled into impasto strokes,
+  // chrome-yellow light, deep blue sky. Water is recoloured + swirled in-shader (uVangogh); ink outlines on.
+  vangogh:   { label:'Van Gogh — Starry Night',            exposure:1.06, sat:1.30, contrast:1.20, warm:0.05,  ambient:1.06, lightTint:[1.12,1.02,0.78], skyTint:[0.92,0.97,1.18], skySat:1.15, sceneSat:1.05, outline:0.80 },
   // Hokusai ukiyo-e — the WATER is recoloured to the actual Great Wave palette in-shader (uHokusai):
   // deep Prussian blue #1B3A4B → seafoam #A3D2CA → sky-blue #A7C7E7, with boosted white foam crests.
   // Here we only set the PALE CREAM sky + ink outlines and leave the water tint neutral so the in-shader recolor reads true.
@@ -2624,7 +2640,7 @@ function buildFoamClaws(){
 
   // one curled finger: tapered tube along a hooking arc + a droplet bead at the tip
   function fingerGeo(tubeR){
-    const SEG=9, RAD=6, PHI=Math.PI*0.86, ARC=0.55, BEAD=0.0;   // 0.86π ≈ 155°: a SHORT stubby curl that hooks well over (no bead → no mushroom-cap look)
+    const SEG=8, RAD=5, PHI=Math.PI*0.86, ARC=0.55, BEAD=0.0;   // 0.86π ≈ 155°: a SHORT stubby curl that hooks well over (lower-poly: lots of instances now)
     const pos=[], idx=[]; const T=new THREE.Vector3(), N=new THREE.Vector3(), B=new THREE.Vector3(0,0,1);
     let tipX=0, tipY=0;
     for (let i=0;i<=SEG;i++){
@@ -2650,7 +2666,7 @@ function buildFoamClaws(){
     return g;   // MeshBasic is unlit → no normals needed
   }
 
-  const G=8, R=104, NS=Math.floor(2*R/G)+1, CAP=NS*NS;
+  const G=7, R=120, NS=Math.floor(2*R/G)+1, CAP=2600;   // denser candidate grid + a big instance pool → lots more fingers
   const core  = new THREE.InstancedMesh(fingerGeo(0.150), new THREE.MeshBasicMaterial({color:WHITE}), CAP);
   // inverted-hull keyline: a FATTER tube rendered BACK-faces-only, so the dark only shows as a rim
   // around the white core's silhouette (a concentric solid tube would just bury the white inside it).
@@ -2690,8 +2706,9 @@ function updateFoamClaws(t){
     const steepN = smoothstepJS(0.25, 0.75, Math.hypot(gx,gz)/gref);
     const dwn = (gx*prop.x + gz*prop.z)/gref;                       // down-wave slope (<0 on the breaking front)
     const frontN = smoothstepJS(0.20, -0.40, dwn);
-    const score = heightN * (0.45 + 0.55*steepN) * (0.55 + 0.45*frontN);
-    if (score <= 0.10) continue;
+    const foldN  = smoothstepJS(0.92, 0.18, foldJS(x,z,t));         // surface overturning → actually breaking here
+    const score = heightN * (0.45 + 0.55*steepN) * (0.55 + 0.45*frontN) * (0.45 + 0.75*foldN);
+    if (score <= 0.07) continue;
     crests.push(x, z, h, score, wi, wj);
   }
 
@@ -2706,7 +2723,7 @@ function updateFoamClaws(t){
   let k = 0;
   for (let c=0; c<crests.length && k<CAP-10; c+=6){
     const cxw=crests[c], czw=crests[c+1], score=crests[c+3], wi=crests[c+4], wj=crests[c+5];
-    const nf = 1 + (_hash2(wi+13, wj+29)*5 | 0);                          // 1..5 fingers — uneven, sometimes a lone claw
+    const nf = 2 + (_hash2(wi+13, wj+29)*7 | 0);                          // 2..8 fingers — denser, uneven hands
     const clusterSc = (1.6 + 2.6*score) * seaScl;                        // hand size scales with crest strength + sea state
     // crest's WORLD position (Gerstner-displaced), then push the hand forward in WORLD space onto the fore-lip
     const gC = gerstnerJS(cxw, czw, t);
@@ -2881,6 +2898,20 @@ function buildOcean() {
       const c = cos(ph).mul(w.amp).mul(uChop);
       d.addAssign(vec3(c.mul(w.nx), sin(ph).mul(w.amp), c.mul(w.ny))); }
     return d.mul(uSea).mul(waveEnv(p)); });   // horizontal pinch + vertical, scaled by sea state × group envelope
+
+  // FOLD: Jacobian determinant of the horizontal Gerstner map (x,z)→(x+Dx, z+Dz). det≈1 on flat water,
+  // < 1 where the surface compresses toward a crest, and → 0 / negative where it OVERTURNS (breaks). Foam
+  // and fingers belong exactly where this dips — i.e. where the wave is actually breaking, not merely tall.
+  const waveFold = Fn(([p]) => {
+    const jxx = float(0).toVar(), jxz = float(0).toVar(), jzz = float(0).toVar();
+    for (const w of WAVES){
+      const ph = dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(uTime.mul(w.speed));
+      const s = sin(ph).mul(w.amp * w.freq).mul(uChop);                 // ∂cos/∂· = −sin·k ; A·k·sin·chop
+      jxx.addAssign(s.mul(-(w.nx*w.nx))); jxz.addAssign(s.mul(-(w.nx*w.ny))); jzz.addAssign(s.mul(-(w.ny*w.ny)));
+    }
+    const E = uSea.mul(waveEnv(p));
+    const a = jxx.mul(E).add(1.0), b = jzz.mul(E).add(1.0), cc = jxz.mul(E);
+    return a.mul(b).sub(cc.mul(cc)); });   // det(J)
   const waveN = Fn(([p]) => { const e = 0.9;
     const hL = waveH(p.add(vec2(-e,0))), hR = waveH(p.add(vec2(e,0)));
     const hD = waveH(p.add(vec2(0,-e))), hU = waveH(p.add(vec2(0,e)));
@@ -2931,6 +2962,13 @@ function buildOcean() {
     hk.assign(mix(hk, vec3(0.275,0.490,0.710), smoothstep(0.52,0.84,hkT)));         // → mid cobalt #467db5
     hk.assign(mix(hk, vec3(0.655,0.780,0.906), smoothstep(0.88,1.0,hkT)));          // → pale sky-blue #A7C7E7 only at the crest tips
     col.assign(mix(col, hk, uHokusai));
+
+    // ---- FRONT-vs-BACK split (the Great Wave's key move) — the normal's horizontal lean tells which face we're on:
+    // pointing WITH wave travel = the front/underbelly (breaking face) → force the two dark Prussian blues & no foam;
+    // pointing AGAINST travel = the rising back → keep the pale crest + foam. n.xz·waveDir > 0 ⇒ front.
+    const faceDot  = n.x.mul(uWaveDir.x).add(n.z.mul(uWaveDir.y));
+    const frontRaw = smoothstep(0.03, 0.20, faceDot);                               // 1 on the steep front face
+    col.assign(mix(col, vec3(0.055,0.140,0.300), frontRaw.mul(uHokusai).mul(0.85)));// front underbelly → deep indigo/cobalt
 
     // big low-frequency dark mottle (applied as a MULTIPLY at the end so it survives bright sun)
     const mottle = smoothstep(0.56, 0.28, fbm2(xz.mul(0.011).add(drift.mul(0.03))));
@@ -2999,7 +3037,12 @@ function buildOcean() {
     // The froth FIELD was always fine — every failure was COLOUR: dark ink on dark water, or white on white crests.
     // Fix: a WHITE claw CORE with a slightly WIDER DARK-INDIGO RIM (the wider dark mask shows as a keyline around the
     // white), gated by WAVE HEIGHT — n.y slope barely fires on these flat swells, but height does. White-on-blue reads.
-    const frothBand = smoothstep(-0.15, 1.05, wh).mul(uHokusai);                      // foam concentrates on higher water
+    // FOLD-driven foam: foam blooms where the Gerstner surface is overturning (det dips), not merely where it's tall —
+    // so the froth appears precisely on the breaking crests. Blended with a height floor so calm crests still get a little.
+    const foldDet = waveFold(xz);
+    const foldAmt = smoothstep(0.92, 0.18, foldDet);                                  // 0 flat → 1 strongly folding/breaking
+    const frothBand = smoothstep(-0.15, 1.05, wh).mul(uHokusai).mul(oneMinus(frontRaw.mul(0.92)))
+                        .mul(clamp(foldAmt.mul(0.95).add(0.35), 0.0, 1.4));           // breaking → boosted, calm → light
     const inkMask   = clamp(smoothstep(0.40, 0.47, froth).mul(frothBand), 0.0, 1.0);  // wider  → dark keyline rim
     const whiteMask = clamp(smoothstep(0.50, 0.57, froth).mul(frothBand), 0.0, 1.0);  // narrower → white claw core
     col.assign(mix(col, vec3(0.043,0.110,0.255), inkMask.mul(0.92)));                 // 1) dark indigo keyline first
@@ -3881,7 +3924,7 @@ function buildPanel() {
   // HUD visibility toggles
   let s = section(panel, 'Display');
   addSelect(s, 'Art style', P, 'style',
-    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.'],['monet','Monet — Impressionist'],['ink','Japanese Ink (sumi-e)'],['hokusai','Hokusai — Great Wave']],
+    [['tropical','Tropical (game)'],['photoreal','Photorealistic'],['pissarro','Pissarro — Caribbean Impr.'],['gauguin','Gauguin — Post-Impr.'],['monet','Monet — Impressionist'],['vangogh','Van Gogh — Starry Night'],['ink','Japanese Ink (sumi-e)'],['hokusai','Hokusai — Great Wave']],
     (v)=>setStyle(v));
   addToggle(s, 'Title', P, 'showTitle', applyHud);
   addToggle(s, 'Control hints', P, 'showHints', applyHud);
