@@ -196,7 +196,7 @@
 <script type="module">
 import * as THREE from 'three';
 import {
-  Fn, float, vec2, vec3, vec4, sin, dot, max, mix, clamp, smoothstep, pow, reflect, exp,
+  Fn, float, vec2, vec3, vec4, sin, dot, max, min, mix, clamp, smoothstep, pow, reflect, exp, Loop,
   normalize, length, positionLocal, time, positionWorld, cameraPosition, oneMinus, attribute, uniform, uv, floor, fract,
   pass, mrt, output, normalView, texture, abs, screenUV, screenSize, cos,
   modelWorldMatrix, modelWorldMatrixInverse
@@ -237,6 +237,7 @@ const P = {
   windOn: true, windStrength: 5, windDirDeg: 60,
   tideOn: true,
   stormOn: false, stormIntensity: 0.05,
+  volcanoAuto: false,   // periodic self-triggering eruptions (like the storm switch)
   waveHeight: 1.0,    // sea state / swell amplitude — independent of storm (low enough islands stay afloat)
   paused: false,
   // navigation + estimation
@@ -457,9 +458,28 @@ function sampleField(H,x,z,oob){ if(!TF) return oob;
   return (h00*(1-tx)+h10*tx)*(1-tz) + (h01*(1-tx)+h11*tx)*tz;
 }
 function terrainHeight(x,z){ return TF ? sampleField(TF.H, x, z, -6) : -6; }     // NAV depth (grounding/A*)
-// VISUAL seabed (real GEBCO). Outside the terrain field, fall back to compressed GEBCO directly so the
+// ---- Fixed dramatic submarine volcano: a procedural seamount in the open deep water by the depth
+//      sounder / unnamed islet. Baked straight into the VISUAL seabed sampler so the seabed mesh,
+//      the bathymetry reveal AND the submarine's nav grid (which samples seabedHeight) all see it for
+//      free — the sub already routes + collides around any shallow seabed. Tunable via dev.volc(). ----
+// ⚠️ VOLCANO / LAVA ERUPTION — DISABLED (2026-06-26). The eruption visual never reached an acceptable look across many
+//    iterations (see NOTES-volcano-lava.md for the full attempt log). All the code below is KEPT but inert: buildVolcano()
+//    and updateVolcano() early-return while VOLC_ENABLED is false. Flip to true to resume experimenting.
+const VOLC_ENABLED = false;
+const VOLC = { x:250, z:-55, rad:150, peak:-1, floor:-95, steep:1.5, crater:16, craterDepth:3 };   // peak just under the surface → eruption base isn't buried
+function volcanoHeight(x,z){   // absolute seabed Y of the cone at (x,z), or a sentinel far below outside its footprint
+  const dx=x-VOLC.x, dz=z-VOLC.z, d=Math.hypot(dx,dz);
+  if (d>=VOLC.rad) return -1e9;
+  const f=1-d/VOLC.rad;                                         // 0 at rim → 1 at centre
+  let h = VOLC.floor + (VOLC.peak-VOLC.floor)*Math.pow(f, VOLC.steep);   // smooth cone
+  h += (fbm(x*0.045, z*0.045)-0.5)*7*f;                         // volcanic ridging on the flanks
+  if (d < VOLC.crater){ const cf=1-d/VOLC.crater; h -= VOLC.craterDepth*cf*cf; }   // dimpled summit caldera
+  return h;
+}
+// VISUAL seabed (real GEBCO + the volcano). Outside the terrain field, fall back to compressed GEBCO directly so the
 // seabed mesh & bathymetry extend smoothly past the island region into the open basins.
-function seabedHeight(x,z){ return TF ? sampleField(TF.Hsea, x, z, -Math.max(1, gebcoDepthWorld(x,z) + (fbm(x*0.05,z*0.05)-0.5)*1.4)) : -6; }   // same micro-relief everywhere (no detail cliff at the old island-region edge)
+function seabedHeight(x,z){ const base = TF ? sampleField(TF.Hsea, x, z, -Math.max(1, gebcoDepthWorld(x,z) + (fbm(x*0.05,z*0.05)-0.5)*1.4)) : -6;
+  return VOLC_ENABLED ? Math.max(base, volcanoHeight(x,z)) : base; }   // volcano disabled → pure real-GEBCO seabed (no fabricated cone)
 
 // ============================================================================
 // PID controller (with derivative filtering + integral clamping anti-windup)
@@ -1177,7 +1197,7 @@ async function init() {
   loadSettings();   // restore saved panel settings before building the scene
   scene = new THREE.Scene();
   buildTerrainField();
-  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers(); buildTerrain(); buildDipStick();
+  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers(); buildTerrain(); buildDipStick(); buildVolcano();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
   buildShrubs(); buildTownMotifs(); buildVehicles();
@@ -1204,6 +1224,11 @@ async function init() {
   if (P.rainLens) enableRain();   // build the rain post-process now (it only renders while storming)
   enableOutline();                // build the woodblock outline pass (only renders for ink/hokusai styles)
   enableGodrays();                // build the god-ray pass (only renders when the sun is on-screen & Atmosphere > 0)
+
+  // Default startup view: the Director's Volcano camera (orbits the erupting seamount). Flip to false for the
+  // normal boat-tour default, or just click "Normal" in the Fleet row.
+  const START_AT_VOLCANO = false;   // volcano feature disabled (VOLC_ENABLED=false) → start at the normal boat tour
+  if (START_AT_VOLCANO && VOLC_ENABLED) setFleetView('volcano');
 
   let firstFrame = true, fpsT = 0, fpsN = 0;
 
@@ -1245,6 +1270,7 @@ async function init() {
     updateVehicles(dt);   // submarine / plane / UFO agents + their chase cameras
     updateFoamClaws(t);   // Hokusai curl-claws ride the near-field crest tops (gated to that art style)
     updateBreakers(t);    // a few authored hero breakers (true overhang) on the biggest crests
+    updateVolcano(dt, t); // submarine volcano: caldera glow + eruption plume/ejecta
     updateSubNavDebug();  // sub's depth grid + plan in the nav-debug overlay (after the sub has planned this frame)
     controls.update();
     if (fpsMode) updateFpsCam(t);
@@ -1531,6 +1557,13 @@ function ensureSubGrid(depth){
 }
 function subDistAt(x,z){ const wc=worldToCell(x,z); return subDLAND ? subDLAND[gIdx(wc.c,wc.r)] : 99; }   // cells-from-blocked on the sub grid
 function subBlockedAt(x,z){ if(!subBlocked) return false; const wc=worldToCell(x,z); return !!subBlocked[gIdx(wc.c,wc.r)]; }
+// nearest OPEN water cell on the sub grid (spiral out) — for un-sticking a sub that clipped into terrain
+function subNearestOpen(x,z){ if(!subBlocked) return {x,z}; const c0=worldToCell(x,z);
+  for(let rad=1; rad<60; rad++){ for(let dr=-rad; dr<=rad; dr++) for(let dc=-rad; dc<=rad; dc++){
+    if(Math.max(Math.abs(dr),Math.abs(dc))!==rad) continue;                       // perimeter of the ring only
+    const c=c0.c+dc, r=c0.r+dr; if(c<0||r<0||c>=GRID.cols||r>=GRID.rows) continue;
+    if(!subBlocked[gIdx(c,r)]){ const p=cellCenter(c,r); return {x:p.x, z:p.z}; } } }
+  return {x,z}; }
 // Hard collision guard: the sub is turn-rate limited, so on a corner tighter than its turn radius it can
 // overshoot into the (inflated, ~7u-margin) off-limits seabed. If the proposed step lands in a blocked
 // cell, remove the velocity component pointing INTO the wall (slide along the boundary) rather than passing
@@ -1580,6 +1613,13 @@ function _agentStep(v, dt){
     let aimx=isl.x, aimz=isl.z;
     if (v.id==='sub'){                                    // route AROUND geometry via the underwater A* grid
       ensureSubGrid(v.cruiseY);                          // grid at the NOMINAL depth (stable; bobbing won't thrash it)
+      // STUCK recovery: if the sub has clipped into off-limits terrain (or hasn't moved while it should be),
+      // teleport it to the nearest open water and replan — so it can never get wedged inside an island.
+      const moved=Math.hypot(v.pos.x-(v._lastSx??v.pos.x), v.pos.z-(v._lastSz??v.pos.z)); v._lastSx=v.pos.x; v._lastSz=v.pos.z;
+      if (subBlockedAt(v.pos.x, v.pos.z)) v._stuckT=(v._stuckT||0)+dt*2.2;          // inside terrain → un-stick fast
+      else if (moved < v.cruiseSpeed*dt*0.2) v._stuckT=(v._stuckT||0)+dt;           // barely moving while underway
+      else v._stuckT=0;
+      if (v._stuckT>2.0){ const f=subNearestOpen(v.pos.x, v.pos.z); v.pos.x=f.x; v.pos.z=f.z; v.speed=v.cruiseSpeed*0.4; v.path=null; v._stuckT=0; }
       v._replanT=(v._replanT||0)-dt;
       const depthMoved = v._planDepth===undefined || Math.abs(v.cruiseY - v._planDepth) > 8;
       if (!v.path || depthMoved || v._replanT<=0){ planSubPath(v, isl.x, isl.z); v._planDepth=v.cruiseY; v._replanT=2.5; }
@@ -1659,6 +1699,7 @@ function setFleetView(v){
     // single view = the FULL Director filming the chosen subject (ship for Normal/Ship, else the vehicle)
     dirSubjectId = (v==='off'||v==='ship') ? 'ship' : v;
     if (fpsMode) setView(false); if (flyMode) setFly(false);
+    if (v==='volcano'){ P.volcanoAuto=true; if(typeof syncSlider==='function') syncSlider('volcanoAuto'); eruptVolcano(); }   // the Director's volcano subject keeps it erupting
     // switching subjects: if we're ALREADY filming, glide from the current camera pose (no sky re-swoop);
     // if we're not yet in cine, setCine() below seeds the start from the current view.
     if (cineMode){ cineCam.updateMatrixWorld(); _cP.copy(cineCam.getWorldPosition(new THREE.Vector3())); _cPv.set(0,0,0); _cLv.set(0,0,0); cineInit = true; }
@@ -1766,7 +1807,7 @@ function updateEnvironment(dt) {
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   uContour.value += ((P.contours?1:0) - uContour.value) * Math.min(1, dt*4);   // smooth contour-line fade (independent toggle)
   if (dipStick){ dipStick.visible = uBathy.value > 0.04;               // depth sounding shows with bathymetry
-    dipStick.position.y = -curveDropJS(200, -80); }                    // sink the sounder onto the curved sea (its fixed X,Z)
+    dipStick.position.y = -curveDropJS(dipX, dipZ); }                  // sink the sounder onto the curved sea (its fixed X,Z)
   uRain.value = localStorm;                                             // rain-on-lens follows the FELT (proximity) storm, not the global switch
 
   if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
@@ -2099,6 +2140,38 @@ function makeDotTexture(){
   g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.22,'rgba(255,255,255,0.6)');
   g.addColorStop(0.6,'rgba(255,255,255,0.12)'); g.addColorStop(1,'rgba(255,255,255,0)');
   x.fillStyle=g; x.fillRect(0,0,64,64); return new THREE.CanvasTexture(c);
+}
+// a SOLID blob (opaque core, sharp falloff) — for dense magma droplets that must read over a bright sea
+function makeBlobTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=64; const x=c.getContext('2d');
+  const g=x.createRadialGradient(32,32,1,32,32,31);
+  g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.62,'rgba(255,255,255,1)');
+  g.addColorStop(0.82,'rgba(255,255,255,0.85)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle=g; x.fillRect(0,0,64,64); return new THREE.CanvasTexture(c);
+}
+// perlin/fbm-noise puff — wispy, billowy alpha (for smoke/ash so it doesn't read as flat round blobs)
+function makeSmokeTexture(){
+  const N=128, c=document.createElement('canvas'); c.width=c.height=N; const ctx=c.getContext('2d');
+  const img=ctx.createImageData(N,N), d=img.data;
+  for(let j=0;j<N;j++) for(let i=0;i<N;i++){ const u=i/N-0.5, v=j/N-0.5, rr=Math.hypot(u,v)*2;
+    let n=fbm(i*0.05+11.3, j*0.05+4.7);                       // fractal value noise → billows
+    n=clampJS((n-0.25)*1.7, 0, 1);
+    const fall=clampJS(1-rr, 0, 1);                           // round it off at the edges
+    const o=(j*N+i)*4; d[o]=d[o+1]=d[o+2]=255; d[o+3]=Math.round(255*n*fall*fall); }
+  ctx.putImageData(img,0,0); return new THREE.CanvasTexture(c);
+}
+// soft FIREBALL sprite: a feathered radial core (bright centre → fully transparent, fuzzy edge) with a little fbm churn.
+// White so each sprite's material.color can tint it by heat; the squared falloff gives gaseous, non-hard-edged blobs.
+function makeFireballTexture(){
+  const N=128, c=document.createElement('canvas'); c.width=c.height=N; const ctx=c.getContext('2d');
+  const img=ctx.createImageData(N,N), d=img.data;
+  for(let j=0;j<N;j++) for(let i=0;i<N;i++){ const u=i/N-0.5, v=j/N-0.5, rr=Math.hypot(u,v)*2;
+    const core=clampJS(1-rr,0,1);                              // 1 centre → 0 edge
+    const nz=fbm(i*0.06+5.1, j*0.06+9.2);                       // churn the falloff so the rim breaks up like flame
+    const soft=Math.pow(core,1.7)*(0.6+0.55*nz);
+    const a=clampJS(soft,0,1);
+    const o=(j*N+i)*4; d[o]=d[o+1]=d[o+2]=255; d[o+3]=Math.round(255*a*a); }   // squared → very soft feathered edge
+  ctx.putImageData(img,0,0); return new THREE.CanvasTexture(c);
 }
 // real city locations (lon,lat,population-weight) → light clusters; San Juan metro is the standout
 const CITIES = [
@@ -2569,9 +2642,13 @@ function makeLabelSprite(text, color, sizeY, grad){
 }
 // a "depth sounding" pole in southern open water: ticks at the surface, every 500 m, and the seabed —
 // labels reveal how much real depth the vertical scale is compressing (only shown in bathymetry mode)
-let dipStick = null;
+let dipStick = null, dipX = 200, dipZ = -80;
 function buildDipStick(){
-  const X=200, Z=-80;                                          // open water SW of the unnamed islet, ~3800 m
+  // just south of St Kitts / St Eustatius, out over the deep trench
+  const k=BYNAME['St. Kitts'], e=BYNAME['St. Eustatius'];
+  let X=200, Z=-80;
+  if (k&&e){ X=(k.x+e.x)/2; Z=Math.max(k.z,e.z)+120; }
+  dipX=X; dipZ=Z;
   const maxM = Math.max(0, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
   const g = new THREE.Group(); g.visible = false;
   const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.85, depthTest:false });
@@ -3294,6 +3371,268 @@ function buildOcean() {
   scene.add(new THREE.Mesh(geo, oceanMat));
 }
 
+let terrainMesh = null;
+// ============================================================================
+// Submarine VOLCANO — a fixed dramatic seamount (baked into seabedHeight above) topped with a
+// glowing caldera, lava flows, and a triggerable eruption (incandescent ejecta + a towering ash/steam
+// plume that breaches the surface). Triggers: panel button, click the cone, or the auto-rumble toggle.
+// ============================================================================
+let volcGroup=null, volcLight=null, volcThroat=null, volcGlow=null, volcFlows=[], volcFlame=[], volcFireVol=null;
+const uVolcFire = uniform(0.0);                                     // eruption intensity → drives the volumetric fire
+const uFireBase = uniform(new THREE.Vector3(0,0,0));               // world-space vent position (curve-dropped) for the raymarch volume
+const uFireRise = uniform(0.0);                                     // 0→1 height-front: the column CLIMBS from the vent base instead of fading in at full height
+const uFireWind = uniform(new THREE.Vector3(0,0,0));               // world wind vector (x,z) → shears the rising column downwind, increasing with height
+const volc = { state:'idle', phase:0, glow:0.12, t:0, dur:0, autoT:18, ventY:0, flash:0, rise:0.10 };
+const FOUNT_MAX=4000, ASH_MAX=420;   // instanced 3D chunks+sparks (one draw call) + denser visible ash
+let volcDropletsOn=true; const fount=[]; let volcFount=null, fountHeat=null; let fountCur=0;   // InstancedMesh of 3D molten CHUNKS + sparks; fountCur = rotating free-slot cursor (bounded probe)
+let ashSpr=[]; const ash=[];                                       // sparse thin dark smoke drifting above the fountain
+const _vM=new THREE.Matrix4(), _vQ=new THREE.Quaternion(), _vP=new THREE.Vector3(), _vS=new THREE.Vector3(), _vUp=new THREE.Vector3(0,1,0), _vVd=new THREE.Vector3();
+// a glowing lava channel ribbon hugging the upper slope: bright/wide at the vent → dark/thin downslope
+function _lavaFlow(vx,vz,ang){
+  const N=11, pos=[], col=[], idx=[];
+  for(let s=0;s<=N;s++){ const f=s/N, rr=VOLC.crater*0.85 + f*(VOLC.rad*0.42-VOLC.crater*0.85);
+    const cx=vx+Math.cos(ang)*rr, cz=vz+Math.sin(ang)*rr, half=(1-f)*5+1.2, nx=-Math.sin(ang)*half, nz=Math.cos(ang)*half;
+    const y=volcanoHeight(cx,cz)+0.6;
+    pos.push(cx-nx,y,cz-nz, cx+nx,y,cz+nz);
+    const h=Math.pow(1-f,1.3), r=2.2*h+0.18, g=0.55*h+0.015, b=0.06*h;     // incandescent → cooled basalt-red
+    col.push(r,g,b, r,g,b);
+    if(s<N){ const a=s*2; idx.push(a,a+1,a+2, a+1,a+3,a+2); } }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('color',    new THREE.Float32BufferAttribute(col,3));
+  g.setIndex(idx);
+  const m=new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending }));
+  m.renderOrder=22; return m;
+}
+function buildVolcano(){
+  if (!VOLC_ENABLED) return;                       // feature disabled — keep all code below intact but inert
+  if (volcGroup){ scene.remove(volcGroup); }
+  if (volcFireVol){ scene.remove(volcFireVol); volcFireVol=null; }
+  volcGroup=new THREE.Group(); volcGroup.renderOrder=20;
+  const vx=VOLC.x, vz=VOLC.z; volc.ventY=volcanoHeight(vx,vz);
+  // dark basalt crater funnel (open cylinder) + a recessed molten throat that glows from inside
+  const wall=new THREE.Mesh(new THREE.CylinderGeometry(VOLC.crater, VOLC.crater*0.34, VOLC.craterDepth+3, 30, 1, true),
+    new THREE.MeshBasicMaterial({ color:0x0c0604, side:THREE.DoubleSide, depthWrite:false, transparent:true, opacity:0.96 }));
+  wall.position.set(vx, volc.ventY + (VOLC.craterDepth+3)*0.5 - 1, vz); wall.renderOrder=21; volcGroup.add(wall);
+  const throat=new THREE.Mesh(new THREE.CircleGeometry(VOLC.crater*0.42, 26),
+    new THREE.MeshBasicMaterial({ color:0xff7a22, transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending }));
+  throat.rotation.x=-Math.PI/2; throat.position.set(vx, volc.ventY+0.5, vz); throat.renderOrder=23; volcGroup.add(throat); volcThroat=throat;
+  // glowing lava channels on the upper slope
+  volcFlows=[]; const NF=6;
+  for(let k=0;k<NF;k++){ const m=_lavaFlow(vx,vz,(k/NF)*Math.PI*2+0.4); volcGroup.add(m); volcFlows.push(m); }
+  volcLight=new THREE.PointLight(0xff4810, 0, 780, 2.0); volcLight.position.set(vx, volc.ventY+10, vz); volcGroup.add(volcLight);
+  // soft additive GLOW at the fountain base → inner glow (deep orange, kept modest so it doesn't white-out the core)
+  volcGlow=new THREE.Sprite(new THREE.SpriteMaterial({ map:makeDotTexture(), color:0xff3c06, transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending, fog:false }));
+  volcGlow.position.set(vx, volc.ventY+16, vz); volcGlow.renderOrder=24; volcGroup.add(volcGlow);
+  // dark ASH/STEAM smoke sheathing the fountain (NORMAL blend; fbm-noise texture → wispy billows)
+  const tex=makeSmokeTexture(); ashSpr=[]; ash.length=0;
+  for(let i=0;i<ASH_MAX;i++){ const m=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, color:0x4a443d, transparent:true, opacity:0, depthWrite:false, fog:false }));
+    m.visible=false; m.renderOrder=24; volcGroup.add(m); ashSpr.push(m);
+    ash.push({ life:0, max:1, x:0,y:0,z:0, vx:0,vy:0,vz:0, sc:9, seed:Math.random()*99 }); }
+  // LAVA EJECTA — InstancedMesh of REAL 3D molten chunks (and small bright sparks). One draw call → fast at high counts.
+  // Per-instance heat (aheat) drives the magma colour so each bit COOLS from white-hot → orange → dark basalt over its life;
+  // chunks tumble, sparks streak along velocity. Sizes vary per instance. Physics: ballistic arc + gravity + gentle wind drift.
+  fount.length=0;
+  for(let i=0;i<FOUNT_MAX;i++) fount.push({ life:0, max:1, x:0,y:0,z:0, vx:0,vy:0,vz:0, sc:1, seed:Math.random()*99, hs:1, type:0, ax:0,ay:1,az:0, spin:0 });
+  const blobGeo=new THREE.IcosahedronGeometry(1, 1);                                                  // low-poly rock chunk
+  { const p=blobGeo.attributes.position; for(let i=0;i<p.count;i++){ const x=p.getX(i),y=p.getY(i),z=p.getZ(i);
+      const d=1 + (fbm(x*1.9+3.1, y*1.9+7.4)-0.5)*0.5 + (fbm(z*1.9+1.2, x*1.9+5.0)-0.5)*0.32;        // lumpy → irregular molten rock, not a ball
+      p.setXYZ(i, x*d, y*d, z*d); } p.needsUpdate=true; blobGeo.computeVertexNormals(); }
+  fountHeat=new Float32Array(FOUNT_MAX);
+  blobGeo.setAttribute('aheat', new THREE.InstancedBufferAttribute(fountHeat, 1).setUsage(THREE.DynamicDrawUsage));
+  const bm=new THREE.MeshStandardNodeMaterial({ roughness:1.0, metalness:0.0 });                      // opaque, sun-lit → real form & occlusion
+  const hN=attribute('aheat');
+  // MAGMA gradient by heat: dark basalt (cold) → deep red → orange → near white-hot. Low g/b so the hot end blooms orange.
+  const cold=vec3(0.05,0.045,0.05), warm=vec3(0.9,0.13,0.01), hot=vec3(1.0,0.5,0.08), white=vec3(1.0,0.82,0.42);
+  let mc=mix(cold, warm, smoothstep(0.04,0.38,hN)); mc=mix(mc, hot, smoothstep(0.4,0.74,hN)); mc=mix(mc, white, smoothstep(0.86,1.0,hN));
+  bm.colorNode=mc.mul(0.16);                                                                          // dark crust albedo (sun gives form to cooled chunks)
+  bm.emissiveNode=mc.mul(pow(hN, 0.8).mul(2.6));                                                       // glows when hot, ~black when cooled → clear colour change over life
+  volcFount=new THREE.InstancedMesh(blobGeo, bm, FOUNT_MAX);
+  volcFount.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  volcFount.frustumCulled=false; volcFount.renderOrder=23; volcFount.castShadow=false;
+  { const M0=new THREE.Matrix4().makeScale(0,0,0); for(let i=0;i<FOUNT_MAX;i++) volcFount.setMatrixAt(i, M0); }
+  volcGroup.add(volcFount);
+  scene.add(volcGroup);
+  // ---- VOLUMETRIC FIRE: a camera-facing billboard whose fragment shader RAYMARCHES an animated 3D fbm density
+  //      field inside a bounded column, compositing fire emission front-to-back → soft, deep, self-occluding flame. ----
+  { const hash31=Fn(([p])=> fract(sin(dot(p, vec3(127.1,311.7,74.7))).mul(43758.5453)) );
+    const vnoise3=Fn(([p])=>{ const i=floor(p), f=fract(p); const u=f.mul(f).mul(f.mul(-2.0).add(3.0));
+      const n000=hash31(i), n100=hash31(i.add(vec3(1,0,0))), n010=hash31(i.add(vec3(0,1,0))), n110=hash31(i.add(vec3(1,1,0)));
+      const n001=hash31(i.add(vec3(0,0,1))), n101=hash31(i.add(vec3(1,0,1))), n011=hash31(i.add(vec3(0,1,1))), n111=hash31(i.add(vec3(1,1,1)));
+      const x00=mix(n000,n100,u.x), x10=mix(n010,n110,u.x), x01=mix(n001,n101,u.x), x11=mix(n011,n111,u.x);
+      return mix(mix(x00,x10,u.y), mix(x01,x11,u.y), u.z); });
+    const fbm3=Fn(([p])=> vnoise3(p).mul(0.6).add(vnoise3(p.mul(2.2).add(vec3(1.3,5.1,2.7))).mul(0.3)).add(vnoise3(p.mul(4.4).add(vec3(7.2,1.9,4.4))).mul(0.13)) );
+    const R=float(34.0), H=float(104.0), STEPS=36;
+    // density of the molten body at a world point (bounded column × animated viscous noise)
+    const densAt=Fn(([p])=>{
+      const lx0=p.x.sub(uFireBase.x), lz0=p.z.sub(uFireBase.z), ly=p.y.sub(uFireBase.y);
+      const hN=clamp(ly.div(H), 0.0, 1.0);
+      // WIND SHEAR: bend the centreline downwind, weighted by height (base stays put, top streams away) + a gust wobble so it sprays
+      const shear=pow(hN, 1.5).mul(float(1.0).add(fbm3(vec3(ly.mul(0.05).sub(uTime.mul(0.9)), 0.0, 0.0)).mul(0.5)));
+      const lx=lx0.sub(uFireWind.x.mul(shear)), lz=lz0.sub(uFireWind.z.mul(shear));
+      const rad=length(vec2(lx,lz));
+      const colR=R.mul(oneMinus(hN.mul(0.5)));
+      const radial=oneMinus(smoothstep(colR.mul(0.4), colR, rad));                   // wide soft falloff → dense opaque core, misty spray at the edges
+      const q=vec3(lx.mul(0.07), ly.sub(uTime.mul(15.0)).mul(0.05), lz.mul(0.07));   // finer cells → clotty molten texture, not smooth dome
+      const warp=fbm3(q.mul(0.6).add(vec3(0.0, uTime.mul(0.18), 0.0))).sub(0.5).mul(2.2);
+      const d0=fbm3(q.add(vec3(warp, warp.mul(0.6), warp.mul(0.5))));
+      const envv=smoothstep(1.15, 0.02, hN).mul(smoothstep(0.0, 0.04, hN));         // denser further up → a tall jet, not a low dome
+      const front=oneMinus(smoothstep(uFireRise, uFireRise.add(0.14), hN));         // RISING front: density only exists below the climbing top → erupts UP from the base
+      return clamp(d0.mul(radial).mul(envv).mul(front).sub(0.12).mul(4.2), 0.0, 1.0); });   // higher contrast + lower floor → opaque molten body, not wispy gas
+    const fireRay=Fn(()=>{
+      const ro=cameraPosition, rd=normalize(positionWorld.sub(cameraPosition)), base=uFireBase;
+      const wpad=length(uFireWind.xz).mul(1.7);                                     // widen the AABB downwind so the sheared crown isn't clipped
+      const bmin=vec3(base.x.sub(R).sub(wpad), base.y, base.z.sub(R).sub(wpad)), bmax=vec3(base.x.add(R).add(wpad), base.y.add(H), base.z.add(R).add(wpad));
+      const inv=vec3(1.0).div(rd);
+      const ta=bmin.sub(ro).mul(inv), tb=bmax.sub(ro).mul(inv);
+      const tmn=min(ta,tb), tmx=max(ta,tb);
+      const tEnter=max(max(tmn.x,tmn.y),tmn.z), tExit=min(min(tmx.x,tmx.y),tmx.z);
+      const tS=max(tEnter, float(0.1)).toVar(), tE=max(tExit, tS.add(0.01)).toVar();
+      const dt=tE.sub(tS).div(float(STEPS));
+      const Ld=normalize(uSunDir), e=float(1.6);
+      const col=vec3(0.0).toVar(), alpha=float(0.0).toVar();
+      Loop(STEPS, ({ i })=>{
+        const t=tS.add(dt.mul(float(i).add(0.5)));
+        const p=ro.add(rd.mul(t));
+        const d=densAt(p);
+        const ly=p.y.sub(base.y);
+        const hN=clamp(ly.div(H),0.0,1.0);
+        const shear=pow(hN, 1.5).mul(float(1.0).add(fbm3(vec3(ly.mul(0.05).sub(uTime.mul(0.9)), 0.0, 0.0)).mul(0.5)));
+        const lx=p.x.sub(base.x).sub(uFireWind.x.mul(shear)), lz=p.z.sub(base.z).sub(uFireWind.z.mul(shear));   // SAME wind-sheared frame as the density
+        const rad=length(vec2(lx,lz)), colR=R.mul(oneMinus(hN.mul(0.5)));
+        const radN=clamp(rad.div(colR), 0.0, 1.0);                                 // 0 at the core → 1 at the edge
+        const tex=fbm3(vec3(lx, ly.sub(uTime.mul(11.0)), lz).mul(0.11)).sub(0.5);  // fine texture jitter
+        const streak=fbm3(vec3(lx.mul(0.5), ly.mul(0.03).sub(uTime.mul(0.4)), lz.mul(0.5)));            // VERTICAL flow striations
+        // COOLING: heat bleeds out as the ejecta rises → incandescent at the vent, dark cinder/ash up top
+        const cool=oneMinus(smoothstep(0.22, 0.96, hN).mul(0.88));                                       // 1 at the vent → ~0.12 at the crown
+        const heat=clamp(oneMinus(radN).mul(mix(1.25, 0.92, hN)).add(tex.mul(0.10)).mul(mix(0.82, 1.14, streak)).mul(cool), 0.0, 1.0);   // hot core, cooling to the edges AND with altitude
+        const lavaCol=mix( vec3(0.05,0.006,0.0), vec3(1.0,0.27,0.02), smoothstep(0.14,0.5,heat) );      // deep-red roots → vivid orange
+        const lava2=mix(lavaCol, vec3(1.0,0.55,0.11), smoothstep(0.56,0.88,heat));                      // → blazing bright orange
+        const lava3=mix(lava2, vec3(1.0,0.72,0.30), smoothstep(0.94,1.0,heat));                         // → bright orange-yellow only at the very hottest core (stays orange, not white)
+        const ashCol=vec3(0.06,0.055,0.058);                                                             // cold grey-brown cinder/ash
+        const ashMix=smoothstep(0.35, 1.0, hN).mul(oneMinus(smoothstep(0.0,0.32,heat)));                 // high + cold → reads as ash, not lava
+        const body=mix(lava3, ashCol, ashMix);
+        const emis=body.mul(pow(heat, 0.62).mul(1.75)).add(ashCol.mul(ashMix.mul(0.22)));               // glowing core fades to faint dark cinder smoke up top
+        const a=clamp(d.mul(dt).mul(0.34), 0.0, 1.0).mul(oneMinus(alpha));                              // denser accumulation → opaque molten body (not translucent gas), still soft at the misty edges
+        col.addAssign(emis.mul(a)); alpha.addAssign(a);
+      });
+      return vec4(col, alpha.mul(uVolcFire));
+    });
+    const R4=fireRay();
+    const fmat=new THREE.MeshBasicNodeMaterial({ transparent:true, depthWrite:false, depthTest:false });
+    fmat.colorNode=R4.xyz; fmat.opacityNode=R4.w;
+    volcFireVol=new THREE.Mesh(new THREE.PlaneGeometry(1,1), fmat);
+    volcFireVol.scale.set(220,180,1); volcFireVol.frustumCulled=false; volcFireVol.renderOrder=24;   // wide enough to hold the wind-sheared crown
+    scene.add(volcFireVol); }
+}
+function eruptVolcano(){ if (volc.state==='idle' || volc.state==='subside'){ volc.state='rumble'; volc.t=0; volc.dur=1.6; volc.flash=0; } return 'volcano: '+volc.state; }
+function _setSpin(s){ const a=Math.random()*6.2832, c=Math.random()*2-1, sr=Math.sqrt(1-c*c); s.ax=sr*Math.cos(a); s.ay=c; s.az=sr*Math.sin(a); s.spin=(Math.random()*2-1)*7; }
+function _spawnFount(vx,vz){ const N=FOUNT_MAX;
+  for(let k=0;k<200;k++){ const i=fountCur; fountCur=(fountCur+1)%N; const s=fount[i]; if(s.life>0) continue;
+    const spark=Math.random()<0.5;
+    const a=Math.random()*6.2832, r=Math.random()*VOLC.crater*(spark?0.3:0.16);     // tight molten core → reads as a thick coherent jet, not scattered points
+    s.x=vx+Math.cos(a)*r; s.y=volc.ventY+2; s.z=vz+Math.sin(a)*r;
+    if(spark){ const dir=a+(Math.random()-0.5)*1.4, out=18+Math.random()*60;        // SPARK: small, very fast, thrown wide, short-lived, stays hot → bright streak
+      s.vx=Math.cos(dir)*out; s.vz=Math.sin(dir)*out; s.vy=80+Math.random()*110;
+      s.type=1; s.sc=0.22+Math.random()*0.5; s.hs=1.25; s.max=s.life=1.6+Math.random()*2.2; }
+    else { const dir=a+(Math.random()-0.5)*0.7, out=6+Math.random()*22;             // CHUNK: heavier, slower, big varied lumps that tumble up the thick stream and arc back
+      s.vx=Math.cos(dir)*out; s.vz=Math.sin(dir)*out; s.vy=46+Math.random()*66;
+      s.type=0; s.sc=1.0+Math.random()*3.2; s.hs=1; s.max=s.life=5.5+Math.random()*6.0; _setSpin(s); }
+    s.seed=Math.random()*99; return; } }
+// crown ejecta: bits that PEEL OFF the wind-sheared upper column (not the vent) — start where the volumetric flame leans, fly off cooler
+function _spawnEjecta(vx,vz){ const w=uFireWind.value, H=104, N=FOUNT_MAX;
+  for(let k=0;k<200;k++){ const i=fountCur; fountCur=(fountCur+1)%N; const s=fount[i]; if(s.life>0) continue;
+    const hN=0.12+Math.random()*0.82*Math.max(0.2,volc.rise);                       // anywhere up the climbed column
+    const shear=Math.pow(hN,1.5)*1.1;                                               // sheared centreline (matches the shader lean)
+    const a=Math.random()*6.2832, r=Math.random()*VOLC.crater*0.3;                  // ON the column core, not a ring around it
+    s.x=vx + w.x*shear + Math.cos(a)*r;                                             // peel off the body of the visible flame
+    s.z=vz + w.z*shear + Math.sin(a)*r;
+    s.y=volc.ventY + hN*H;
+    const spark=Math.random()<0.45, out=(spark?22:12)+Math.random()*40;            // thrown OUTWARD from the column → arcs away
+    s.vx=Math.cos(a)*out; s.vz=Math.sin(a)*out; s.vy=10+Math.random()*38-hN*8;      // higher bits keep less upward → arc over
+    if(spark){ s.type=1; s.sc=0.22+Math.random()*0.5; s.hs=1.15; s.max=s.life=1.6+Math.random()*2.4; }
+    else { s.type=0; s.sc=0.8+Math.random()*2.4; s.hs=0.6+Math.random()*0.35; s.max=s.life=6.0+Math.random()*5.0; _setSpin(s); }
+    s.seed=Math.random()*99; return; } }
+function _spawnAsh(vx,vz){ for(let i=0;i<ASH_MAX;i++){ const s=ash[i]; if(s.life>0) continue;
+    const a=Math.random()*6.2832, r=VOLC.crater*0.35+Math.random()*VOLC.crater*0.7;
+    s.x=vx+Math.cos(a)*r; s.y=volc.ventY+12+Math.random()*60; s.z=vz+Math.sin(a)*r;   // spawn along the whole column → smoke sheathes & billows up the sides
+    s.vx=Math.cos(a)*(7+Math.random()*9); s.vz=Math.sin(a)*(7+Math.random()*9); s.vy=15+Math.random()*16;
+    s.max=s.life=4.5+Math.random()*4.5; s.sc=9+Math.random()*9; s.seed=Math.random()*99; return; } }
+function updateVolcano(dt, t){
+  if (!VOLC_ENABLED || !volcGroup) return;          // feature disabled
+  const vx=VOLC.x, vz=VOLC.z;
+  if (P.volcanoAuto && volc.state==='idle'){ volc.autoT-=dt; if (volc.autoT<=0){ eruptVolcano(); volc.autoT=34+Math.random()*40; } }
+  // ---- state machine: rumble → erupt (with an opening blast) → subside → idle ----
+  volc.t+=dt; volc.flash=Math.max(0, volc.flash-dt*1.6);
+  if (volc.state==='rumble'){ volc.glow += (0.6-volc.glow)*Math.min(1,dt*1.6);
+    if (volc.t>=volc.dur){ volc.state='erupt'; volc.t=0; volc.dur=11+Math.random()*7; volc.flash=1; for(let b=0;b<260;b++) _spawnFount(vx,vz); } }
+  else if (volc.state==='erupt'){ volc.phase += (1-volc.phase)*Math.min(1,dt*1.6); volc.glow += (1-volc.glow)*Math.min(1,dt*1.6);
+    if (volc.t>=volc.dur){ volc.state='subside'; volc.t=0; } }
+  else if (volc.state==='subside'){ volc.phase += (0-volc.phase)*Math.min(1,dt*0.45); volc.glow += (0.12-volc.glow)*Math.min(1,dt*0.45);
+    if (volc.phase<0.03){ volc.phase=0; volc.state='idle'; } }
+  else { volc.phase += (0-volc.phase)*Math.min(1,dt*1.5); const idle=0.12+0.05*Math.sin(t*0.7); volc.glow += (idle-volc.glow)*Math.min(1,dt); }
+  const phase=volc.phase, glow=volc.glow, flick=0.8+0.2*Math.sin(t*21.0)+0.12*Math.sin(t*8.3);
+  // height-front: shoots UP fast on eruption, recedes slowly on subside, simmers low at idle → the column erupts from the base rather than fading in at full height
+  const riseTarget = (volc.state==='erupt'||volc.state==='rumble') ? 1.0 : (volc.state==='subside') ? 0.0 : 0.10;
+  const riseRate = riseTarget>volc.rise ? dt*2.4 : dt*0.6;
+  volc.rise += (riseTarget-volc.rise)*Math.min(1, riseRate);
+  uFireRise.value = volc.rise;
+  // wind shear vector: direction from the wind controls, magnitude from strength + storm (+ gentle gust)
+  if (P.windOn){ const wdir=d2r(P.windDirDeg), sf=(typeof stormFactor!=='undefined'?stormFactor:0);
+    const wmag=(5 + P.windStrength*1.8 + sf*22)*(0.85+0.15*Math.sin(t*1.7));
+    uFireWind.value.set(Math.cos(wdir)*wmag, 0, Math.sin(wdir)*wmag);
+  } else uFireWind.value.set(0,0,0);
+  uVolcFire.value = Math.max(phase, glow*0.15);                    // drive the volumetric fire
+  if (volcFireVol){ const drop=curveDropJS(vx,vz);                 // billboard the raymarch quad at the (curve-dropped) column, facing the active camera
+    uFireBase.value.set(vx, volc.ventY-drop-1, vz);
+    volcFireVol.position.set(vx, volc.ventY-drop+50, vz);
+    if (typeof activeCam!=='undefined' && activeCam) volcFireVol.quaternion.copy(activeCam.quaternion);
+    volcFireVol.visible = uVolcFire.value>0.01; }
+  // ---- throat glow + lava channels + vent light ----
+  if (volcLight) volcLight.intensity=(glow*32 + phase*320 + volc.flash*560)*flick;
+  if (volcThroat){ const g=Math.min(1.4, 0.5+glow*1.1); volcThroat.material.color.setRGB(1.8*g, 0.5*g, 0.08*g); volcThroat.material.opacity=Math.min(1, glow*0.7+phase*0.3)*flick; }   // deep orange, dimmer → no white base
+  if (volcGlow){ volcGlow.material.opacity=Math.min(0.8, phase*0.32+glow*0.08)*flick; const gs=26+phase*52; volcGlow.scale.set(gs,gs,1); }   // modest inner-glow halo
+  for (const f of volcFlows) f.material.opacity = Math.min(1, glow*0.6 + phase*0.8)*flick;
+  // ---- LAVA EJECTA (instanced 3D molten chunks + bright sparks) ----
+  if (volcDropletsOn && phase>0.02){ let toF=phase*1700*dt; while(toF>=1){ _spawnFount(vx,vz); toF-=1; } if(Math.random()<toF) _spawnFount(vx,vz); }   // dense thick molten jet off the vent core
+  if (volcDropletsOn && phase>0.05){ let toE=phase*700*dt; while(toE>=1){ _spawnEjecta(vx,vz); toE-=1; } if(Math.random()<toE) _spawnEjecta(vx,vz); }   // bits peeling off the column body
+  { const W=uFireWind.value, M=_vM, Q=_vQ, P=_vP, S=_vS, up=_vUp, vd=_vVd; let changed=false;
+    for (let i=0;i<FOUNT_MAX;i++){ const s=fount[i];
+      if (s.life<=0) continue;
+      s.life-=dt;
+      if (s.life<=0 || s.y < Math.max(seabedHeight(s.x,s.z), -0.5)+0.4){ s.life=0; fountHeat[i]=0; M.compose(P.set(0,0,0),Q.identity(),S.set(0,0,0)); volcFount.setMatrixAt(i,M); changed=true; continue; }   // splat
+      const heavy = s.type===0;
+      s.vy -= (heavy?86:58)*dt;                                                     // chunks fall hard; sparks lighter (more hang)
+      s.vx+=Math.sin(s.y*0.05+s.seed+t*1.4)*(heavy?2.0:4.5)*dt; s.vz+=Math.cos(s.y*0.06+s.seed*1.3+t*1.2)*(heavy?2.0:4.5)*dt;
+      const fr=1-s.life/s.max, h=clampJS((1-Math.pow(fr, heavy?0.85:0.5)*1.04)*s.hs,0,1);   // chunks cool slowly (long glow→basalt); sparks flare then die fast
+      const wk=Math.min(1, (0.1+(1-h)*0.5)*dt);                                     // gentle wind drift — keeps the ballistic arc (heavy molten rock, not paper)
+      s.vx+=(W.x-s.vx)*wk; s.vz+=(W.z-s.vz)*wk;
+      s.x+=s.vx*dt; s.y+=s.vy*dt; s.z+=s.vz*dt;
+      fountHeat[i]=h;
+      P.set(s.x,s.y,s.z);
+      if (heavy){ Q.setFromAxisAngle(vd.set(s.ax,s.ay,s.az), s.spin*(s.max-s.life));   // TUMBLE
+        const sz=s.sc; S.set(sz,sz,sz); }
+      else { vd.set(s.vx,s.vy,s.vz); const spd=vd.length()||1; vd.divideScalar(spd); Q.setFromUnitVectors(up,vd);   // STREAK along velocity
+        const sz=s.sc, st=1+Math.min(spd*0.05, 5.0); S.set(sz, sz*st, sz); }
+      M.compose(P,Q,S); volcFount.setMatrixAt(i,M); changed=true; }
+    if (changed){ volcFount.instanceMatrix.needsUpdate=true; volcFount.geometry.attributes.aheat.needsUpdate=true; } }
+  // ---- HEAVY dark ash/steam plume billowing up off the fountain (real eruptions are half smoke) ----
+  const spawnA=Math.max(phase, glow*0.05);
+  let toA=spawnA*150*dt; while(toA>=1){ _spawnAsh(vx,vz); toA-=1; } if(Math.random()<toA) _spawnAsh(vx,vz);
+  for (let i=0;i<ASH_MAX;i++){ const s=ash[i], m=ashSpr[i];
+    if (s.life<=0){ if(m.visible) m.visible=false; continue; }
+    s.life-=dt; if (s.life<=0){ m.visible=false; continue; }
+    const fr=1-s.life/s.max;
+    s.vy += 9*(1-fr)*dt; s.vx*=Math.pow(0.9,dt); s.vz*=Math.pow(0.9,dt);            // strong buoyant rise → tall column
+    s.x+=s.vx*dt+Math.sin(t*0.7+s.seed)*8*dt; s.y+=s.vy*dt; s.z+=s.vz*dt+Math.cos(t*0.6+s.seed)*8*dt;
+    m.position.set(s.x, s.y, s.z);
+    const sc=s.sc + fr*78; m.scale.set(sc,sc,1);                                    // billow wide as it climbs
+    const fade=clampJS(1-(fr-0.45)/0.55,0,1), lit=0.1+0.04*Math.sin(t*3+s.seed);
+    m.material.color.setRGB(lit*1.3, lit*1.1, lit*0.95);                            // dark brown-gray ash
+    m.material.opacity=Math.min(0.95, Math.max(phase,glow*0.1)*fade*1.15); m.visible=true; }   // denser, more opaque → a real smoke plume, not invisible
+  // sink the whole group onto the curved tiny-planet sea (fixed footprint → one offset)
+  volcGroup.position.y = -curveDropJS(vx,vz);
+}
 function buildTerrain() {
   const W = 3800, H = 3400;                              // one big seabed mesh covering well past the islands (no 2nd mesh)
   const segX=1460, segY=1300, nx=segX+1, ny=segY+1;      // ~2.6u/seg — keeps coastlines crisp, samples real GEBCO far out
@@ -3378,7 +3717,7 @@ function buildTerrain() {
   // castShadow yes (islands shade the sea-floor/boat), but DON'T receive the sun shadow: this is one big
   // land+seabed mesh, so receiving would paint the sun shadow-camera's rectangular frustum footprint onto the
   // deep seabed (visible through the bathymetry water as a moving rectangle). Slope-shading gives island relief.
-  mesh.castShadow = true; mesh.receiveShadow = false; scene.add(mesh);
+  mesh.castShadow = true; mesh.receiveShadow = false; scene.add(mesh); terrainMesh = mesh;
 }
 
 function buildBoat() {
@@ -3559,18 +3898,26 @@ function setFly(on){
   if (ui.flyBtn) ui.flyBtn.textContent = on ? '✈ Flying — F to exit' : '✈ Fly the map (F)';
 }
 function updateFlyCam(dt){
-  const K=flyState.keys, boost=K['shift']?2.6:1.0, sp=620*boost*dt;
+  const K=flyState.keys, boost=K['shift']?2.6:1.0;
   const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
   const fx=cy*cp, fy=sp2, fz=sy*cp;                                  // forward
   const rx=Math.cos(flyState.yaw+Math.PI/2), rz=Math.sin(flyState.yaw+Math.PI/2);   // right (horizontal)
   const p=flyState.pos;
   const fwd=K['w']||K['arrowup'], bk=K['s']||K['arrowdown'], lf=K['a']||K['arrowleft'], rt=K['d']||K['arrowright'];
+  // velocity RAMP: a quick tap moves slowly (fine nudge for inspecting detail); HOLDING a key accelerates from
+  // the slow nudge speed up to a fast travel speed over ~1s, then resets the moment you let go.
+  // SHIFT overrides the ramp entirely → instant max speed (the old zoom-fast), so you get both modes at will.
+  const SLOW=42, FAST=820, RAMP_T=0.95, TURBO=2.4;
+  const moving = fwd||bk||lf||rt||K['q']||K[' ']||K['e']||K['c'];
+  flyState.ramp = moving ? Math.min(1, (flyState.ramp||0) + dt/RAMP_T) : 0;
+  const r = K['shift'] ? 1 : flyState.ramp;                         // shift = instant top speed (skip the ramp)
+  const sp = (SLOW + (FAST-SLOW)*r*r) * (K['shift']?TURBO:1) * dt;   // r² → eases in gently, then cranks up
   if(fwd){ p.x+=fx*sp; p.y+=fy*sp; p.z+=fz*sp; }
   if(bk){  p.x-=fx*sp; p.y-=fy*sp; p.z-=fz*sp; }
   if(lf){  p.x-=rx*sp; p.z-=rz*sp; }
   if(rt){  p.x+=rx*sp; p.z+=rz*sp; }
-  if(K['q']||K[' ']) p.y+=sp;
-  if(K['e']||K['c']) p.y-=sp;
+  if(K['e']||K[' ']) p.y+=sp;     // E (or Space) up
+  if(K['q']||K['c']) p.y-=sp;     // Q (or C) down
   p.y=Math.max(p.y, seabedHeight(p.x,p.z)+2.5);                      // can dive UNDER the water now, but not through the seabed
   flyCam.position.copy(p);
   flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
@@ -3592,6 +3939,20 @@ window.dev = {
   atmo(a){ P.atmosphere=clampJS(a,0,1); if(typeof syncSlider==='function') syncSlider('atmosphere'); },
   storm(on, inten){ P.stormOn = on!==false; if(inten!==undefined) P.stormIntensity=clampJS(inten,0,1);
     if(typeof syncSlider==='function'){ syncSlider('stormOn'); syncSlider('stormIntensity'); } },
+  erupt(){ return eruptVolcano(); },
+  volcParticles(on){ volcDropletsOn = on!==false; if(volcFount) volcFount.visible=volcDropletsOn; return 'droplets '+(volcDropletsOn?'on':'off'); },
+  volcDbg(){ let aliveF=0,s=null; for(let i=0;i<fount.length;i++){ if(fount[i].life>0){ aliveF++; if(!s)s={x:+fount[i].x.toFixed(1),y:+fount[i].y.toFixed(1),z:+fount[i].z.toFixed(1),h:+(((1-fount[i].life/fount[i].max)*-1.05+1)*fount[i].hs).toFixed(2)}; } }
+    let aliveA=0,visA=0; for(let i=0;i<ash.length;i++){ if(ash[i].life>0){ aliveA++; if(ashSpr[i].visible)visA++; } }
+    return { state:volc.state, phase:+volc.phase.toFixed(2), glow:+volc.glow.toFixed(2), aliveF, sample:s, aliveA, visA, ventY:+volc.ventY.toFixed(1) }; },
+  volcAuto(on){ P.volcanoAuto = on!==false; return 'volcanoAuto='+P.volcanoAuto; },
+  volcGo(){ if(!flyMode) setFly(true); flyState.pos.set(VOLC.x-90, 60, VOLC.z-90);   // fly over to watch the volcano
+    const dx=VOLC.x-flyState.pos.x, dz=VOLC.z-flyState.pos.z, dy=-10-flyState.pos.y, l=Math.hypot(dx,dy,dz)||1;
+    flyState.yaw=Math.atan2(dz,dx); flyState.pitch=clampJS(Math.asin(clampJS(dy/l,-1,1)),-1.4,1.4); flyState.keys={};
+    return 'volcano @'+VOLC.x+','+VOLC.z; },
+  volc(x,z,peak,rad){ if(x!==undefined)VOLC.x=x; if(z!==undefined)VOLC.z=z; if(peak!==undefined)VOLC.peak=peak; if(rad!==undefined)VOLC.rad=rad;
+    if(terrainMesh){ scene.remove(terrainMesh); terrainMesh.geometry.dispose(); }   // rebake the seabed mesh with the cone in its new spot
+    buildTerrain(); subBlocked=null; subGridDepth=null; buildVolcano();              // force the sub nav grid to rebuild too
+    return 'volcano @'+VOLC.x+','+VOLC.z+' peak'+VOLC.peak+' rad'+VOLC.rad; },
   chop(v){ seaChop = clampJS(v,0,2); uChop.value = seaChop; return 'chop='+seaChop; },
   shadows(on){ window._noSunShadow = (on===false); return 'sunShadows='+(!window._noSunShadow); },   // diagnostic: force sun shadow map off
   curl(){ curlSign = -curlSign; return 'curlSign='+curlSign; },
@@ -3625,7 +3986,7 @@ window.dev = {
 // based on what's happening (turns, island proximity). C2-continuous via
 // critically-damped springs on both the camera position and the look-at point.
 // ============================================================================
-let cineMode = false, cineCam, cineInit = false;
+let cineMode = false, cineCam, cineInit = false, cineVolcAng = 0;
 let cineShowcase = 0, cineShowcaseIsl = null, cineShowcaseAng = 0, cineShowcaseLast = -1, tourLapDone = false;   // helicopter orbit at final + returning-first island
 let cineSideSgn = 1, cineSideIdx = -2;   // which side the side/race camera sits (recomputed per island to face the islands)
 const _cP=new THREE.Vector3(), _cPv=new THREE.Vector3(),     // camera-position spring state + velocity
@@ -3694,6 +4055,18 @@ function cineDesired(){
   _cDesL.set(bx + ch*lead*sc + rx*thirdOff, by + 8*hc, bz + sh*lead + rz*thirdOff);
 }
 function updateCineCam(dt){
+  // ---- VOLCANO target: slow helicopter orbit around the seamount, framing the eruption column ----
+  if (dirSubjectId==='volcano'){
+    cineVolcAng += dt*0.16;                                              // slow orbit
+    const cx=VOLC.x, cz=VOLC.z, orbR=190, orbH=64;
+    const ox=cx+Math.cos(cineVolcAng)*orbR, oz=cz+Math.sin(cineVolcAng)*orbR;
+    _cDesP.set(ox, orbH - curveDropJS(ox,oz), oz);
+    _cDesL.set(cx, 22 - curveDropJS(cx,cz), cz);                         // frame the column a bit above the surface
+    if (!cineInit){ _cP.copy(_cDesP); _cL.copy(_cDesL); _cPv.set(0,0,0); _cLv.set(0,0,0); cineInit=true; }
+    cineCam.fov += (52 - cineCam.fov)*Math.min(1,dt*3); cineCam.updateProjectionMatrix();
+    springVec(_cP, _cPv, _cDesP, 1.0, dt); springVec(_cL, _cLv, _cDesL, 1.7, dt);
+    cineCam.position.copy(_cP); cineCam.lookAt(_cL); return;
+  }
   // ---- helicopter showcase: when the boat reaches the FINAL island of the route, orbit the island
   // while keeping the boat in focus for a few seconds, then resume normal follow (ship subject only) ----
   if (dirSubjectId==='ship' && P.mode==='tour' && route.length){
@@ -3819,6 +4192,17 @@ function initInput() {
     if (raycaster.ray.intersectPlane(groundPlane, pt)) {
       gotoTarget = { x: pt.x, z: pt.z }; setMode('goto');
     }
+  });
+  // single click on the volcano cone → erupt (ignore drags)
+  let _vdx=0, _vdy=0;
+  renderer.domElement.addEventListener('pointerdown', (e)=>{ _vdx=e.clientX; _vdy=e.clientY; });
+  renderer.domElement.addEventListener('click', (e)=>{
+    if (Math.hypot(e.clientX-_vdx, e.clientY-_vdy) > 6) return;          // it was a drag, not a click
+    const r = renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
+    raycaster.setFromCamera(ndc, camera);
+    const pt = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(groundPlane, pt) && Math.hypot(pt.x-VOLC.x, pt.z-VOLC.z) < VOLC.rad*0.9) eruptVolcano();
   });
   // crow's-nest view: 'V' toggles, drag to look around. Fly view: 'F' toggles, WASD/arrows to move, drag to look.
   const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA');
@@ -4153,13 +4537,13 @@ function buildPanel() {
   const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
   ui.flyBtn = el('div','btn', el('div','btns',s)); ui.flyBtn.textContent = '✈ Fly the map (F)';
   ui.flyBtn.onclick = () => setFly(!flyMode);
-  const fhint = el('div','read',s); fhint.innerHTML = '<b>WASD</b>/arrows move · <b>Q/E</b> up·down · <b>Shift</b> boost · drag to look';
+  const fhint = el('div','read',s); fhint.innerHTML = '<b>WASD</b>/arrows move · <b>E</b> up · <b>Q</b> down · hold to accelerate · <b>Shift</b> boost · drag to look';
 
   // Fleet — independent vehicles + Brady-Bunch grid
   s = section(panel, 'Fleet (multi-vehicle)');
   ui.fleetBtns = {};
   const fleetRow = el('div','btns',s);
-  for (const [k,lbl] of [['off','Normal'],['ship','Ship'],['sub','Sub'],['plane','Plane'],['ufo','UFO'],['grid','◳ 4-up grid']]){
+  for (const [k,lbl] of [['off','Normal'],['ship','Ship'],['sub','Sub'],['plane','Plane'],['ufo','UFO'],...(VOLC_ENABLED?[['volcano','🌋 Volcano']]:[]),['grid','◳ 4-up grid']]){
     const b=el('div','btn',fleetRow); b.textContent=lbl; b.onclick=()=>setFleetView(k); ui.fleetBtns[k]=b;
   }
   ui.fleetBtns['off'].classList.add('active');
@@ -4289,6 +4673,11 @@ function buildPanel() {
   addSlider(s, 'Storm intensity', P, 'stormIntensity', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Wave height', P, 'waveHeight', 0, 6, 0.1, v=>v.toFixed(1));
   ui.rainTog = addToggle(s, 'Rain on lens (storms)', P, 'rainLens', (on)=>{ if (on) enableRain(); else disableRain(); });
+  if (VOLC_ENABLED){
+    ui.eruptBtn = el('div','btn danger', el('div','btns',s)); ui.eruptBtn.textContent='🌋 Erupt volcano';
+    ui.eruptBtn.onclick = ()=>{ eruptVolcano(); };
+    addToggle(s, 'Auto eruptions', P, 'volcanoAuto');
+  }
 
   // Navigation & estimation
   s = section(panel, 'Navigation & estimation');
