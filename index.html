@@ -389,7 +389,9 @@ const REGIONS = {
 // regions whose data blob (window.AEGEAN, …) loaded as a classic script: register them.
 // Each blob carries its own K/lon0/lat0/bathyMeta/islandPolys/bathyB64 (no elevB64 →
 // land elevation is sampled straight from the GEBCO grid in buildTerrainField).
-if (window.AEGEAN) REGIONS.aegean = window.AEGEAN;
+if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
+  relief: { escale:22, steep:0.2, ridge:0.5, lift:2.2 },   // arid rolling Cycladic hills, not volcanic spires
+});
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
   if (!r.map && r.islandPolys){ let a=1e9,b=-1e9,c=1e9,d=-1e9;
@@ -460,13 +462,18 @@ function buildTerrainField(){
   const ELEV=ELEV_B64?decodeElev(ELEV_B64):null; let li=0;
   for(let r=0;r<GH;r++)for(let c=0;c<GW;c++){ const i=I(c,r), wx=GX0+(c+0.5)*CELL, wz=GZ0+(r+0.5)*CELL;
     if(land[i]){
-      const base = ELEV ? (ELEV[li++] / 10) : Math.max(0, gebcoMetres(wx,wz)) / 10;   // packed SRTM list (Caribbean) OR sample the GEBCO land height directly (regions without elevB64)
-      // dramatic VOLCANIC relief: steepen where it's already tall (cones, not domes), and lay ridged
-      // crests on real high ground only (clamp keeps beaches/lowland smooth so coastlines stay clean).
+      const RL = REGION.relief || {};                                       // per-region relief shaping (Caribbean defaults below = volcanic)
+      const escale = RL.escale!==undefined ? RL.escale : 10;                 // metres→world-unit divisor for GEBCO-sampled land
+      const base = ELEV ? (ELEV[li++] / 10) : Math.max(0, gebcoMetres(wx,wz)) / escale;
+      // relief shaping: steepen tall ground into cones + lay ridged crests on high ground only (clamp keeps
+      // beaches/lowland smooth so coastlines stay clean). Aegean dials these down → arid rolling hills, not spires.
+      const steep = RL.steep!==undefined ? RL.steep : 0.55;
+      const ridgeAmt = RL.ridge!==undefined ? RL.ridge : 2.8;
+      const lift = RL.lift!==undefined ? RL.lift : 2.8;
       const tall = clampJS(base/12, 0, 1);
-      const peakBoost = base * (1 + 0.55*tall);
-      const rdg = (ridge(wx*0.05, wz*0.05) - 0.4) * clampJS(base/6, 0, 1) * 2.8;
-      const lh = 2.8 + peakBoost + rdg + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift clear of crests + micro-relief
+      const peakBoost = base * (1 + steep*tall);
+      const rdg = (ridge(wx*0.05, wz*0.05) - 0.4) * clampJS(base/6, 0, 1) * ridgeAmt;
+      const lh = lift + peakBoost + rdg + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift clear of crests + micro-relief
       Hh[i] = lh; Hsea[i] = lh;
     }
     else {
