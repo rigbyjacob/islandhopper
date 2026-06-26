@@ -1370,7 +1370,7 @@ function buildLights() {
   const sc = sunLight.shadow.camera;
   // tighter frustum (follows the boat) → smaller texels → steadier, sharper frond shadows.
   sc.left=-340; sc.right=340; sc.top=340; sc.bottom=-340; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();
-  sunLight.shadow.bias = -0.0005; sunLight.shadow.normalBias = 1.4;
+  sunLight.shadow.bias = -0.0006; sunLight.shadow.normalBias = 3.0;   // high normalBias: flat ground inside the shadow frustum doesn't self-shadow → no rectangular "frustum" darkening on the seabed
   scene.add(sunLight); scene.add(sunLight.target);
   // soft cool moonlight — a second directional light that fades in at night (no shadows, keeps it cheap)
   moonLight = new THREE.DirectionalLight(0xb9c6ff, 0.0);
@@ -2575,7 +2575,7 @@ function buildStarMap(){
   g.setAttribute('asize', new THREE.BufferAttribute(gs,1));
   g.setAttribute('aphase', new THREE.BufferAttribute(gph,1));
   g.setAttribute('atw', new THREE.BufferAttribute(gtw,1));
-  const mat=new THREE.PointsNodeMaterial({ transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending });
+  const mat=new THREE.PointsNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
   mat.sizeNode=attribute('asize'); mat.colorNode=attribute('acolor','vec3');
   // twinkle: per-star amplitude (bright stars shimmer more), two beat frequencies for a livelier sparkle
   const tw = sin(uTime.mul(2.6).add(attribute('aphase'))).mul(0.6).add(sin(uTime.mul(5.7).add(attribute('aphase').mul(1.7))).mul(0.4));
@@ -2594,7 +2594,7 @@ function buildStarMap(){
       } }
     if (thinPos.length){
       const lg=new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(thinPos,3));
-      const lmat=new THREE.LineBasicNodeMaterial({ transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending });
+      const lmat=new THREE.LineBasicNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
       lmat.colorNode=vec3(0.34,0.50,0.86); lmat.opacityNode=uNight.mul(0.34);
       const lines=new THREE.LineSegments(lg, lmat); lines.frustumCulled=false; lines.renderOrder=-9; grp.add(lines);
     }
@@ -2610,7 +2610,7 @@ function buildStarMap(){
       for(const gg of geos){ mp.set(gg.attributes.position.array, vo*3); const ix=gg.index.array;
         for(let k=0;k<ix.length;k++) mi[io+k]=ix[k]+vo; vo+=gg.attributes.position.count; io+=ix.length; }
       const tg=new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.BufferAttribute(mp,3)); tg.setIndex(new THREE.BufferAttribute(mi,1));
-      const tmat=new THREE.MeshBasicNodeMaterial({ transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending });
+      const tmat=new THREE.MeshBasicNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
       tmat.colorNode=vec3(0.46,0.66,1.0); tmat.opacityNode=uNight.mul(0.5);
       const tubes=new THREE.Mesh(tg, tmat); tubes.frustumCulled=false; tubes.renderOrder=-9; grp.add(tubes);
     }
