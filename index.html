@@ -412,6 +412,8 @@ if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
     [25.03,37.04,5],   // Antiparos
     [25.86,36.83,6],   // Katapola (Amorgos)
   ],
+  // bright clear midday Mediterranean light + a dry meltemi north wind, calmer seas, clearer air
+  defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:115, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
@@ -421,6 +423,7 @@ for (const r of Object.values(REGIONS)){
 }
 const REGION_ID = new URLSearchParams(location.search).get('region') || 'caribbean';
 let REGION = REGIONS[REGION_ID] || REGIONS.caribbean;
+if (REGION.defaults) Object.assign(P, REGION.defaults);   // region weather/light defaults (e.g. Aegean midday + meltemi)
 const K = REGION.K;
 const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K, z: -(lat - REGION.lat0) * REGION.K });
 const ISLAND_POLYS = REGION.islandPolys;
@@ -2384,7 +2387,7 @@ function buildTownMotifs(){
   const wallCols = aeg ? [0xf3f1ea,0xeef0ec,0xf7f4ec,0xfbfaf4,0xe9ebe8] : [0xead6b8,0xe8b7a0,0xcfe0d0,0xf0d59a,0xd8b0c8,0xefe6d2];
   const roofCol = aeg ? 0xeae8e0 : 0x8a4b39;
   const churchCol=0xf5f3ec, domeCol = aeg ? 0x2f6fb0 : 0x9a5a3a;   // iconic blue dome vs colonial spire
-  const onLand=(x,z)=>terrainHeight(x,z)>2.0;
+  const onLand=(x,z)=>terrainHeight(x,z) > (aeg?3.4:2.0);          // Aegean: sit villages up off the waterline
   const geos=[];
   for (const ct of CITIES){
     if (ct.w<3) continue;
