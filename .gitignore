@@ -5,3 +5,5 @@ node_modules/
 .server.log
 .venv/
 reload.txt
+GEBCO/
+data/_*test*.js
