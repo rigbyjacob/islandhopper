@@ -1279,6 +1279,7 @@ async function init() {
   buildLabels();
   buildStarMap();   // real night sky (constellations + labels), gated to night via uNight
   buildPanel();
+  buildWorldMap();   // 🌍 region picker (small planet + pins → fly between regions)
   applyHud();        // reflect any restored HUD-visibility settings
   onResize();        // apply any restored aspect-ratio lock + composition grid
   initInput();
@@ -4908,6 +4909,88 @@ function setMode(m) {
   for (const k in ui.modeBtns) ui.modeBtns[k].classList.toggle('active', k===m);
   if (ui.holdWrap) ui.holdWrap.style.display = (m==='hold') ? '' : 'none';
   headingPID.reset(); saveSettings();
+}
+
+// ============================================================================
+// WORLD MAP — a small glowing planet with region pins; pick one to fly there.
+// Regions all live on the same tiny planet; selecting one plays a launch-to-orbit
+// warp and loads that region (every region's data is already in memory).
+// ============================================================================
+const REGION_META = {
+  caribbean: { tag:'Caribbean',        blurb:'Tropical isles & coral banks' },
+  aegean:    { tag:'Aegean · Cyclades', blurb:'Whitewashed isles · meltemi winds' },
+};
+function buildWorldMap(){
+  const st=document.createElement('style'); st.textContent = `
+    #wm-open{ position:fixed; top:14px; left:14px; z-index:50; background:rgba(10,20,30,.7); color:#cfe6f5;
+      padding:7px 12px; border:1px solid #2a5a78; border-radius:8px; font:600 13px ui-sans-serif,system-ui; cursor:pointer; backdrop-filter:blur(6px); }
+    #wm-open:hover{ background:rgba(20,40,55,.9); }
+    #worldmap{ position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center;
+      background:radial-gradient(circle at 50% 38%, #0b1a2c 0%, #04080f 80%); transition:opacity .5s; }
+    #worldmap.hidden{ display:none; }
+    .wm-panel{ text-align:center; color:#dfeefb; font:14px ui-sans-serif,system-ui; }
+    .wm-panel h2{ font-weight:700; letter-spacing:.6px; margin:0 0 6px; }
+    .wm-sub{ color:#8fb2c8; font-size:12px; margin-bottom:10px; }
+    .wm-globe{ width:360px; height:360px; filter:drop-shadow(0 0 34px rgba(46,127,176,.45)); animation:wmspin 60s linear infinite; transform-origin:50% 50%; }
+    @keyframes wmspin{ from{ transform:rotate(0) } to{ transform:rotate(0) } }
+    .wm-pin circle{ fill:#ffd24a; stroke:#fff6d8; stroke-width:1.5; cursor:pointer; filter:drop-shadow(0 0 6px #ffcf5a); transition:.15s; }
+    .wm-pin:hover circle{ r:8; }
+    .wm-pin.cur circle{ fill:#54e0a0; }
+    .wm-pin text{ fill:#eaf4ff; font:600 12px ui-sans-serif; pointer-events:none; paint-order:stroke; stroke:#04080f; stroke-width:3px; }
+    .wm-cards{ display:flex; gap:12px; justify-content:center; margin-top:16px; flex-wrap:wrap; }
+    .wm-card{ background:rgba(20,40,58,.6); border:1px solid #2a5a78; border-radius:10px; padding:10px 16px; min-width:170px; cursor:pointer; transition:.15s; text-align:left; }
+    .wm-card:hover{ background:rgba(35,70,95,.9); transform:translateY(-2px); }
+    .wm-card.cur{ border-color:#54e0a0; }
+    .wm-card b{ display:block; color:#fff; font-size:14px; }
+    .wm-card span{ display:block; color:#9fc0d6; font-size:12px; margin-top:3px; }
+    .wm-card em{ display:block; color:#54e0a0; font-size:11px; margin-top:5px; font-style:normal; }
+    .wm-close{ margin-top:18px; background:none; border:1px solid #3a6a88; color:#bcd; padding:7px 16px; border-radius:8px; cursor:pointer; font:13px ui-sans-serif; }
+    .wm-close:hover{ background:rgba(35,70,95,.6); }
+    body.wm-travel #worldmap{ opacity:0; transform:scale(1.7); transition:opacity 1s, transform 1s; }
+    body.wm-travel #app{ filter:brightness(2.4) blur(4px); opacity:0; transition:opacity 1s, filter 1s; }
+    .wm-warp{ position:fixed; inset:0; z-index:90; pointer-events:none; opacity:0; background:radial-gradient(circle at 50% 50%, rgba(180,225,255,.0) 30%, rgba(150,210,255,.25) 100%); }
+    body.wm-travel .wm-warp{ opacity:1; transition:opacity 1s; }
+  `;
+  document.head.appendChild(st);
+
+  const btn=document.createElement('div'); btn.id='wm-open'; btn.textContent='🌍 World'; btn.title='Travel to another region';
+  btn.onclick=openWorldMap; document.body.appendChild(btn);
+  const warp=document.createElement('div'); warp.className='wm-warp'; document.body.appendChild(warp);
+
+  const R=150, cx=180, cy=180, lon0g=-12, lat0g=30;     // globe centred so the Atlantic + Med both face us
+  const orth=(lon,lat)=>{ const φ=lat*Math.PI/180, λ=(lon-lon0g)*Math.PI/180, φ0=lat0g*Math.PI/180;
+    const cosc=Math.sin(φ0)*Math.sin(φ)+Math.cos(φ0)*Math.cos(φ)*Math.cos(λ);
+    const x=Math.cos(φ)*Math.sin(λ), y=Math.cos(φ0)*Math.sin(φ)-Math.sin(φ0)*Math.cos(φ)*Math.cos(λ);
+    return { x:cx+x*R, y:cy-y*R, front:cosc>0 }; };
+  // faint graticule
+  let grat='';
+  for (let lat=-60; lat<=60; lat+=30){ let d=''; for (let lon=-180; lon<=180; lon+=6){ const p=orth(lon,lat); if(p.front) d+=(d?'L':'M')+p.x.toFixed(1)+' '+p.y.toFixed(1); } if(d) grat+=`<path d="${d}" fill="none" stroke="#2a6a8e" stroke-width="0.6" opacity="0.5"/>`; }
+  for (let lon=-180; lon<180; lon+=30){ let d=''; for (let lat=-80; lat<=80; lat+=4){ const p=orth(lon,lat); if(p.front) d+=(d?'L':'M')+p.x.toFixed(1)+' '+p.y.toFixed(1); } if(d) grat+=`<path d="${d}" fill="none" stroke="#2a6a8e" stroke-width="0.6" opacity="0.5"/>`; }
+  let pins='', cards='';
+  for (const r of Object.values(REGIONS)){
+    const m=REGION_META[r.id]||{tag:r.name||r.id, blurb:''}, cur=(r.id===REGION.id);
+    const p=orth(r.lon0||0, r.lat0||0);
+    if (p.front) pins += `<g class="wm-pin${cur?' cur':''}" data-id="${r.id}"><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="6"/><text x="${(p.x+11).toFixed(1)}" y="${(p.y+4).toFixed(1)}">${m.tag}</text></g>`;
+    cards += `<div class="wm-card${cur?' cur':''}" data-id="${r.id}"><b>${m.tag}</b><span>${m.blurb}</span>${cur?'<em>◉ you are here</em>':'<em>↗ set sail</em>'}</div>`;
+  }
+  const ov=document.createElement('div'); ov.id='worldmap'; ov.className='hidden';
+  ov.innerHTML = `<div class="wm-panel"><h2>The Small Planet</h2><div class="wm-sub">choose your waters — fly to a region</div>
+    <svg class="wm-globe" viewBox="0 0 360 360" xmlns="http://www.w3.org/2000/svg">
+      <defs><radialGradient id="wmOcean" cx="38%" cy="32%"><stop offset="0%" stop-color="#2f86b8"/><stop offset="68%" stop-color="#0e3b58"/><stop offset="100%" stop-color="#06202f"/></radialGradient></defs>
+      <circle cx="${cx}" cy="${cy}" r="${R}" fill="url(#wmOcean)" stroke="#1b5e80" stroke-width="1.5"/>
+      ${grat}${pins}
+    </svg>
+    <div class="wm-cards">${cards}</div>
+    <button class="wm-close">✕ stay here</button></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('.wm-close').onclick=closeWorldMap;
+  ov.querySelectorAll('[data-id]').forEach(e=>e.onclick=()=>travelToRegion(e.getAttribute('data-id')));
+}
+function openWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) ov.classList.remove('hidden'); }
+function closeWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) ov.classList.add('hidden'); }
+function travelToRegion(id){ if(!REGIONS[id]) return; if(id===REGION.id){ closeWorldMap(); return; }
+  document.body.classList.add('wm-travel');                              // launch-to-orbit warp, then load the region
+  setTimeout(()=>{ const u=new URL(location.href); u.searchParams.set('region', id); location.assign(u.toString()); }, 1050);
 }
 
 // --- small UI factory ---
