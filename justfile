@@ -70,3 +70,10 @@ logs:
 # Stop the server and remove generated cruft (pid, log, and any stray .venv)
 clean: stop
     @rm -rf .venv "{{logf}}" && echo "cleaned"
+
+# Bundle index.html + data/*.js into one self-contained dist/index.html for distribution.
+# Dev keeps the heavy GIS blobs in data/*.js (classic scripts → window.*) so index.html
+# stays editable; packing inlines them back into a single portable file.
+pack:
+    node build/pack.js
+    @ls -lh dist/index.html
