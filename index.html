@@ -189,9 +189,10 @@
 <script type="module">
 import * as THREE from 'three';
 import {
-  Fn, float, vec2, vec3, sin, dot, max, mix, clamp, smoothstep, pow,
+  Fn, float, vec2, vec3, vec4, sin, dot, max, mix, clamp, smoothstep, pow, reflect, exp,
   normalize, length, positionLocal, time, positionWorld, cameraPosition, oneMinus, attribute, uniform, uv, floor, fract,
-  pass, mrt, output, normalView, texture, abs, screenUV, screenSize, cos
+  pass, mrt, output, normalView, texture, abs, screenUV, screenSize, cos,
+  modelWorldMatrix, modelWorldMatrixInverse
 } from 'three/tsl';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -250,6 +251,7 @@ const P = {
   // lighting
   shadowDepth: 0.6,   // 0 = flat (lots of sky fill) … 1 = deep contrast (little fill, dark shaded sides)
   bloom: false,       // HDR-ish glow post-process (guarded toggle)
+  atmosphere: 0.6,    // master drama for god rays / horizon haze / sunset bloom (0 = off, 1 = full)
   style: 'tropical',  // art-style re-grade: tropical | photoreal | pissarro | gauguin
   // cinematic tour director
   cine: true,         // drive a perspective "director" camera that frames the boat cinematically (default view)
@@ -259,6 +261,8 @@ const P = {
   cineView: 'follow', // director camera mode: 'follow' (slider) | 'side' | 'race'
   bathy: true,        // bathymetric overlay — show underwater depth ramp
   contours: false,    // iso-depth contour LINES — independent of the bathymetry ramp
+  curveWorld: true,   // "tiny planet" — bend the sea + land down into the distance (no hard flat map edge)
+  curveRadius: 9000,  // curvature radius R (world units); larger = gentler bend
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
   showClouds: true,   // clouds (can hide them for a clean debug view)
   cloudSoft: true,    // cloud look: true = soft naturalistic, false = cartoon cel-shaded puffs
@@ -1116,6 +1120,7 @@ async function init() {
   applyTourPacing();   // if the user had pacing enabled, set the speed for the route now
   if (P.rainLens) enableRain();   // build the rain post-process now (it only renders while storming)
   enableOutline();                // build the woodblock outline pass (only renders for ink/hokusai styles)
+  enableGodrays();                // build the god-ray pass (only renders when the sun is on-screen & Atmosphere > 0)
 
   let firstFrame = true, fpsT = 0, fpsN = 0;
 
@@ -1160,18 +1165,31 @@ async function init() {
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
+    uCurveK.value = P.curveWorld ? 1/(2*P.curveRadius) : 0;   // "tiny planet" curvature strength (1/2R), 0 = flat
+    uHorizonDrop.value = P.curveWorld ? Math.min(0.16, 765/P.curveRadius) : 0;   // horizon dip scales with curve strength (0.085 @ R=9000)
+    // ATMOSPHERE: project the sun to screen space for god rays, and master the drama with the slider
+    uAtmo.value = P.atmosphere;
+    if (P.atmosphere > 0.01 && activeCam){
+      _sunScreen.copy(_sun).multiplyScalar(5000).add(activeCam.position).project(activeCam);   // sun → NDC
+      uSunScreenUV.value.set(_sunScreen.x*0.5+0.5, _sunScreen.y*0.5+0.5);
+      uSunOnScreen.value = (_sunScreen.z < 1 && _sun.y > -0.16 &&
+        Math.abs(_sunScreen.x) < 1.35 && Math.abs(_sunScreen.y) < 1.35) ? 1 : 0;
+    } else uSunOnScreen.value = 0;
     const useRain = rainActive && rainPost && stormFactor > 0.01;   // rain-on-lens only while storming
     const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
+    const useGodray = !useRain && !useOutline && godrayActive && godrayPost && P.atmosphere > 0.01;   // atmosphere pass: god rays (sun-gated inside) + bloom + haze
     try {
       if (fleetView==='grid'){ renderFleetGrid(); }
       else if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
       else if (useOutline){ outlineScenePass.camera = activeCam; outlineScenePass.scene = scene; outlinePost.render(); }
+      else if (useGodray){ godrayScenePass.camera = activeCam; godrayScenePass.scene = scene; godrayPost.render(); }
       else if (bloomActive && bloomPost && !fpsMode && !cineMode && !flyMode) bloomPost.render();
       else renderer.render(scene, activeCam);
-    } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; outlineActive = false; if (fpsMode) setView(false); }
+    } catch (err) { console.warn('render failed', err); bloomActive = false; rainActive = false; outlineActive = false; godrayActive = false; if (fpsMode) setView(false); }
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
     updateLabels();   // sprite labels (handles its own showLabels gating)
+    curveTrees();     // re-sink the instanced palms/shrubs onto the curved world
     if (P.showTelemetry) drawTelemetry();
     if (P.showCompass) drawCompass();
     updateReadouts();
@@ -1205,6 +1223,13 @@ const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
 const uBathy   = uniform(0.0);   // bathymetry overlay strength (0 off → 1 on)
 const uContour = uniform(0.0);   // iso-depth contour LINES strength — independent of the bathymetry ramp
+const uCurveK  = uniform(0.0);   // "tiny planet" world curvature: world Y drops by dist²·uCurveK from the camera (0 = flat)
+const uHorizonDrop = uniform(0.0); // tiny-planet: lower the sky horizon band + sun/moon disks so they rise from the curved sea
+const uWarm = uniform(0.0);        // sunrise/sunset warmth (0 day → 1 at the horizon) — dims+reddens the sun disk so it's a ruddy ball
+const uAtmo = uniform(0.6);        // ATMOSPHERE master (0..1 slider): god rays, horizon haze, sunset bloom drama
+const uSunScreenUV = uniform(new THREE.Vector2(0.5, 0.5));   // sun position in screen space (for god rays), updated each frame
+const uSunOnScreen = uniform(0.0); // 1 when the sun is in front of the camera & roughly on screen, else 0
+const _curveInsts = [];          // base transforms of instanced decorations (palms/shrubs) so they can re-curve each frame
 const uHokusai = uniform(0.0);   // Hokusai ukiyo-e water recolor + foam boost (1 when that style is active)
 const uTargetPos  = uniform(new THREE.Vector2(0,0));   // target-island glow: centre, colour, pulse, falloff radius
 const uTargetCol  = uniform(new THREE.Vector3(1,0.5,0.15));
@@ -1213,6 +1238,7 @@ const uTargetRad  = uniform(120.0);
 
 let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt, oceanMat;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
+const _sunScreen = new THREE.Vector3();   // sun projected to NDC each frame (god rays)
 const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3();
 const C = {
   zenNight:new THREE.Color(0x05070f), zenDay:new THREE.Color(0x1d6fc6), zenGold:new THREE.Color(0x3a3570),
@@ -1231,15 +1257,27 @@ function buildSky() {
   // by TSL — that's why the sky was a flat, washed gradient with no sun glow/disk).
   skyMat.colorNode = Fn(() => {
     const vd = normalize(positionLocal);
-    const grad = smoothstep(-0.05, 0.38, vd.y);                       // reach the blue zenith sooner → less washed-out
+    // tiny-planet: bias the view elevation up by uHorizonDrop so the whole sky (horizon band + sun + moon) appears
+    // LOWER, rising from the curved sea horizon instead of the flat one. 0 when curvature is off.
+    const grad = smoothstep(-0.05, 0.38, vd.y.add(uHorizonDrop));      // reach the blue zenith sooner → less washed-out
     const col = mix(uHorizon, uZenith, grad).toVar();
-    const sd = max(dot(vd, normalize(uSunDir)), 0.0);
-    const glow = pow(sd, 13.0).mul(0.30).add(pow(sd, 280.0).mul(7.0));   // tight halo + sun disk
+    const sunV = normalize(vec3(uSunDir.x, uSunDir.y.sub(uHorizonDrop), uSunDir.z));   // visual sun disk dips with the horizon
+    const sd = max(dot(vd, sunV), 0.0);
+    // tight disk core blows out to white at any intensity; at sunset (uWarm→1) dim it hard so the ruddy uSunCol shows
+    // through as a deep-red ball instead of a white moon. Broad warm halo stays.
+    const glow = pow(sd, 13.0).mul(0.30).add(pow(sd, 280.0).mul(mix(7.0, 1.4, uWarm)));
     col.addAssign(uSunCol.mul(glow).mul(uSunInt));
     // moon — small cool disk + faint halo, rises at night
-    const md = max(dot(vd, normalize(uMoonDir)), 0.0);
+    const moonV = normalize(vec3(uMoonDir.x, uMoonDir.y.sub(uHorizonDrop), uMoonDir.z));
+    const md = max(dot(vd, moonV), 0.0);
     const mglow = pow(md, 40.0).mul(0.12).add(pow(md, 1400.0).mul(6.0));
     col.addAssign(uMoonCol.mul(mglow).mul(uMoonInt));
+    // ---- ATMOSPHERE: warm horizon haze — a glowing band hugging the horizon, brightest toward the sun and swelling
+    // at sunset (uWarm), scaled by the Atmosphere slider. Reliable golden-hour glow, independent of god-ray contrast.
+    const hzBand = smoothstep(0.32, -0.05, vd.y.add(uHorizonDrop));          // 1 at/below the horizon → 0 up the sky
+    const azSun  = max(dot(normalize(vec3(vd.x, 0.001, vd.z)), normalize(vec3(sunV.x, 0.001, sunV.z))), 0.0);
+    const haze   = hzBand.mul(mix(float(0.22), float(1.0), pow(azSun, 2.2))).mul(uAtmo).mul(uWarm.mul(0.75).add(0.25));
+    col.assign(mix(col, uSunCol.mul(1.15), clamp(haze.mul(0.7), 0.0, 0.82)));
     return col;
   })();
   skyMesh = new THREE.Mesh(geo, skyMat); skyMesh.renderOrder = -10;
@@ -1248,8 +1286,10 @@ function buildSky() {
 }
 // a big calm sea plane filling out to the horizon (so the wave-ocean's edge never shows white)
 function buildSeaSkirt() {
-  const g = new THREE.PlaneGeometry(16000, 16000); g.rotateX(-Math.PI/2);
-  seaSkirt = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x0a3048 }));
+  const g = new THREE.PlaneGeometry(16000, 16000, 64, 64); g.rotateX(-Math.PI/2);   // tessellated so it can bend with the curve
+  const skMat = new THREE.MeshBasicNodeMaterial({ color: 0x0a3048 });
+  skMat.positionNode = curveNode(positionLocal);   // curve the backdrop too, so it stays below the curved seabed (no clip)
+  seaSkirt = new THREE.Mesh(g, skMat);
   // Sit the skirt well BELOW the deepest wave trough (~-9 in a full storm). At the old -0.4 the
   // displaced ocean dipped through this flat plane, so the two opaque surfaces intersected → depth
   // ties. Orthographic depth (linear) resolves them; the director's perspective depth (1/z, little
@@ -1450,7 +1490,7 @@ function _agentStep(v, dt){
   else targY=v.cruiseY;
   v.pos.y += (targY-v.pos.y)*Math.min(1,dt*1.6);
   v.pitch += (clampJS((targY-v.pos.y)*0.02,-0.3,0.3) - v.pitch)*Math.min(1,dt*4);
-  v.mesh.position.copy(v.pos);
+  v.mesh.position.set(v.pos.x, v.pos.y - curveDropJS(v.pos.x, v.pos.z), v.pos.z);   // sink onto the curved world (focused vehicle is near-cam → ~0)
   v.mesh.rotation.set(0,0,0); v.mesh.rotateY(-v.yaw); v.mesh.rotateZ(v.pitch); v.mesh.rotateX(v.roll);
   if (v.id==='ufo'){ v.mesh.rotateY(tt*1.4); if (v.mesh.userData.ring) v.mesh.userData.ring.material.opacity=0.6+0.35*Math.sin(tt*6); }
 }
@@ -1475,7 +1515,7 @@ const _gsz=new THREE.Vector2();
 function renderFleetGrid(){   // Brady-Bunch 2×2: ship / sub / plane / UFO
   renderer.getSize(_gsz); const W=_gsz.x, H=_gsz.y, hw=W/2, hh=H/2;
   const cams=[fleetCam('ship'),fleetCam('sub'),fleetCam('plane'),fleetCam('ufo')];
-  const quads=[[0,hh],[hw,hh],[0,0],[hw,0]];   // three viewport origin = bottom-left → TL,TR,BL,BR
+  const quads=[[0,0],[hw,0],[0,hh],[hw,hh]];   // WebGPU viewport origin = TOP-left → TL,TR,BL,BR (match the DOM labels)
   renderer.setScissorTest(true);
   for (let i=0;i<4;i++){ const c=cams[i]; if(!c) continue; const q=quads[i];
     c.aspect=hw/hh; c.updateProjectionMatrix();
@@ -1585,15 +1625,20 @@ function updateEnvironment(dt) {
   uSea.value = seaAmp;
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   uContour.value += ((P.contours?1:0) - uContour.value) * Math.min(1, dt*4);   // smooth contour-line fade (independent toggle)
-  if (dipStick) dipStick.visible = uBathy.value > 0.04;                 // depth sounding shows with bathymetry
+  if (dipStick){ dipStick.visible = uBathy.value > 0.04;               // depth sounding shows with bathymetry
+    dipStick.position.y = -curveDropJS(200, -80); }                    // sink the sounder onto the curved sea (its fixed X,Z)
   uRain.value = stormFactor;                                            // rain-on-lens intensity follows the storm
 
   if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
   const phi = (P.timeOfDay/24)*Math.PI*2;
   _sun.set(Math.sin(phi), -Math.cos(phi), 0.28).normalize();      // sunrise E, noon up, sunset W
-  const e = _sun.y;
+  // tiny-planet: the visible horizon is LOWER, so reckon the sun's palette (warm sunset reddening, brightness,
+  // dusk) against the CURVED horizon — otherwise the sun greys to a moon-like disk before it visually reaches it.
+  const e = _sun.y + (P.curveWorld ? Math.min(0.16, 765/P.curveRadius) : 0);   // reckon palette against the curved horizon (matches uHorizonDrop)
   const day  = clampJS((e+0.04)/0.30, 0, 1);
-  const warm = clampJS(1 - Math.abs(e-0.03)/0.22, 0, 1) * clampJS(day*1.5, 0, 1);
+  // warmth peaks as the sun meets the horizon and LINGERS below it — a red/amber afterglow that persists a while past
+  // sunset before fading to night. Asymmetric: quick fade as the sun climbs (e>0), slow red fade as it sinks (e<0).
+  const warm = (e >= 0) ? clampJS(1 - e/0.24, 0, 1) : clampJS(1 - (-e)/0.30, 0, 1);
 
   _cZen.copy(C.zenNight).lerp(C.zenDay, day).lerp(C.zenGold, warm*0.6);
   _cHor.copy(C.horNight).lerp(C.horDay, day).lerp(C.horGold, warm);
@@ -1605,6 +1650,7 @@ function updateEnvironment(dt) {
   uHorizon.value.set(_cHor.r,_cHor.g,_cHor.b);
   uSunDir.value.copy(_sun);
   uSunCol.value.set(_cSun.r,_cSun.g,_cSun.b);
+  uWarm.value = warm;   // drives the sun-disk dim/redden so sunset is a ruddy ball, not a white moon
   uSunInt.value  = (0.25 + 1.5*day) * (1 - 0.7*localStorm);
   uDayBright.value = (0.09 + 0.91*day) * (1 - 0.45*localStorm);   // much darker at night so shallows/foam don't glow
   uNight.value = clampJS((0.14 - e) / 0.18, 0, 1);                 // lights come on at dusk
@@ -1631,7 +1677,10 @@ function updateEnvironment(dt) {
     for (const L of boatLights){ L.mat.opacity = lit*fk*0.95; L.flame.color.setRGB(lit, lit*0.62*fk, lit*0.28); L.light.intensity = lit*fk*14.0; }
   }
 
-  if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b); fog.near=lerp(1500,560,localStorm); fog.far=lerp(4200,1900,localStorm); }
+  if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
+    // tiny-planet: push the haze out so it recedes PAST the curved horizon instead of banding across it as a flat line
+    const fF = P.curveWorld ? 1.55 : 1, fN = P.curveWorld ? 1.3 : 1;
+    fog.near=lerp(1500,560,localStorm)*fN; fog.far=lerp(4200,1900,localStorm)*fF; }
   if (seaSkirt){ const db=uDayBright.value; seaSkirt.material.color.setRGB(0.03*db,0.16*db,0.28*db);
     seaSkirt.position.x=controls.target.x; seaSkirt.position.z=controls.target.z; }
 
@@ -1822,6 +1871,8 @@ function updateClouds(dt, sf, day){
     grp.position.x += wx*spd*grp.userData.spd*dt; grp.position.z += wz*spd*grp.userData.spd*dt;
     if(grp.position.x>cloudBounds.maxX)grp.position.x=cloudBounds.minX; if(grp.position.x<cloudBounds.minX)grp.position.x=cloudBounds.maxX;
     if(grp.position.z>cloudBounds.maxZ)grp.position.z=cloudBounds.minZ; if(grp.position.z<cloudBounds.minZ)grp.position.z=cloudBounds.maxZ;
+    if(grp.userData.baseY===undefined) grp.userData.baseY=grp.position.y;   // curve the clouds down with the world
+    grp.position.y = grp.userData.baseY - curveDropJS(grp.position.x, grp.position.z);
     const sCell=grp.userData.storm||0;
     const r=grp.userData.rain; if(r){ const ro=clampJS(sf*(0.32+0.68*sCell)*0.85, 0, 0.72);   // more clouds rain at high storm
       r.material.opacity=ro; r.visible = ro>0.012; }
@@ -1882,7 +1933,7 @@ function updateRain(dt){
   for(let i=0;i<want;i++){ const d=rainDrops[i];
     if(!d.active){ d.active=true; d.x=cx+(Math.random()-0.5)*2*BOX; d.z=cz+(Math.random()-0.5)*2*BOX; d.y=Math.random()*TOP; }
     d.y -= d.spd*dt; d.x += wx*wdrift*dt; d.z += wz*wdrift*dt;
-    const seaY=waveHeightJS(d.x, d.z, t);
+    const seaY=waveHeightJS(d.x, d.z, t) - curveDropJS(d.x, d.z);   // strike the CURVED sea surface
     if(d.y<=seaY){ spawnSplash(d.x, seaY, d.z); d.y=TOP; d.x=cx+(Math.random()-0.5)*2*BOX; d.z=cz+(Math.random()-0.5)*2*BOX; }
     _rd.position.set(d.x, d.y, d.z); _rd.rotation.set(0, Math.atan2(cam.position.x-d.x, cam.position.z-d.z), 0);
     _rd.scale.set(d.wid, d.len, 1); _rd.updateMatrix(); rainMesh.setMatrixAt(i, _rd.matrix);
@@ -2003,6 +2054,7 @@ function buildPalms(){
       const slot = meshes[(Math.random()*meshes.length)|0]; if (slot.n>=CAPv) continue;
       d.position.set(x, hh-0.3, z); d.rotation.set(0, Math.random()*Math.PI*2, 0);
       const s=0.65+Math.random()*0.7; d.scale.set(s,s,s); d.updateMatrix();
+      _curveInsts.push({ m:slot.m, i:slot.n, x, y:hh-0.3, z, ry:d.rotation.y, sx:s, sy:s, sz:s });
       slot.m.setMatrixAt(slot.n++, d.matrix); p++;
     }
   }
@@ -2030,7 +2082,8 @@ function buildShrubs(){
       const x=isl.x+Math.cos(a)*rr, z=isl.z+Math.sin(a)*rr, hh=terrainHeight(x,z);
       if (hh<2.2 || hh>12) continue;                              // lowland cover, clear of the wave wash
       d.position.set(x, hh-0.1, z); d.rotation.set(0, Math.random()*Math.PI*2, 0);
-      const s=0.7+Math.random()*0.9; d.scale.set(s, s*(0.7+Math.random()*0.5), s); d.updateMatrix();
+      const s=0.7+Math.random()*0.9, syB=s*(0.7+Math.random()*0.5); d.scale.set(s, syB, s); d.updateMatrix();
+      _curveInsts.push({ m, i:n, x, y:hh-0.1, z, ry:d.rotation.y, sx:s, sy:syB, sz:s });
       m.setMatrixAt(n++, d.matrix); p++;
     }
   }
@@ -2067,7 +2120,8 @@ function buildTownMotifs(){
   }
   if (!geos.length) return;
   const merged=mergeGeos(geos); registerStyledColors(merged);   // town buildings join the style re-grade
-  const mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.82 });
+  const mat=new THREE.MeshStandardNodeMaterial({ vertexColors:true, roughness:0.82 });
+  mat.positionNode = curveNode(positionLocal);                  // houses bend with the curved world (world-space verts, mesh at origin)
   const mesh=new THREE.Mesh(merged, mat); mesh.castShadow=true; mesh.receiveShadow=true; scene.add(mesh);
 }
 
@@ -2246,10 +2300,11 @@ function fillRibbon(ribbon, pts, ex, ez, yLevel, gate){
   let s = bestS + 20, di = 0;
   while (s < Math.min(total, capS) && di < DASHMAX){
     const p0=at(s), p1=at(s+dash), nx=-p0.dz, nz=p0.dx, b=di*12;
-    arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y; arr[b+2 ]=p0.z-nz*wB*0.5;
-    arr[b+3 ]=p0.x+nx*wB*0.5; arr[b+4 ]=y; arr[b+5 ]=p0.z+nz*wB*0.5;
-    arr[b+6 ]=p1.x+nx*wF*0.5; arr[b+7 ]=y; arr[b+8 ]=p1.z+nz*wF*0.5;
-    arr[b+9 ]=p1.x-nx*wF*0.5; arr[b+10]=y; arr[b+11]=p1.z-nz*wF*0.5;
+    const y0=y-curveDropJS(p0.x,p0.z), y1=y-curveDropJS(p1.x,p1.z);   // sink the dashes onto the curved sea
+    arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y0; arr[b+2 ]=p0.z-nz*wB*0.5;
+    arr[b+3 ]=p0.x+nx*wB*0.5; arr[b+4 ]=y0; arr[b+5 ]=p0.z+nz*wB*0.5;
+    arr[b+6 ]=p1.x+nx*wF*0.5; arr[b+7 ]=y1; arr[b+8 ]=p1.z+nz*wF*0.5;
+    arr[b+9 ]=p1.x-nx*wF*0.5; arr[b+10]=y1; arr[b+11]=p1.z-nz*wF*0.5;
     di++; s += dash+gap;
   }
   ribbon.geometry.setDrawRange(0, di*6);
@@ -2279,7 +2334,7 @@ function updateNavVisuals(dt) {
       else { const tg = activeTarget(); tx=tg.x; tz=tg.z; rad=26; key='g:'+Math.round(tx)+','+Math.round(tz); }
       if (key !== targetRingKey){ targetRingKey=key; setTargetRing(ring, tx, tz, rad); }   // rebuild only on target change
       const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7), yw = waveHeightJS(tx, tz, tt);
-      targetRing.position.y = yw + 0.2;                              // ride the wave surface; band rises above it
+      targetRing.position.y = yw + 0.2 - curveDropJS(tx, tz);        // ride the (curved) wave surface; band rises above it
       _glowCol.setHSL(0.045 + 0.03*Math.sin(tt*0.5), 0.95, 0.6);     // warm red↔amber drift
       targetRing.material.color.copy(_glowCol);
       targetRing.material.opacity = 0.34 + 0.22*pulse;               // subtle, pulsing
@@ -2404,9 +2459,11 @@ function updateLabels(){
   const cam = activeCam || camera, k = 0.019;   // cap apparent near-size: world scale = min(base, k·distance)
   const rescale = (sp)=>{ const d=sp.position.distanceTo(cam.position), ws=Math.min(sp.userData.base, k*d);
     sp.scale.set(ws*sp.userData.aspect, ws, 1); };
-  for (const { sp, isl } of labelEls){ sp.visible = on; sp.material.color.set(isl.name===tgtName ? 0xff9a3c : 0xffffff); if(sp.visible) rescale(sp); }
+  const curveY = (sp)=>{ if(sp.userData.baseY===undefined) sp.userData.baseY=sp.position.y;   // sink labels onto the curved world
+    sp.position.y = sp.userData.baseY - curveDropJS(sp.position.x, sp.position.z); };
+  for (const { sp, isl } of labelEls){ sp.visible = on; sp.material.color.set(isl.name===tgtName ? 0xff9a3c : 0xffffff); if(sp.visible){ curveY(sp); rescale(sp); } }
   const cityShow = on && (fpsMode || cineMode || (activeCam === camera && camera.zoom > 1.25));
-  for (const { sp } of cityLabelEls){ sp.visible = cityShow; if(sp.visible) rescale(sp); }
+  for (const { sp } of cityLabelEls){ sp.visible = cityShow; if(sp.visible){ curveY(sp); rescale(sp); } }
 }
 
 // the bathymetry overlay covers the whole WIDE GEBCO tile (17x area) so the depth tint extends far out
@@ -2425,6 +2482,41 @@ function buildBathyTexture(){
   t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.minFilter=t.magFilter=THREE.LinearFilter;
   return t;
 }
+// ---- "tiny planet" world curvature ----
+// Drop world Y by dist²·uCurveK (= dist²/2R) measured from the CAMERA, so distant sea/land bends below the horizon
+// and there's no hard flat map edge. Done in WORLD space then mapped back to local, so it works for any non-instanced
+// transform. cameraPosition keeps the bulge always under the viewer. curveDropJS mirrors it for JS-positioned props.
+function curveNode(localPos){
+  const wp  = modelWorldMatrix.mul(vec4(localPos, 1.0));
+  const dxz = wp.xz.sub(cameraPosition.xz);
+  const drop = dot(dxz, dxz).mul(uCurveK);
+  const wc  = vec4(wp.x, wp.y.sub(drop), wp.z, float(1.0));
+  return modelWorldMatrixInverse.mul(wc).xyz;
+}
+function curveDropJS(x, z){
+  if (!P.curveWorld || !activeCam) return 0;
+  const dx = x - activeCam.position.x, dz = z - activeCam.position.z;
+  return (dx*dx + dz*dz) / (2 * P.curveRadius);
+}
+// re-curve the instanced decorations (palms/shrubs) each frame so they sink onto the curved world like everything else
+let _treesCurved = false;
+const _curveObj = new THREE.Object3D();
+function curveTrees(){
+  const on = !!P.curveWorld;
+  if (!on && !_treesCurved) return;                 // already flat → nothing to rebuild
+  const touched = new Set();
+  for (const t of _curveInsts){
+    const drop = on ? curveDropJS(t.x, t.z) : 0;
+    _curveObj.position.set(t.x, t.y - drop, t.z);
+    _curveObj.rotation.set(0, t.ry, 0);
+    _curveObj.scale.set(t.sx, t.sy, t.sz);
+    _curveObj.updateMatrix();
+    t.m.setMatrixAt(t.i, _curveObj.matrix); touched.add(t.m);
+  }
+  for (const m of touched) m.instanceMatrix.needsUpdate = true;
+  _treesCurved = on;
+}
+
 // ---- Hokusai foam-claw texture: white claws with a DARK INDIGO KEYLINE baked into the ART (so every tendril has a
 // real edge — noise alone can't leave a rim). Tileable (wrap copies). Stamped along the wave crests in the shader. ----
 function buildHokusaiFoamTexture(){
@@ -2524,26 +2616,34 @@ function buildOcean() {
     // big low-frequency dark mottle (applied as a MULTIPLY at the end so it survives bright sun)
     const mottle = smoothstep(0.56, 0.28, fbm2(xz.mul(0.011).add(drift.mul(0.03))));
 
-    // subsurface scattering — translucent teal glow through backlit crests
-    // very subtle — turquoise should read as DEPTH (the shore shelf), not a glow on the waves themselves
-    const sss = smoothstep(-0.2,1.3,wh).mul(clamp(dot(viewDir, sunDir), 0.0, 1.0));
-    col.addAssign(vec3(0.0,0.20,0.17).mul(sss).mul(uSunInt).mul(0.16));
+    // ---- subsurface scattering: sunlight transmitted THROUGH backlit crests → teal-green glow (wrap + thickness) ----
+    // strongest when looking toward the sun (waves lit from behind) and on the tallest crests (most "thickness").
+    const sssAmt = pow(clamp(dot(viewDir, sunDir), 0.0, 1.0), 2.5).mul(smoothstep(-0.2, 1.7, wh));
+    col.addAssign(vec3(0.05,0.42,0.34).mul(sssAmt).mul(uSunInt).mul(0.5));
 
-    // ukiyo-e is FLAT painted colour, not glossy water — when Hokusai is active, suppress the glossy
-    // sky-fresnel + sun glitter so the deep-blue / seafoam palette reads as solid woodblock areas.
-    const hkFlat = oneMinus(uHokusai.mul(0.88));
-    // fresnel sky reflection (horizon/zenith blend), capped so it isn't a hard mirror
-    const fres = pow(oneMinus(max(dot(n, viewDir), 0.0)), 4.0);
-    col.assign(mix(col, mix(uHorizon, uZenith, 0.35), clamp(fres.mul(0.55), 0.0, 0.55).mul(hkFlat)));   // less satin sky-sheen at grazing angles
-
-    // sun reflection — broad lobes so the glittering sun path reads at distance, plus a tight glint
-    const halfv = normalize(viewDir.add(sunDir));
-    const hN = max(dot(n, halfv), 0.0);
-    col.addAssign(uSunCol.mul(pow(hN, 48.0).mul(0.14).mul(uSunInt)).mul(hkFlat));    // dim narrow sheen (no broad white glitter patch)
-    col.addAssign(uSunCol.mul(pow(hN, 140.0).mul(0.38).mul(uSunInt)).mul(hkFlat));   // tight glitter only
-    // sea-of-diamonds sparkle — subtle noise-gated glints, confined to the tightest glint zone
-    const spk = vnoise(xz.mul(0.45).add(vec2(time.mul(0.7), time.mul(-0.5))));
-    col.addAssign(vec3(1.0,0.98,0.9).mul(pow(hN, 150.0).mul(smoothstep(0.66,0.92,spk)).mul(uSunInt).mul(0.8)).mul(hkFlat));
+    // ukiyo-e is FLAT painted colour — under Hokusai suppress the glossy reflection so the woodblock palette reads.
+    const hkFlat = oneMinus(uHokusai.mul(0.9));
+    // ---- PBR reflection: Schlick fresnel (water F0≈0.02) × the ACTUAL sky in the reflected direction ----
+    // We mirror the sky shader (horizon→zenith gradient + sun disk/glow) sampled along the reflected view ray, so the
+    // water reflects the real sky and a moving sun-glitter path — and the fresnel is ~2% head-on (deep, non-plastic)
+    // rising to ~1 at grazing angles (bright horizon sheen). This replaces the old flat sheen + fake sun lobes.
+    const cosV = max(dot(n, viewDir), 0.0);
+    const F0 = float(0.02);
+    const fres = F0.add(oneMinus(F0).mul(pow(oneMinus(cosV), 5.0)));
+    const refl = reflect(viewDir.negate(), n);
+    const rSky = mix(uHorizon, uZenith, smoothstep(-0.06, 0.55, refl.y.add(uHorizonDrop))).toVar();
+    const sunV = normalize(vec3(uSunDir.x, uSunDir.y.sub(uHorizonDrop), uSunDir.z));
+    const rsd = max(dot(refl, sunV), 0.0);
+    rSky.addAssign(uSunCol.mul(pow(rsd, 12.0).mul(0.55).add(pow(rsd, 340.0).mul(7.0))).mul(uSunInt));   // reflected sun: soft glow + sharp glint
+    col.assign(mix(col, rSky, clamp(fres, 0.0, 1.0).mul(hkFlat)));
+    // ---- sea-of-diamonds sparkle: shimmering glints riding the sun's reflection path (two noise scales for richness),
+    // warm-tinted at sunset (uWarm) and amplified by the Atmosphere slider. The magical glitter leading to the sun. ----
+    const spk1 = vnoise(xz.mul(0.45).add(vec2(time.mul(0.7),  time.mul(-0.5))));
+    const spk2 = vnoise(xz.mul(1.05).add(vec2(time.mul(-0.9), time.mul(0.62))));
+    const glitZone = pow(rsd, 90.0).mul(0.65).add(pow(rsd, 260.0));                 // broad glitter PATH + tight bright core
+    const glint = smoothstep(0.64,0.93,spk1).mul(smoothstep(0.58,0.95,spk2));       // two-scale twinkle
+    const sparkle = glitZone.mul(glint).mul(uSunInt).mul(float(0.85).add(uAtmo.mul(1.4)));
+    col.addAssign(mix(vec3(1.0,0.98,0.9), uSunCol.mul(1.3), uWarm).mul(sparkle).mul(hkFlat));
 
     // fake wave self-shadowing — darken points blocked from the sun by a crest toward the sun
     const sunH = normalize(vec2(uSunDir.x, uSunDir.z));
@@ -2616,7 +2716,7 @@ function buildOcean() {
   });
 
   oceanMat = new THREE.MeshBasicNodeMaterial();
-  oceanMat.positionNode = positionLocal.add(vec3(0, waveH(positionLocal.xz), 0));
+  oceanMat.positionNode = curveNode(positionLocal.add(vec3(0, waveH(positionLocal.xz), 0)));   // waves + tiny-planet curvature
   oceanMat.colorNode = oceanColor();
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
@@ -2708,6 +2808,7 @@ function buildTerrain() {
   const mat = new THREE.MeshStandardNodeMaterial({ metalness:0.0 });
   mat.colorNode = attribute('color','vec3');
   mat.roughnessNode = attribute('arough','float');   // wet sand glossy, foliage matte, rock in between
+  mat.positionNode = curveNode(positionLocal);        // tiny-planet curvature — islands bend with the sea
   const mesh = new THREE.Mesh(geo, mat); mesh.position.y = -0.05;
   mesh.castShadow = true; mesh.receiveShadow = true; scene.add(mesh);
 }
@@ -2906,6 +3007,22 @@ function updateFlyCam(dt){
   flyCam.position.copy(p);
   flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
 }
+
+// ---- DEV camera hook: jump into flight mode and aim the camera anywhere (drive from the browser console). ----
+// dev.lookAt(px,py,pz, tx,ty,tz) — stand at p, look at t.   dev.sun(distBack) — frame the sun over the boat.
+// dev.time(18.2) — set time of day (pauses auto-cycle).      dev.atmo(0.8) — set the Atmosphere slider.
+window.dev = {
+  lookAt(px,py,pz, tx,ty,tz){ if(!flyMode) setFly(true);
+    flyState.pos.set(px,py,pz);
+    const dx=tx-px, dy=ty-py, dz=tz-pz, l=Math.hypot(dx,dy,dz)||1;
+    flyState.yaw=Math.atan2(dz,dx); flyState.pitch=clampJS(Math.asin(clampJS(dy/l,-1,1)),-1.4,1.4); flyState.keys={}; },
+  sun(back){ back=back||120; if(!flyMode) setFly(true);             // stand a bit "behind" the boat, low, facing the sun
+    const px=boat3.x - _sun.x*back, pz=boat3.z - _sun.z*back, py=34;
+    flyState.pos.set(px,py,pz); flyState.yaw=Math.atan2(_sun.z,_sun.x);
+    flyState.pitch=clampJS(Math.asin(clampJS(_sun.y,-1,1)),-1.4,1.4); flyState.keys={}; },
+  time(t){ P.autoDay=false; P.timeOfDay=((t%24)+24)%24; if(typeof syncSlider==='function'){ syncSlider('timeOfDay'); syncSlider('autoDay'); } },
+  atmo(a){ P.atmosphere=clampJS(a,0,1); if(typeof syncSlider==='function') syncSlider('atmosphere'); }
+};
 
 // ============================================================================
 // Cinematic tour director — a perspective "director" camera that frames the boat
@@ -3337,6 +3454,50 @@ async function enableOutline(){
   } catch(e){ console.warn('outline setup failed', e); outlineActive=false; outlinePost=null; }
 }
 
+// ---- GOD RAYS (screen-space crepuscular shafts) ----
+// March each pixel toward the sun's screen position, accumulating only the BRIGHT parts of the scene (sky + sun).
+// Islands / boat / clouds are dark in the bright-pass, so they block the march → shafts radiate from the sun and are
+// carved by silhouettes. Tinted by the sun colour, scaled by the Atmosphere slider. Most dramatic at low sun (sun
+// near the horizon sits behind the island silhouettes). 40 radial taps — "max fidelity".
+let godrayPost = null, godrayActive = false, godrayScenePass = null;
+async function enableGodrays(){
+  if (godrayPost){ godrayActive = true; return; }
+  try {
+    godrayScenePass = pass(scene, camera);
+    const col = godrayScenePass.getTextureNode();
+    const N = 52;                                         // more taps → smoother, longer shafts (max fidelity)
+    const step = uSunScreenUV.sub(screenUV).mul(0.92/N);  // march ~92% of the way to the sun
+    const illum = float(0).toVar();
+    const coord = screenUV.toVar();
+    let w = 1.0;
+    for (let i=0;i<N;i++){
+      coord.addAssign(step);
+      const s = col.sample(clamp(coord, vec2(0.0,0.0), vec2(1.0,1.0))).xyz;
+      illum.addAssign(max(dot(s, vec3(0.299,0.587,0.114)).sub(0.40), 0.0).mul(w));   // bright-pass (sky/sun/lit cloud) × decay
+      w *= 0.967;                                         // slower decay → shafts reach further through cloud gaps
+    }
+    illum.assign(illum.mul(4.4/N));                       // exposure
+    const rays = uSunCol.mul(illum).mul(uAtmo).mul(uSunOnScreen);
+    const lit = col.add(rays).toVar();                    // scene + shafts
+    // sunset BLOOM: proper HDR mip-bloom of the bright sun / glitter / foam (+ the rays), scaled by Atmosphere → glow
+    const bmod = await import('three/addons/tsl/display/BloomNode.js');
+    const bloomPass = bmod.bloom(lit, 0.9, 0.6, 0.6);     // strength, radius, threshold
+    const graded = lit.add(bloomPass.mul(uAtmo)).toVar();
+    // ---- GOLDEN-HOUR GRADE: cinematic warm split-tone + gentle contrast + vignette, ramping with sunset (uWarm) × Atmosphere.
+    const gAmt = clamp(uWarm.mul(uAtmo).mul(1.2), 0.0, 1.0);
+    const gl = dot(graded, vec3(0.299,0.587,0.114));
+    const tone = mix(vec3(0.93,0.97,1.08), vec3(1.12,1.0,0.82), smoothstep(0.16,0.82,gl));   // cool shadows → warm-gold highlights
+    graded.assign(mix(graded, graded.mul(tone), gAmt));
+    graded.assign(mix(graded, smoothstep(0.0,1.0,graded), gAmt.mul(0.22)));                  // gentle S-curve contrast
+    const _vd = screenUV.sub(vec2(0.5,0.5));                                                  // cinematic vignette
+    const vig = oneMinus(clamp(dot(_vd,_vd).mul(1.15), 0.0, 1.0));
+    graded.assign(graded.mul(mix(float(1.0), vig, gAmt.mul(0.5))));
+    const pp = new THREE.PostProcessing(renderer);
+    pp.outputNode = graded;
+    godrayPost = pp; godrayActive = true; console.log('atmosphere pass: godrays+bloom+grade enabled');
+  } catch(e){ console.warn('godray setup failed', e); godrayActive=false; godrayPost=null; }
+}
+
 // persist all panel settings between refreshes
 const SETTINGS_KEY = 'pidHelmsman.v1';
 function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
@@ -3385,6 +3546,7 @@ function buildPanel() {
   addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
   addToggle(s, 'Depth contour lines', P, 'contours');
+  addToggle(s, 'Curved horizon (tiny planet)', P, 'curveWorld');
   addToggle(s, 'Clouds', P, 'showClouds');
   addToggle(s, 'Soft clouds (off = cartoon)', P, 'cloudSoft', ()=>setCloudStyle());
   addToggle(s, 'Rain particles + splashes', P, 'showRainParticles');
@@ -3555,6 +3717,7 @@ function buildPanel() {
     () => { P.autoDay = false; autoTg.classList.remove('on'); });
   addSlider(s, 'Day length', P, 'dayLength', 20, 600, 10, v=>v.toFixed(0)+'s');
   addSlider(s, 'Shadow depth', P, 'shadowDepth', 0, 1, 0.05, v=>v.toFixed(2));
+  addSlider(s, 'Atmosphere (god rays / haze / bloom)', P, 'atmosphere', 0, 1, 0.05, v=>v.toFixed(2));
   ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
   addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
 
