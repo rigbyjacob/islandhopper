@@ -317,7 +317,18 @@ const WAVES = (() => {
 })();
 let seaAmp = 1.0;   // storm-reactive global wave-amplitude multiplier (mirrors GPU uSea)
 let seaChop = 1.15; // Gerstner steepness (mirrors GPU uChop) — horizontal pinch toward crests
+let seaEnv  = 0.95; // wave-height envelope strength (mirrors GPU uEnvAmt)
+const ENV_FREQ = 1/430;
 const WAVE_KSUM = WAVES.reduce((s,w)=>s+w.freq*w.amp, 0);   // Σ kᵢAᵢ → total trochoid steepness ≈ KSUM·seaAmp·chop; keep < 1 to avoid loops
+// large-scale amplitude ENVELOPE (wave groups / sets): three slow crossing sine waves modulate wave
+// height across the sea. Smooth sines (not hash noise) so this matches the GPU `waveEnv` closely in f32 —
+// hash-of-large-sin diverges between GPU/CPU and floats the foam. Mean ≈ 1, spread by seaEnv.
+function waveEnvJS(x, z, t){
+  const s = Math.sin(x*0.0041 + z*0.0023 + t*0.05)
+        + 0.7*Math.sin(x*-0.0017 + z*0.0033 - t*0.04)
+        + 0.55*Math.sin(x*0.0026 + z*-0.0039 + t*0.035);
+  return Math.max(0.05, 1 + seaEnv*0.42*s);
+}
 // Gerstner displacement in JS, mirroring the GPU `gerstner` Fn, so props (foam claws, etc.) ride the
 // same peaked surface. Returns the world offset {dx,dy,dz} of the surface point parameterised at (x,z).
 function gerstnerJS(x, z, t){
@@ -325,13 +336,23 @@ function gerstnerJS(x, z, t){
   for (const w of WAVES){ const ph=(x*w.nx + z*w.ny)*w.freq + t*w.speed;
     const c=Math.cos(ph)*w.amp*chop;
     dx += c*w.nx; dy += Math.sin(ph)*w.amp; dz += c*w.ny; }
-  return { dx:dx*seaAmp, dy:dy*seaAmp, dz:dz*seaAmp };
+  const e = seaAmp * waveEnvJS(x,z,t);
+  return { dx:dx*e, dy:dy*e, dz:dz*e };
+}
+// Height of the Gerstner surface at a WORLD (wx,wz) position. Gerstner is parametric — the surface point
+// that ENDS UP at world (wx,wz) came from a different parameter point — so we fixed-point invert the
+// horizontal displacement (a few iterations) to find that parameter, then return its height. This is what
+// lets props sit ON the leaning/​pinched front face instead of floating above where the param would be.
+function seaSurfaceY(wx, wz, t){
+  let px=wx, pz=wz;
+  for (let i=0;i<3;i++){ const g=gerstnerJS(px,pz,t); px=wx-g.dx; pz=wz-g.dz; }
+  return gerstnerJS(px,pz,t).dy;
 }
 
 function waveHeightJS(x, z, t) {
   let h = 0;
   for (const w of WAVES) h += Math.sin((x*w.nx + z*w.ny)*w.freq + t*w.speed) * w.amp;
-  return h * seaAmp;
+  return h * seaAmp * waveEnvJS(x, z, t);   // amplitude envelope → wave groups / along-crest height variation
 }
 
 const K = 220;
@@ -1146,6 +1167,7 @@ async function init() {
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), 0.04);
     const t = clock.elapsedTime;
+    uTime.value = t;   // drive the GPU wave clock from the same elapsed time the JS sampler uses → no finger lag
 
     updateEnvironment(dt);   // sun across the sky, sunrise/sunset palette, shadows, clouds, storm
 
@@ -1240,6 +1262,9 @@ const uDayBright = uniform(1.0);
 const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
 const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reactive); mirrors CPU seaAmp
 const uChop    = uniform(1.15);  // Gerstner steepness: horizontal pinch toward crests (0 = smooth sine swell, ~1.2 = sharp peaked seas)
+const uEnvAmt  = uniform(0.95);  // wave-height envelope strength: 0 = uniform sea, ~1 = strong groups/sets (towering + flat patches)
+const uEnvFreq = uniform(1/430); // envelope spatial frequency (low → groups span several wavelengths)
+const uTime    = uniform(0);     // shared wave clock = clock.elapsedTime, so the GPU surface and the JS sampler (boat, foam fingers) agree in phase (TSL `time` runs on a different clock → fingers lag)
 const uMoonDir = uniform(new THREE.Vector3(0, 1, 0));
 const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
@@ -2577,6 +2602,10 @@ function curveTrees(){
 //  Gated to the Hokusai art style; curvature-aware via curveDropJS.
 // ============================================================================
 let foamClaws = null;
+let curlSign = 1;         // flip the claw/finger curl direction live (dev.curl()) — wave-travel sign is ambiguous on screen
+let fingersOn = true;     // master toggle for the 3D foam fingers (dev.fingers(false) to compare against just the Gerstner sea)
+let frontFace = 1.0;      // how far to push fingers onto the FRONT (leading) face, off the crest top (dev.front(v))
+let fingerLift = 0.5;     // raise fingers above the surface so they EMERGE from the lip instead of burying (dev.rise(v))
 const _clawCrests = [];   // scratch: [x,z,h,baseScale,wi,wj] per detected crest, reused each frame
 const _clObj = new THREE.Object3D();
 const _clMat = new THREE.Matrix4(), _clQ = new THREE.Quaternion(), _clQ2 = new THREE.Quaternion();
@@ -2587,10 +2616,10 @@ function _clObjSet(x,y,z,q,s){ _clObj.position.set(x,y,z); _clObj.quaternion.cop
 function buildFoamClaws(){
   const DARK = 0x14305c, WHITE = 0xf7f2e6;   // same palette as the foam-texture keyline / fill
 
-  // amplitude-weighted mean PROPAGATION (travel) direction. Empirically the swell advances toward
-  // +(nx,ny) here, and claws/breakers must curl WITH the motion, so forward = +(nx,ny).
+  // amplitude-weighted mean wave TRAVEL direction. A crest of sin((x·nx+z·ny)·k + t·speed) moves toward
+  // -(nx,ny) as t grows, so that's the true travel vector. Claws curl along curlSign·prop (flip live with dev.curl()).
   let px=0, pz=0, ampSum=0;
-  for (const w of WAVES){ px += w.nx*w.amp; pz += w.ny*w.amp; ampSum += w.amp; }
+  for (const w of WAVES){ px += -w.nx*w.amp; pz += -w.ny*w.amp; ampSum += w.amp; }
   const pl = Math.hypot(px,pz)||1; const prop = { x:px/pl, z:pz/pl };
 
   // one curled finger: tapered tube along a hooking arc + a droplet bead at the tip
@@ -2634,7 +2663,7 @@ function buildFoamClaws(){
 
 function updateFoamClaws(t){
   if (!foamClaws) return;
-  if (P.style !== 'hokusai'){ if (foamClaws.core.visible){ foamClaws.core.visible=false; foamClaws.shell.visible=false; } return; }
+  if (!fingersOn || P.style !== 'hokusai'){ if (foamClaws.core.visible){ foamClaws.core.visible=false; foamClaws.shell.visible=false; } return; }
   foamClaws.core.visible = true; foamClaws.shell.visible = true;
 
   const { core, shell, prop, ampSum, G, NS } = foamClaws;
@@ -2668,7 +2697,8 @@ function updateFoamClaws(t){
 
   // PASS 2 — FRACTAL clusters of fingers per crest: power-law sizes (many small, few large), 2-octave
   // jittered positions (no grid/row signature), bases sunk into the foam so they connect, varied tilt.
-  _clX.set(prop.x, 0, prop.z).normalize();
+  const fwdx = prop.x*curlSign, fwdz = prop.z*curlSign;        // FORWARD = wave travel (× curlSign). Fingers sit on this
+  _clX.set(fwdx, 0, fwdz).normalize();                         // (leading) side and arch this way — flip both with dev.curl()
   _clZ.crossVectors(_clX, _clUp).normalize();
   _clY.crossVectors(_clZ, _clX).normalize();
   _clMat.makeBasis(_clX, _clY, _clZ);
@@ -2678,19 +2708,24 @@ function updateFoamClaws(t){
     const cxw=crests[c], czw=crests[c+1], score=crests[c+3], wi=crests[c+4], wj=crests[c+5];
     const nf = 1 + (_hash2(wi+13, wj+29)*5 | 0);                          // 1..5 fingers — uneven, sometimes a lone claw
     const clusterSc = (1.6 + 2.6*score) * seaScl;                        // hand size scales with crest strength + sea state
+    // crest's WORLD position (Gerstner-displaced), then push the hand forward in WORLD space onto the fore-lip
+    const gC = gerstnerJS(cxw, czw, t);
+    const cwx = cxw + gC.dx, cwz = czw + gC.dz;
+    const wShift = frontFace * (3.0 + 2.5*seaScl);                       // WORLD-space forward push (predictable; not pinched away)
+    const lwx = cwx + fwdx*wShift, lwz = cwz + fwdz*wShift;
     for (let f=0; f<nf && k<CAP; f++){
       const a=_hash2(wi*3+f*17+1, wj*3+f*7+5), b=_hash2(wi*5+f*11+2, wj*5+f*13+8),
             g3=_hash2(wi+f*23+3, wj+f*19+9), g4=_hash2(wi*7+f*5+4, wj*7+f*3+6);
       const sprC = clusterSc*1.3, sprF = clusterSc*0.45;                 // coarse hand offset + fine wiggle (2 octaves)
-      const fx = cxw + (a-0.5)*sprC + (g3-0.5)*sprF;
-      const fz = czw + (b-0.5)*sprC + (g4-0.5)*sprF;
-      const sc = clusterSc * (0.30 + 0.70*Math.pow(g3,2.4));             // power-law → mostly small, a few big
+      const wx = lwx + (a-0.5)*sprC + (g3-0.5)*sprF;                     // scatter in WORLD space
+      const wz = lwz + (b-0.5)*sprC + (g4-0.5)*sprF;
+      const sc = clusterSc * (0.30 + 0.70*Math.pow(g3,2.4));            // power-law → mostly small, a few big
       if (sc < 0.25) continue;
       _clQ.copy(_qBase);
-      _clQ2.setFromAxisAngle(_clZ, 0.35 + a*0.7); _clQ.multiply(_clQ2);   // varied forward lean (~20°..60°)
-      _clQ2.setFromAxisAngle(_clUp, (b-0.5)*1.7); _clQ.premultiply(_clQ2); // ±49° yaw → irregular, lacy
-      const gd = gerstnerJS(fx, fz, t);                                  // glue to the Gerstner-displaced crest
-      _clObjSet(fx+gd.dx, gd.dy - 0.18*sc - curveDropJS(fx+gd.dx, fz+gd.dz), fz+gd.dz, _clQ, sc);  // sink base into the foam
+      _clQ2.setFromAxisAngle(_clZ, 0.85 + a*0.5); _clQ.multiply(_clQ2);   // STRONG forward arch (~49°..77°) → pitches over the front
+      _clQ2.setFromAxisAngle(_clUp, (b-0.5)*1.3); _clQ.premultiply(_clQ2); // ±37° yaw → irregular but still reads as one breaking edge
+      const surfY = seaSurfaceY(wx, wz, t);                              // true Gerstner surface height at this WORLD point (inverse)
+      _clObjSet(wx, surfY + fingerLift*sc - curveDropJS(wx, wz), wz, _clQ, sc);  // sit on the lip and EMERGE (lift scales with size)
       core.setMatrixAt(k, _clObj.matrix); shell.setMatrixAt(k, _clObj.matrix); k++;
     }
   }
@@ -2826,16 +2861,26 @@ function buildOcean() {
   // hits the texture edge (which caused the white contour ring). Large radius — fades far out in deep water.
   const BCX=MAP.cx, BCZ=MAP.cz, BR0=1150, BR1=1560;
 
+  // wave-height ENVELOPE (groups / sets): three slow, large-scale crossing sine waves modulate wave
+  // amplitude across the sea — towering crests in some patches, near-flat water in others, and height
+  // variation ALONG a single crest. Smooth sines (NOT hash noise) so the value matches bit-for-bit
+  // enough between the GPU (f32) and the JS sampler (f64) — hash-of-large-sin diverges and floats the foam.
+  const waveEnv = Fn(([p]) => {
+    const s = sin(dot(p, vec2(0.0041, 0.0023)).add(uTime.mul(0.05)))
+          .add(sin(dot(p, vec2(-0.0017, 0.0033)).sub(uTime.mul(0.04))).mul(0.7))
+          .add(sin(dot(p, vec2(0.0026, -0.0039)).add(uTime.mul(0.035))).mul(0.55));
+    return max(float(0.05), s.mul(uEnvAmt).mul(0.42).add(1.0)); });
+
   const waveH = Fn(([p]) => { const h = float(0).toVar();
-    for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed))).mul(w.amp));
-    return h.mul(uSea); });   // storm-reactive global amplitude (vertical height only — used for foam/normal sampling)
+    for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(uTime.mul(w.speed))).mul(w.amp));
+    return h.mul(uSea).mul(waveEnv(p)); });   // global amplitude × group envelope (vertical height for foam/normal sampling)
   // Gerstner/trochoidal displacement: each wave also pulls vertices horizontally toward its crest, so
   // crests sharpen into leaning peaks instead of smooth sine humps. Returns the full (x,y,z) offset.
   const gerstner = Fn(([p]) => { const d = vec3(0,0,0).toVar();
-    for (const w of WAVES){ const ph = dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed));
+    for (const w of WAVES){ const ph = dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(uTime.mul(w.speed));
       const c = cos(ph).mul(w.amp).mul(uChop);
       d.addAssign(vec3(c.mul(w.nx), sin(ph).mul(w.amp), c.mul(w.ny))); }
-    return d.mul(uSea); });   // horizontal pinch + vertical, scaled by sea state
+    return d.mul(uSea).mul(waveEnv(p)); });   // horizontal pinch + vertical, scaled by sea state × group envelope
   const waveN = Fn(([p]) => { const e = 0.9;
     const hL = waveH(p.add(vec2(-e,0))), hR = waveH(p.add(vec2(e,0)));
     const hD = waveH(p.add(vec2(0,-e))), hU = waveH(p.add(vec2(0,e)));
@@ -3299,6 +3344,11 @@ window.dev = {
   storm(on, inten){ P.stormOn = on!==false; if(inten!==undefined) P.stormIntensity=clampJS(inten,0,1);
     if(typeof syncSlider==='function'){ syncSlider('stormOn'); syncSlider('stormIntensity'); } },
   chop(v){ seaChop = clampJS(v,0,2); uChop.value = seaChop; return 'chop='+seaChop; },
+  curl(){ curlSign = -curlSign; return 'curlSign='+curlSign; },
+  front(v){ frontFace = (v===undefined)?1.0:v; return 'frontFace='+frontFace; },
+  rise(v){ fingerLift = (v===undefined)?0.5:v; return 'fingerLift='+fingerLift; },
+  fingers(on){ fingersOn = on!==false; return 'fingers '+(fingersOn?'on':'off'); },
+  env(a){ seaEnv = clampJS(a,0,1.4); uEnvAmt.value = seaEnv; return 'env='+seaEnv; },
   breakers(on){ breakersOn = on!==false; return 'breakers '+(breakersOn?'on':'off'); },
   claws(){ if(!foamClaws) return 'no foamClaws'; const m=new THREE.Matrix4(), p=new THREE.Vector3(), q=new THREE.Quaternion(), s=new THREE.Vector3();
     let active=0, maxS=0; for(let i=0;i<foamClaws.CAP;i++){ foamClaws.core.getMatrixAt(i,m); m.decompose(p,q,s); if(s.x>0.01){active++; if(s.x>maxS)maxS=s.x;} }
