@@ -180,6 +180,7 @@
 <script src="data/island_polys.js"></script>
 <script src="data/elev_b64.js"></script>
 <script src="data/bathy_b64.js"></script>
+<script src="data/aegean.js"></script>   <!-- Aegean (Cyclades) region: window.AEGEAN, built by build/gen_region.py -->
 <script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
 
 <script type="importmap">
@@ -385,7 +386,18 @@ const REGIONS = {
     islandPolys:window.ISLAND_POLYS, elevB64:window.ELEV_B64, bathyB64:window.BATHY_B64,
   },
 };
-let REGION = REGIONS.caribbean;
+// regions whose data blob (window.AEGEAN, …) loaded as a classic script: register them.
+// Each blob carries its own K/lon0/lat0/bathyMeta/islandPolys/bathyB64 (no elevB64 →
+// land elevation is sampled straight from the GEBCO grid in buildTerrainField).
+if (window.AEGEAN) REGIONS.aegean = window.AEGEAN;
+// Map bounds default to the island bounds + margin when a region doesn't specify them.
+for (const r of Object.values(REGIONS)){
+  if (!r.map && r.islandPolys){ let a=1e9,b=-1e9,c=1e9,d=-1e9;
+    for (const p of r.islandPolys) for (const v of p.r){ a=Math.min(a,v[0]);b=Math.max(b,v[0]);c=Math.min(c,v[1]);d=Math.max(d,v[1]); }
+    const m=120; r.map={ minX:a-m, maxX:b+m, minZ:c-m, maxZ:d+m }; }
+}
+const REGION_ID = new URLSearchParams(location.search).get('region') || 'caribbean';
+let REGION = REGIONS[REGION_ID] || REGIONS.caribbean;
 const K = REGION.K;
 const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K, z: -(lat - REGION.lat0) * REGION.K });
 const ISLAND_POLYS = REGION.islandPolys;
@@ -445,10 +457,10 @@ function buildTerrainField(){
     return D; };
   const water=new Uint8Array(GW*GH); for(let i=0;i<land.length;i++) water[i]=land[i]?0:1;
   const dIn=dt(water), dOut=dt(land), Hh=new Float32Array(GW*GH), Hsea=new Float32Array(GW*GH);
-  const ELEV=decodeElev(ELEV_B64); let li=0;
+  const ELEV=ELEV_B64?decodeElev(ELEV_B64):null; let li=0;
   for(let r=0;r<GH;r++)for(let c=0;c<GW;c++){ const i=I(c,r), wx=GX0+(c+0.5)*CELL, wz=GZ0+(r+0.5)*CELL;
     if(land[i]){
-      const base = ELEV[li++] / 10;                         // real SRTM/GEBCO elevation (metres→world units), baked
+      const base = ELEV ? (ELEV[li++] / 10) : Math.max(0, gebcoMetres(wx,wz)) / 10;   // packed SRTM list (Caribbean) OR sample the GEBCO land height directly (regions without elevB64)
       // dramatic VOLCANIC relief: steepen where it's already tall (cones, not domes), and lay ridged
       // crests on real high ground only (clamp keeps beaches/lowland smooth so coastlines stay clean).
       const tall = clampJS(base/12, 0, 1);
@@ -981,9 +993,14 @@ function stepDynamics(s, dt, t) {
 // ============================================================================
 // Guidance — A* path + pure-pursuit, producing desired heading + speed
 // ============================================================================
-const tourNames = ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
+const tourNames = REGION.tour || ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
                    'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
 let route = tourNames.map(n => BYNAME[n]).filter(Boolean);
+if (route.length < 2) {                                  // unknown region → auto-tour the biggest islands, ordered into a loop
+  route = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0, 11);
+  const cx=route.reduce((s,i)=>s+i.x,0)/route.length, cz=route.reduce((s,i)=>s+i.z,0)/route.length;
+  route.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));   // angular order → smooth circuit
+}
 let wpIdx = 0;
 
 // ---- saved routes (localStorage) + apply a named island sequence as the live tour ----
