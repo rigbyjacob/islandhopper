@@ -368,19 +368,37 @@ function waveHeightJS(x, z, t) {
   return h * seaAmp * waveEnvJS(x, z, t);   // amplitude envelope → wave groups / along-crest height variation
 }
 
-const K = 220;
-const proj = (lon, lat) => ({ x: (lon + 65.8) * K, z: -(lat - 17.0) * K });
-const ISLAND_POLYS = window.ISLAND_POLYS;
-const ELEV_B64 = window.ELEV_B64;
-const BATHY_B64 = window.BATHY_B64;
-const BATHY_META={w:960,h:600,x0:-2244,x1:3036,zN:-1760,zS:1540};
+// ============================================================================
+// REGION registry — each region is a self-contained map: equirect projection
+// (x=(lon-lon0)*K, z=-(lat-lat0)*K), real GEBCO bathymetry grids, coastline
+// polygons, and world bounds. Phase 0 ships Caribbean only; new regions (Aegean,
+// Hawaii, …) slot in here, each with its own data/*.js blobs. Switching regions =
+// swap REGION + rebuild the world. Values here are byte-identical to the old
+// hardcoded Caribbean constants, so behaviour is unchanged.
+// ============================================================================
+const REGIONS = {
+  caribbean: {
+    id:'caribbean', name:'Caribbean',
+    K:220, lon0:-65.8, lat0:17.0,
+    bathyMeta:{ w:960, h:600, x0:-2244, x1:3036, zN:-1760, zS:1540 },
+    map:{ minX:-150, maxX:950, minZ:-400, maxZ:200 },
+    islandPolys:window.ISLAND_POLYS, elevB64:window.ELEV_B64, bathyB64:window.BATHY_B64,
+  },
+};
+let REGION = REGIONS.caribbean;
+const K = REGION.K;
+const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K, z: -(lat - REGION.lat0) * REGION.K });
+const ISLAND_POLYS = REGION.islandPolys;
+const ELEV_B64 = REGION.elevB64;
+const BATHY_B64 = REGION.bathyB64;
+const BATHY_META = REGION.bathyMeta;
 const ISLANDS = (() => { const best={};
   for (const p of ISLAND_POLYS){ if(p.n==='islet') continue; if(!best[p.n] || p.r.length>best[p.n].r.length) best[p.n]=p; }
   return Object.values(best).map(p => { let rr=0; for(const v of p.r) rr=Math.max(rr, Math.hypot(v[0]-p.c[0], v[1]-p.c[1]));
     return { name:p.n, x:p.c[0], z:p.c[1], r:rr, h:p.h, ring:p.r }; }); })();
 const BYNAME = Object.fromEntries(ISLANDS.map(i => [i.name, i]));
 
-const MAP = { minX: -150, maxX: 950, minZ: -400, maxZ: 200 };
+const MAP = REGION.map;
 MAP.cx = (MAP.minX + MAP.maxX) / 2; MAP.cz = (MAP.minZ + MAP.maxZ) / 2;
 
 function hash(ix, iz) { let n = ix*374761393 + iz*668265263; n = (n ^ (n>>13))*1274126177;
