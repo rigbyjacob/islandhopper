@@ -636,7 +636,31 @@ function relaxPath(input, closed, iters){
       if (!BLOCKED[gIdx(wc.c,wc.r)]){ p[i].x=nx; p[i].z=nz; }       // never relax onto land
     }
   }
-  return p;
+  return uncrossPath(p);          // smoothing only keeps POINTS off blocked cells — repair any SEGMENT that still chords across one
+}
+// After smoothing, a straight segment between two free points can still cut across a blocked cell
+// (classic on a sharp concave turn — e.g. the sub rounding a shallow bank). Walk the path and, for any
+// segment whose line-of-sight is blocked, splice in a detour point nudged up the clearance gradient
+// toward open water until both halves are clear. Uses whichever grid (ship/sub) is currently swapped in.
+function uncrossPath(pts){
+  if (!BLOCKED || pts.length<2) return pts;
+  const e=GRID.dx*1.5;
+  for (let pass=0; pass<6; pass++){
+    let changed=false; const out=[pts[0]];
+    for (let i=0;i<pts.length-1;i++){ const a=pts[i], b=pts[i+1];
+      if (!clearLOSseg(a,b)){
+        let mx=(a.x+b.x)*0.5, mz=(a.z+b.z)*0.5;
+        for (let s=0;s<12;s++){ const wc=worldToCell(mx,mz);
+          if (!BLOCKED[gIdx(wc.c,wc.r)] && clearLOSseg(a,{x:mx,z:mz}) && clearLOSseg({x:mx,z:mz},b)) break;
+          const gx=dlandAt(mx+e,mz)-dlandAt(mx-e,mz), gz=dlandAt(mx,mz+e)-dlandAt(mx,mz-e);   // ascend the distance field = away from blocked
+          const m=Math.hypot(gx,gz)||1; mx+=(gx/m)*GRID.dx; mz+=(gz/m)*GRID.dx; }
+        out.push({x:mx,z:mz}); changed=true;
+      }
+      out.push(b);
+    }
+    pts=out; if(!changed) break;
+  }
+  return pts;
 }
 function clearLOSseg(a,b){ const steps=Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/(GRID.dx*0.8));
   for(let i=0;i<=steps;i++){ const tt=i/steps, x=a.x+(b.x-a.x)*tt, z=a.z+(b.z-a.z)*tt;
@@ -676,8 +700,14 @@ function planRaw(sx, sz, gx, gz) {
   if (endCell === sI) return { pts:[{x:sx,z:sz}], found:false };
   const cells=[]; let cur=endCell; while(cur!==-1){ const r=Math.floor(cur/GRID.cols),c=cur-r*GRID.cols; cells.push({c,r}); cur=_came[cur]; }
   cells.reverse();
-  let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz}; if(found) pts[pts.length-1]={x:gx,z:gz};
-  return { pts, found };
+  let pts=cells.map(({c,r})=>cellCenter(c,r)); pts[0]={x:sx,z:sz};
+  // Only snap the final point onto the EXACT goal when that goal cell is itself open.
+  // If the goal is a blocked cell (e.g. the sub's island-centre target, which sits inside
+  // the off-limits seabed), keep the endpoint at the nearest reachable free cell — otherwise
+  // we'd draw/fly the last leg straight THROUGH the blocked terrain to an unreachable point.
+  const goalOpen = found && !BLOCKED[gIdx(gC.c,gC.r)];
+  if(goalOpen) pts[pts.length-1]={x:gx,z:gz};
+  return { pts, found, goalOpen };
 }
 function planPath(sx, sz, gx, gz) {
   const r = planRaw(sx,sz,gx,gz);
@@ -792,7 +822,7 @@ function updateSubNavDebug(){
   const sub = FLEET.find(v=>v.id==='sub');
   if (sub && sub.path && sub.path.length>1 && subNavLine){
     const a=subNavLine.geometry.attributes.position.array, n=Math.min(sub.path.length,2000), y=(subGridDepth||-34)+1.6;
-    for(let i=0;i<n;i++){ a[i*3]=sub.path[i].x; a[i*3+1]=y; a[i*3+2]=sub.path[i].z; }
+    for(let i=0;i<n;i++){ a[i*3]=sub.path[i].x; a[i*3+1]=y - curveDropJS(sub.path[i].x, sub.path[i].z); a[i*3+2]=sub.path[i].z; }   // curve-drop onto the tiny-planet world so it doesn't clip the curved seabed
     subNavLine.geometry.setDrawRange(0,n); subNavLine.geometry.attributes.position.needsUpdate=true; subNavLine.visible=true;
   } else if (subNavLine) subNavLine.visible=false;
 }
@@ -1477,8 +1507,11 @@ function updateVehPath(v){
 let subBlocked=null, subDLAND=null, subGridDepth=null;
 function buildSubBlocked(depth){
   const N=GRID.cols*GRID.rows, raw=new Uint8Array(N), thr=depth-6;   // keep ~6u of water below the hull (covers bob + margin)
+  const rr=(GRID.dx||GRID.size||10)*0.62;                            // sample the cell CENTRE + a ring, block on the HIGHEST point
   for(let r=0;r<GRID.rows;r++)for(let c=0;c<GRID.cols;c++){ const p=cellCenter(c,r);
-    raw[gIdx(c,r)] = seabedHeight(p.x,p.z) > thr ? 1 : 0; }
+    let mx=seabedHeight(p.x,p.z);                                    // (so a thin ridge between cell centres still blocks the cell —
+    for(let a=0;a<6;a++){ const th=a*Math.PI/3, s=seabedHeight(p.x+Math.cos(th)*rr, p.z+Math.sin(th)*rr); if(s>mx) mx=s; }   // the sub won't thread through it)
+    raw[gIdx(c,r)] = mx > thr ? 1 : 0; }
   const blk=raw.slice(), dist=new Int16Array(N).fill(9999), q=[], nb=[]; let head=0;   // inflate 2 rings (~7u lateral clearance from slopes)
   for(let i=0;i<N;i++) if(raw[i]){dist[i]=0;q.push(i);}
   while(head<q.length){ const ci=q[head++]; if(dist[ci]>=2)continue; const r=Math.floor(ci/GRID.cols),c=ci-r*GRID.cols;
@@ -1496,14 +1529,32 @@ function ensureSubGrid(depth){
   if(subBlocked && subGridDepth!==null && Math.abs(depth-subGridDepth)<8) return;
   subBlocked=buildSubBlocked(depth); subDLAND=buildSubDist(subBlocked); subGridDepth=depth;
 }
+function subDistAt(x,z){ const wc=worldToCell(x,z); return subDLAND ? subDLAND[gIdx(wc.c,wc.r)] : 99; }   // cells-from-blocked on the sub grid
+function subBlockedAt(x,z){ if(!subBlocked) return false; const wc=worldToCell(x,z); return !!subBlocked[gIdx(wc.c,wc.r)]; }
+// Hard collision guard: the sub is turn-rate limited, so on a corner tighter than its turn radius it can
+// overshoot into the (inflated, ~7u-margin) off-limits seabed. If the proposed step lands in a blocked
+// cell, remove the velocity component pointing INTO the wall (slide along the boundary) rather than passing
+// through it. Normal comes from the distance-field gradient (ascending = away from terrain).
+function subCollide(ox, oz, nx, nz){
+  if (!subBlocked || !subBlockedAt(nx,nz)) return { x:nx, z:nz, hit:false };
+  const e=(GRID.dx||10)*1.2;
+  let Nx=subDistAt(ox+e,oz)-subDistAt(ox-e,oz), Nz=subDistAt(ox,oz+e)-subDistAt(ox,oz-e);
+  const m=Math.hypot(Nx,Nz)||1; Nx/=m; Nz/=m;
+  let vx=nx-ox, vz=nz-oz; const into=vx*Nx+vz*Nz;          // <0 ⇒ moving toward the wall
+  vx-=Math.min(into,0)*Nx; vz-=Math.min(into,0)*Nz;        // cancel only the into-wall part → tangential slide
+  let sx=ox+vx, sz=oz+vz;
+  if (subBlockedAt(sx,sz)){ const k=(GRID.dx||10)*0.35; sx=ox+Nx*k; sz=oz+Nz*k; }   // still blocked → nudge back out along the normal
+  return { x:sx, z:sz, hit:true };
+}
 function planSubPath(v, tx, tz){   // borrow the A* solver with the sub's grid swapped in, then restore
   const sB=BLOCKED, sD=DLAND, sN=navDebug; BLOCKED=subBlocked; DLAND=subDLAND;
-  let pts;
+  let pts, reachable=true;
   try { const r=planRaw(v.pos.x, v.pos.z, tx, tz);
+        reachable=(r.goalOpen!==false);                  // false ⇒ destination sits inside off-limits seabed (unreachable)
         pts=(r.pts && r.pts.length>1) ? relaxPath(simplifyPath(r.pts), false, 70) : [{x:v.pos.x,z:v.pos.z},{x:tx,z:tz}]; }
   catch(e){ console.warn('sub path plan failed', e); pts=[{x:v.pos.x,z:v.pos.z},{x:tx,z:tz}]; }
   finally { BLOCKED=sB; DLAND=sD; navDebug=sN; }
-  v.path=pts; v.pathIdx=0;
+  v.path=pts; v.pathIdx=0; v._goalReachable=reachable;
 }
 const _MKEYS=['w','a','s','d','q','e','c',' ','arrowup','arrowdown','arrowleft','arrowright'];
 function _piloting(){ for (const k of _MKEYS) if (manualKeys[k]) return true; return false; }
@@ -1535,6 +1586,13 @@ function _agentStep(v, dt){
       const path=v.path||[];
       while (v.pathIdx<path.length-1 && Math.hypot(path[v.pathIdx].x-v.pos.x, path[v.pathIdx].z-v.pos.z) < 22) v.pathIdx++;
       const ap=path[Math.min(v.pathIdx, path.length-1)]; if (ap){ aimx=ap.x; aimz=ap.z; }
+      // If the island centre is unreachable (inside the off-limits seabed), the path stops at the
+      // nearest open cell — so arrive when we reach the END of that path, not within arriveR of the
+      // unreachable centre (otherwise the sub stalls offshore forever).
+      if (v._goalReachable===false){ const end=path[path.length-1];
+        if (end && v.pathIdx>=path.length-1 && Math.hypot(end.x-v.pos.x, end.z-v.pos.z) < Math.max(v.arriveR,30)){
+          v.wpIdx=(v.wpIdx+1)%v.route.length; v.path=null; }
+      }
     }
     if (distIsl < v.arriveR){ v.wpIdx=(v.wpIdx+1)%v.route.length; if (v.id==='sub') v.path=null; }
     const dx=aimx-v.pos.x, dz=aimz-v.pos.z;
@@ -1542,12 +1600,18 @@ function _agentStep(v, dt){
     const rate=v.hpid.step(yErr, v.yaw, dt, 2.2, 0.0, 0.5, -v.turnRate, v.turnRate, true);
     v.yaw=wrap(v.yaw+rate*dt);
     v.roll += ((rate*(v.bank?2.4:0)) - v.roll)*Math.min(1,dt*4);   // bank INTO the turn (real-plane direction)
-    const sErr=v.cruiseSpeed-v.speed;
+    let cruiseTgt=v.cruiseSpeed;
+    if (v.id==='sub') cruiseTgt *= (1 - 0.7*clampJS(Math.abs(yErr)/0.9, 0, 1));   // ease off the throttle in sharp turns → turn radius (speed/turnRate) tightens enough to hug the corner
+    const sErr=cruiseTgt-v.speed;
     const acc=v.spid.step(sErr, v.speed, dt, v.accelK, 0, 0, -v.cruiseSpeed*5, v.cruiseSpeed*5, false);
     v.speed=Math.max(0, v.speed+acc*dt);
     if (v.id==='ufo' && distIsl < v.arriveR*1.8) v.speed *= Math.pow(0.015, dt);   // saucery dart-and-hover stop
   }
-  v.pos.x += Math.cos(v.yaw)*v.speed*dt; v.pos.z += Math.sin(v.yaw)*v.speed*dt;
+  { const nx=v.pos.x + Math.cos(v.yaw)*v.speed*dt, nz=v.pos.z + Math.sin(v.yaw)*v.speed*dt;
+    if (v.id==='sub' && !v.manual && subBlocked){          // can't pass through the off-limits seabed even if the turn was too wide
+      const c=subCollide(v.pos.x, v.pos.z, nx, nz); v.pos.x=c.x; v.pos.z=c.z;
+      if (c.hit) v.speed *= 0.6;                            // scrub speed on contact so it doesn't grind along the wall
+    } else { v.pos.x=nx; v.pos.z=nz; } }
   let targY;
   if (v.manual) targY=v._manAlt;
   else if (v.id==='ufo') targY=v.cruiseY+Math.sin(tt*1.3)*6;
@@ -3507,7 +3571,7 @@ function updateFlyCam(dt){
   if(rt){  p.x+=rx*sp; p.z+=rz*sp; }
   if(K['q']||K[' ']) p.y+=sp;
   if(K['e']||K['c']) p.y-=sp;
-  p.y=Math.max(p.y, 6);                                              // stay above the water
+  p.y=Math.max(p.y, seabedHeight(p.x,p.z)+2.5);                      // can dive UNDER the water now, but not through the seabed
   flyCam.position.copy(p);
   flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
 }
