@@ -391,6 +391,10 @@ const REGIONS = {
 // land elevation is sampled straight from the GEBCO grid in buildTerrainField).
 if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
   relief: { escale:22, steep:0.2, ridge:0.5, lift:2.2 },   // arid rolling Cycladic hills, not volcanic spires
+  palette: { land: {                                       // arid Cyclades: dry golden scrub + pale limestone, almost no lush green
+    seabed:0x1d6c84, wetsand:0xc2a266, sand:0xeaddb4,
+    grass:0xb6a85f, forest:0x8f8a4e, rock:0xc3b6a0, cliff:0x9c917b,
+  } },
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
@@ -3686,9 +3690,10 @@ function buildTerrain() {
   // PASS 1 — real GEBCO seabed/land height (must finish before slope can be read from neighbours)
   for (let i=0;i<pos.count;i++){ const x=pos.getX(i), z=pos.getZ(i); const y=seabedHeight(x,z); pos.setY(i,y); hgt[i]=y; }
   // PASS 2 — colour by HEIGHT *and* SLOPE: steep faces expose rock→cliff at any elevation, wet→dry beach band
-  const seabed=new THREE.Color(0x14506b), wetsand=new THREE.Color(0xa98c52), sand=new THREE.Color(0xe6d6a8),
-        grass=new THREE.Color(0x4f8a3c), forest=new THREE.Color(0x2f6630), rock=new THREE.Color(0x7d756a),
-        cliff=new THREE.Color(0x564f47), c=new THREE.Color();
+  const LP = (REGION.palette && REGION.palette.land) || {};       // per-region land ramp (Caribbean defaults below)
+  const seabed=new THREE.Color(LP.seabed??0x14506b), wetsand=new THREE.Color(LP.wetsand??0xa98c52), sand=new THREE.Color(LP.sand??0xe6d6a8),
+        grass=new THREE.Color(LP.grass??0x4f8a3c), forest=new THREE.Color(LP.forest??0x2f6630), rock=new THREE.Color(LP.rock??0x7d756a),
+        cliff=new THREE.Color(LP.cliff??0x564f47), c=new THREE.Color();
   for (let i=0;i<pos.count;i++){
     const x=pos.getX(i), z=pos.getZ(i), y=hgt[i], col=i%nx, row=(i/nx)|0;
     const hL=hgt[col>0?i-1:i], hR=hgt[col<nx-1?i+1:i], hD=hgt[row>0?i-nx:i], hU=hgt[row<ny-1?i+nx:i];
