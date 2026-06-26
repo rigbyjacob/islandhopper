@@ -42,9 +42,33 @@ def read_asc(path):
         Z = np.loadtxt(fh)
     return hdr, Z  # Z[row,col], row0 = NORTH
 
+def read_nc(path, N, S, W, E):
+    """Slice a bbox straight out of a global GEBCO netCDF (e.g. GEBCO_2026.nc).
+    netCDF4 index-slicing reads only the window's chunks, NOT the whole 7 GB file."""
+    from netCDF4 import Dataset
+    ds = Dataset(path)
+    lat = ds.variables['lat'][:]; lon = ds.variables['lon'][:]
+    cs = float(abs(lat[1] - lat[0]))
+    li = np.where((lat >= S) & (lat <= N))[0]
+    ci = np.where((lon >= W) & (lon <= E))[0]
+    if not len(li) or not len(ci):
+        raise SystemExit('bbox does not intersect the grid')
+    la0, la1 = int(li[0]), int(li[-1]) + 1
+    co0, co1 = int(ci[0]), int(ci[-1]) + 1
+    Z = np.ma.filled(ds.variables['elevation'][la0:la1, co0:co1], -9999).astype('float64')
+    Z = Z[::-1]                                   # GEBCO lat ascends S→N; flip so row0 = NORTH
+    nrows, ncols = Z.shape
+    hdr = {'ncols': ncols, 'nrows': nrows,
+           'xllcorner': float(lon[co0]) - cs/2.0, 'yllcorner': float(lat[la0]) - cs/2.0,
+           'cellsize': cs, 'NODATA_value': -32767}
+    ds.close()
+    return hdr, Z
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--asc', required=True)
+    ap.add_argument('--asc', help='an Esri-ASCII .asc tile')
+    ap.add_argument('--nc', help='a (global) GEBCO netCDF to slice from, e.g. GEBCO/GEBCO_2026/GEBCO_2026.nc')
+    ap.add_argument('--bbox', nargs=4, type=float, metavar=('N','S','W','E'), help='lat/lon window when using --nc')
     ap.add_argument('--id', required=True)
     ap.add_argument('--name', required=True)
     ap.add_argument('--K', type=float, required=True)
@@ -55,7 +79,13 @@ def main():
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
 
-    hdr, Z = read_asc(a.asc)
+    if a.nc:
+        if not a.bbox: raise SystemExit('--nc requires --bbox N S W E')
+        hdr, Z = read_nc(a.nc, *a.bbox)
+    elif a.asc:
+        hdr, Z = read_asc(a.asc)
+    else:
+        raise SystemExit('provide --asc <file> OR --nc <global.nc> --bbox N S W E')
     nrows, ncols = int(hdr['nrows']), int(hdr['ncols'])
     cs, x0c, y0c = hdr['cellsize'], hdr['xllcorner'], hdr['yllcorner']
     K, lon0, lat0 = a.K, a.lon0, a.lat0
