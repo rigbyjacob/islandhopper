@@ -427,7 +427,8 @@ if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
 });
 // ---- Japan · Sagami Bay (Izu volcanic islands — the Great Wave coast) ----
 if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
-  relief: { escale:19, steep:0.26, ridge:0.45, lift:2.8 },   // broad volcanic cones (Izu Ōshima's Mt Mihara), not jagged spires
+  relief: { escale:20, steep:0.17, ridge:0.28, lift:2.9 },   // broad, gentle volcanic cones — no jagged ridges
+  seaTint: [1.08, 1.0, 0.86],                                // warm the cool Hokusai sea a touch
   palette: {
     land: { seabed:0x14506b, wetsand:0x7c857c, sand:0xc2bfa8,
             grass:0x52844a, forest:0x356037, rock:0x655f58, cliff:0x47423c },   // forest greens + visible (not black) volcanic basalt
@@ -442,6 +443,7 @@ if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
 // ---- Thailand · Andaman (Phang Nga / Phuket — limestone karst & warm seas) ----
 if (window.THAILAND) REGIONS.thailand = Object.assign({}, window.THAILAND, {
   relief: { escale:13, steep:0.5, ridge:1.6, lift:2.0 },   // steep limestone karst towers
+  seaTint: [0.82, 1.14, 1.12],                             // push the warm shelf sea toward bright turquoise
   palette: {
     land: { seabed:0x1f7fa0, wetsand:0xcaa86a, sand:0xeadfba,
             grass:0x3f8a3a, forest:0x256127, rock:0xb8b2a4, cliff:0x8f897c },   // lush jungle green + pale-grey limestone cliffs
@@ -1301,6 +1303,7 @@ async function init() {
   loadSettings();   // restore saved panel settings before building the scene
   scene = new THREE.Scene();
   buildTerrainField();
+  uSeaTint.value.fromArray(REGION.seaTint || [1,1,1]);   // per-region water tint
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers(); buildTerrain(); buildDipStick(); buildVolcano();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
@@ -1453,6 +1456,7 @@ const uAtmo = uniform(0.6);        // ATMOSPHERE master (0..1 slider): god rays,
 const uSunScreenUV = uniform(new THREE.Vector2(0.5, 0.5));   // sun position in screen space (for god rays), updated each frame
 const uSunOnScreen = uniform(0.0); // 1 when the sun is in front of the camera & roughly on screen, else 0
 const _curveInsts = [];          // base transforms of instanced decorations (palms/shrubs) so they can re-curve each frame
+const uSeaTint = uniform(new THREE.Vector3(1,1,1));   // per-region water tint (warm Japan, turquoise Thailand, …)
 const uHokusai = uniform(0.0);   // Hokusai ukiyo-e water recolor + foam boost (1 when that style is active)
 const uVangogh = uniform(0.0);   // Van Gogh Starry-Night swirling impasto brushstrokes on the water (1 when active)
 // amplitude-weighted wave TRAVEL direction (xz) — lets the shader tell the BACK (rising) face from the
@@ -3383,6 +3387,7 @@ function buildOcean() {
     const deep = vec3(0.012,0.09,0.22), midC = vec3(0.03,0.30,0.48), shallow = vec3(0.16,0.62,0.66);
     const col = mix(deep, midC, smoothstep(0.0,0.5,sp)).toVar();
     col.assign(mix(col, shallow, smoothstep(0.55,1.0,sp)));
+    col.assign(col.mul(uSeaTint));                          // per-region water tint
 
     // aperiodic patchiness — organic light/dark FBM at two scales (against-the-grain, never tiles)
     const drift = vec2(time.mul(0.5), time.mul(-0.35));
