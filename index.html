@@ -316,6 +316,17 @@ const WAVES = (() => {
   return out;
 })();
 let seaAmp = 1.0;   // storm-reactive global wave-amplitude multiplier (mirrors GPU uSea)
+let seaChop = 1.15; // Gerstner steepness (mirrors GPU uChop) — horizontal pinch toward crests
+const WAVE_KSUM = WAVES.reduce((s,w)=>s+w.freq*w.amp, 0);   // Σ kᵢAᵢ → total trochoid steepness ≈ KSUM·seaAmp·chop; keep < 1 to avoid loops
+// Gerstner displacement in JS, mirroring the GPU `gerstner` Fn, so props (foam claws, etc.) ride the
+// same peaked surface. Returns the world offset {dx,dy,dz} of the surface point parameterised at (x,z).
+function gerstnerJS(x, z, t){
+  let dx=0, dy=0, dz=0; const chop = uChop.value;   // use the clamped value the GPU uses, so claws stay glued
+  for (const w of WAVES){ const ph=(x*w.nx + z*w.ny)*w.freq + t*w.speed;
+    const c=Math.cos(ph)*w.amp*chop;
+    dx += c*w.nx; dy += Math.sin(ph)*w.amp; dz += c*w.ny; }
+  return { dx:dx*seaAmp, dy:dy*seaAmp, dz:dz*seaAmp };
+}
 
 function waveHeightJS(x, z, t) {
   let h = 0;
@@ -1103,7 +1114,7 @@ async function init() {
   loadSettings();   // restore saved panel settings before building the scene
   scene = new THREE.Scene();
   buildTerrainField();
-  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildTerrain(); buildDipStick();
+  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers(); buildTerrain(); buildDipStick();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
   buildShrubs(); buildTownMotifs(); buildVehicles();
@@ -1168,6 +1179,7 @@ async function init() {
     updateFireworks(dt);
     updateVehicles(dt);   // submarine / plane / UFO agents + their chase cameras
     updateFoamClaws(t);   // Hokusai curl-claws ride the near-field crest tops (gated to that art style)
+    updateBreakers(t);    // a few authored hero breakers (true overhang) on the biggest crests
     updateSubNavDebug();  // sub's depth grid + plan in the nav-debug overlay (after the sub has planned this frame)
     controls.update();
     if (fpsMode) updateFpsCam(t);
@@ -1227,6 +1239,7 @@ const uGradeTint = uniform(new THREE.Vector3(1, 1, 1));// art-style water tint
 const uDayBright = uniform(1.0);
 const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
 const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reactive); mirrors CPU seaAmp
+const uChop    = uniform(1.15);  // Gerstner steepness: horizontal pinch toward crests (0 = smooth sine swell, ~1.2 = sharp peaked seas)
 const uMoonDir = uniform(new THREE.Vector3(0, 1, 0));
 const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
@@ -1637,6 +1650,8 @@ function updateEnvironment(dt) {
   // and the CPU sampler that floats the boat (seaAmp).
   seaAmp = P.waveHeight * (1 + 1.0*localStorm);     // rough seas only near a storm cell
   uSea.value = seaAmp;
+  // clamp Gerstner steepness so tall seas don't loop/self-intersect: total steepness = KSUM·seaAmp·chop ≤ 0.92
+  uChop.value = Math.min(seaChop, 0.92 / Math.max(WAVE_KSUM * seaAmp, 1e-3));
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   uContour.value += ((P.contours?1:0) - uContour.value) * Math.min(1, dt*4);   // smooth contour-line fade (independent toggle)
   if (dipStick){ dipStick.visible = uBathy.value > 0.04;               // depth sounding shows with bathymetry
@@ -2572,14 +2587,15 @@ function _clObjSet(x,y,z,q,s){ _clObj.position.set(x,y,z); _clObj.quaternion.cop
 function buildFoamClaws(){
   const DARK = 0x14305c, WHITE = 0xf7f2e6;   // same palette as the foam-texture keyline / fill
 
-  // amplitude-weighted mean PROPAGATION direction (waves travel toward -(nx,ny))
+  // amplitude-weighted mean PROPAGATION (travel) direction. Empirically the swell advances toward
+  // +(nx,ny) here, and claws/breakers must curl WITH the motion, so forward = +(nx,ny).
   let px=0, pz=0, ampSum=0;
-  for (const w of WAVES){ px += -w.nx*w.amp; pz += -w.ny*w.amp; ampSum += w.amp; }
+  for (const w of WAVES){ px += w.nx*w.amp; pz += w.ny*w.amp; ampSum += w.amp; }
   const pl = Math.hypot(px,pz)||1; const prop = { x:px/pl, z:pz/pl };
 
   // one curled finger: tapered tube along a hooking arc + a droplet bead at the tip
   function fingerGeo(tubeR){
-    const SEG=9, RAD=6, PHI=Math.PI*0.72, ARC=0.95, BEAD=1.15;   // 0.72π ≈ 130°: rises from the foam, tip hooks forward over the trough
+    const SEG=9, RAD=6, PHI=Math.PI*0.86, ARC=0.55, BEAD=0.0;   // 0.86π ≈ 155°: a SHORT stubby curl that hooks well over (no bead → no mushroom-cap look)
     const pos=[], idx=[]; const T=new THREE.Vector3(), N=new THREE.Vector3(), B=new THREE.Vector3(0,0,1);
     let tipX=0, tipY=0;
     for (let i=0;i<=SEG;i++){
@@ -2594,22 +2610,22 @@ function buildFoamClaws(){
     }
     for (let i=0;i<SEG;i++) for (let j=0;j<RAD;j++){
       const a=i*RAD+j, b=i*RAD+(j+1)%RAD, c=(i+1)*RAD+j, d=(i+1)*RAD+(j+1)%RAD; idx.push(a,c,b, b,c,d); }
-    const base=pos.length/3, rB=tubeR*BEAD, RINGS=4, SECT=6;   // tip droplet bead
-    for (let u=0;u<=RINGS;u++){ const ph=Math.PI*u/RINGS, sy=Math.cos(ph), sr=Math.sin(ph);
-      for (let v=0;v<SECT;v++){ const th=2*Math.PI*v/SECT;
-        pos.push(tipX + sr*Math.cos(th)*rB, tipY + sy*rB, sr*Math.sin(th)*rB); } }
-    for (let u=0;u<RINGS;u++) for (let v=0;v<SECT;v++){
-      const a=base+u*SECT+v, b=base+u*SECT+(v+1)%SECT, c=base+(u+1)*SECT+v, d=base+(u+1)*SECT+(v+1)%SECT; idx.push(a,c,b, b,c,d); }
+    if (BEAD>0){ const base=pos.length/3, rB=tubeR*BEAD, RINGS=4, SECT=6;   // optional tip droplet bead
+      for (let u=0;u<=RINGS;u++){ const ph=Math.PI*u/RINGS, sy=Math.cos(ph), sr=Math.sin(ph);
+        for (let v=0;v<SECT;v++){ const th=2*Math.PI*v/SECT;
+          pos.push(tipX + sr*Math.cos(th)*rB, tipY + sy*rB, sr*Math.sin(th)*rB); } }
+      for (let u=0;u<RINGS;u++) for (let v=0;v<SECT;v++){
+        const a=base+u*SECT+v, b=base+u*SECT+(v+1)%SECT, c=base+(u+1)*SECT+v, d=base+(u+1)*SECT+(v+1)%SECT; idx.push(a,c,b, b,c,d); } }
     const g=new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3)); g.setIndex(idx);
     return g;   // MeshBasic is unlit → no normals needed
   }
 
   const G=8, R=104, NS=Math.floor(2*R/G)+1, CAP=NS*NS;
-  const core  = new THREE.InstancedMesh(fingerGeo(0.075), new THREE.MeshBasicMaterial({color:WHITE}), CAP);
+  const core  = new THREE.InstancedMesh(fingerGeo(0.150), new THREE.MeshBasicMaterial({color:WHITE}), CAP);
   // inverted-hull keyline: a FATTER tube rendered BACK-faces-only, so the dark only shows as a rim
   // around the white core's silhouette (a concentric solid tube would just bury the white inside it).
-  const shell = new THREE.InstancedMesh(fingerGeo(0.125), new THREE.MeshBasicMaterial({color:DARK, side:THREE.BackSide}), CAP);
+  const shell = new THREE.InstancedMesh(fingerGeo(0.210), new THREE.MeshBasicMaterial({color:DARK, side:THREE.BackSide}), CAP);
   for (const m of [core, shell]){ m.frustumCulled=false; m.count=CAP; m.visible=false; }
   shell.renderOrder = 2; core.renderOrder = 3;   // shell (rim) first, white core on top
   scene.add(shell); scene.add(core);
@@ -2625,47 +2641,56 @@ function updateFoamClaws(t){
   const cam = activeCam || camera;
   const cx = Math.round(cam.position.x/G)*G, cz = Math.round(cam.position.z/G)*G;   // snap grid to camera
   const half = (NS-1)/2;
-  const hHi = 0.52*ampSum, hLo = 0.22*ampSum;     // crest-height window
   const e = 2.0, CAP = foamClaws.CAP;
+  const denom  = Math.max(ampSum*seaAmp, 1e-3);     // normalise crest height by sea state so density doesn't saturate
+  const gref   = Math.max(WAVE_KSUM*seaAmp, 1e-4);  // gradient scale by sea state
+  const seaScl = clampJS(seaAmp/2.5, 0.55, 2.1);    // claws grow with the sea
 
-  // PASS 1 — detect crest slots (jittered off the grid so they don't form rows)
+  // PASS 1 — detect crest cells by RELATIVE height (sea-state independent → no saturation when waves grow)
   const crests = _clawCrests; crests.length = 0;
   for (let gi=0; gi<NS; gi++) for (let gj=0; gj<NS; gj++){
     const x0 = cx + (gi-half)*G, z0 = cz + (gj-half)*G;
-    const wi = Math.round(x0/G), wj = Math.round(z0/G);              // world cell → jitter stays stable as the camera moves
+    const wi = Math.round(x0/G), wj = Math.round(z0/G);
     const x = x0 + (_hash2(wi*2+1, wj*2+9)-0.5)*G*0.9;
     const z = z0 + (_hash2(wi*2+7, wj*2+3)-0.5)*G*0.9;
     const h = waveHeightJS(x, z, t);
-    const heightN = smoothstepJS(hLo, hHi, h);
+    const heightN = smoothstepJS(0.10, 0.38, h/denom);             // crests rarely reach the theoretical max → centre low
     if (heightN <= 0.001) continue;
     const gx = (waveHeightJS(x+e,z,t)-waveHeightJS(x-e,z,t))/(2*e);
     const gz = (waveHeightJS(x,z+e,t)-waveHeightJS(x,z-e,t))/(2*e);
-    const steepN = smoothstepJS(0.07, 0.24, Math.hypot(gx,gz));
-    const dwn = gx*prop.x + gz*prop.z;                              // down-wave slope (<0 on the breaking front)
-    const frontN = smoothstepJS(0.02, -0.12, dwn);
-    const score = heightN * (0.35 + 0.65*steepN) * (0.45 + 0.55*frontN);
-    const baseSc = smoothstepJS(0.22, 0.58, score) * (2.0 + 1.6*_hash2(wi,wj));
-    if (baseSc <= 0.05) continue;
-    crests.push(x, z, h, baseSc, wi, wj);
+    const steepN = smoothstepJS(0.25, 0.75, Math.hypot(gx,gz)/gref);
+    const dwn = (gx*prop.x + gz*prop.z)/gref;                       // down-wave slope (<0 on the breaking front)
+    const frontN = smoothstepJS(0.20, -0.40, dwn);
+    const score = heightN * (0.45 + 0.55*steepN) * (0.55 + 0.45*frontN);
+    if (score <= 0.10) continue;
+    crests.push(x, z, h, score, wi, wj);
   }
 
-  // PASS 2 — emit a small CLUSTER of fingers at each crest (a Hokusai "claw" = a hand of fingers)
+  // PASS 2 — FRACTAL clusters of fingers per crest: power-law sizes (many small, few large), 2-octave
+  // jittered positions (no grid/row signature), bases sunk into the foam so they connect, varied tilt.
+  _clX.set(prop.x, 0, prop.z).normalize();
+  _clZ.crossVectors(_clX, _clUp).normalize();
+  _clY.crossVectors(_clZ, _clX).normalize();
+  _clMat.makeBasis(_clX, _clY, _clZ);
+  const _qBase = new THREE.Quaternion().setFromRotationMatrix(_clMat);
   let k = 0;
-  for (let c=0; c<crests.length && k<CAP-4; c+=6){
-    const cxw=crests[c], czw=crests[c+1], baseSc=crests[c+3], wi=crests[c+4], wj=crests[c+5];
-    const nf = 2 + (_hash2(wi+13, wj+29)*3 | 0);                     // 2..4 fingers per claw
+  for (let c=0; c<crests.length && k<CAP-10; c+=6){
+    const cxw=crests[c], czw=crests[c+1], score=crests[c+3], wi=crests[c+4], wj=crests[c+5];
+    const nf = 1 + (_hash2(wi+13, wj+29)*5 | 0);                          // 1..5 fingers — uneven, sometimes a lone claw
+    const clusterSc = (1.6 + 2.6*score) * seaScl;                        // hand size scales with crest strength + sea state
     for (let f=0; f<nf && k<CAP; f++){
-      const a=_hash2(wi*3+f*17+1, wj*3+f*7+5), b=_hash2(wi*5+f*11+2, wj*5+f*13+8), g3=_hash2(wi+f*23+3, wj+f*19+9);
-      const fx = cxw + (a-0.5)*2.4, fz = czw + (b-0.5)*2.4;          // scatter the hand over a small patch
-      const sc = baseSc * (0.55 + 0.55*g3);
-      _clX.set(prop.x, 0, prop.z).normalize();
-      _clZ.crossVectors(_clX, _clUp).normalize();
-      _clY.crossVectors(_clZ, _clX).normalize();
-      _clMat.makeBasis(_clX, _clY, _clZ);
-      _clQ.setFromRotationMatrix(_clMat);
-      _clQ2.setFromAxisAngle(_clZ, 0.05 + a*0.5); _clQ.multiply(_clQ2);   // varied forward lean
-      _clQ2.setFromAxisAngle(_clUp, (b-0.5)*1.4); _clQ.premultiply(_clQ2); // ±40° fan within the hand
-      _clObjSet(fx, waveHeightJS(fx,fz,t) - 0.05 - curveDropJS(fx,fz), fz, _clQ, sc);
+      const a=_hash2(wi*3+f*17+1, wj*3+f*7+5), b=_hash2(wi*5+f*11+2, wj*5+f*13+8),
+            g3=_hash2(wi+f*23+3, wj+f*19+9), g4=_hash2(wi*7+f*5+4, wj*7+f*3+6);
+      const sprC = clusterSc*1.3, sprF = clusterSc*0.45;                 // coarse hand offset + fine wiggle (2 octaves)
+      const fx = cxw + (a-0.5)*sprC + (g3-0.5)*sprF;
+      const fz = czw + (b-0.5)*sprC + (g4-0.5)*sprF;
+      const sc = clusterSc * (0.30 + 0.70*Math.pow(g3,2.4));             // power-law → mostly small, a few big
+      if (sc < 0.25) continue;
+      _clQ.copy(_qBase);
+      _clQ2.setFromAxisAngle(_clZ, 0.35 + a*0.7); _clQ.multiply(_clQ2);   // varied forward lean (~20°..60°)
+      _clQ2.setFromAxisAngle(_clUp, (b-0.5)*1.7); _clQ.premultiply(_clQ2); // ±49° yaw → irregular, lacy
+      const gd = gerstnerJS(fx, fz, t);                                  // glue to the Gerstner-displaced crest
+      _clObjSet(fx+gd.dx, gd.dy - 0.18*sc - curveDropJS(fx+gd.dx, fz+gd.dz), fz+gd.dz, _clQ, sc);  // sink base into the foam
       core.setMatrixAt(k, _clObj.matrix); shell.setMatrixAt(k, _clObj.matrix); k++;
     }
   }
@@ -2673,6 +2698,90 @@ function updateFoamClaws(t){
   _clObj.position.set(0,-9999,0); _clObj.quaternion.identity(); _clObj.scale.setScalar(0); _clObj.updateMatrix();
   for (; k<CAP; k++){ core.setMatrixAt(k, _clObj.matrix); shell.setMatrixAt(k, _clObj.matrix); }
   core.instanceMatrix.needsUpdate = true; shell.instanceMatrix.needsUpdate = true;
+}
+
+// ============================================================================
+//  HERO BREAKERS — authored curling waves with TRUE overhang.
+//  Gerstner sharpens crests but can't fold a single-valued surface back over itself.
+//  So the few biggest crests get a sculpted breaking-wave mesh: a sheet that rises up
+//  the face (deep Prussian-blue) and curls forward into a barrel with a white, frilled
+//  lip — the Great Wave's overhanging claw as a real object. Placed on the top-scored
+//  crests (spaced apart), oriented down-wave, riding the Gerstner-displaced surface.
+// ============================================================================
+let breakers = null;
+let breakersOn = false;   // authored hero breakers still being refined (lit normals look muddy) — off by default; dev.breakers(true) to preview
+function buildBreakers(){
+  const mix3=(a,b,s)=>[a[0]+(b[0]-a[0])*s, a[1]+(b[1]-a[1])*s, a[2]+(b[2]-a[2])*s];
+  const cDeep=[0.063,0.157,0.337], cMid=[0.149,0.310,0.576], cPale=[0.655,0.780,0.906], cWhite=[0.968,0.949,0.902], cInk=[0.043,0.090,0.205];
+  function breakerGeo(){
+    const NU=24, NV=20, THETA=2.95, H=1.0, W=2.6;    // profile/​width res; THETA≈169° → rises, peaks, just tips over (open curl, not a closed barrel)
+    const pos=[], col=[], idx=[];
+    for (let i=0;i<=NU;i++){ const u=i/NU, ang=u*THETA;
+      const px = H*(u*0.18 + 0.98*(1-Math.cos(ang)));   // progress forward as it curls
+      const py = H*(1.20*Math.sin(ang));                // up then over (sin past 90° comes back down → overhang)
+      let c;                                            // deep-blue face → pale → white frilled lip; ink at the very tip
+      if (u<0.5)        c = mix3(cDeep, cMid,  u/0.5);
+      else if (u<0.72)  c = mix3(cMid,  cPale, (u-0.5)/0.22);
+      else if (u<0.93)  c = mix3(cPale, cWhite,(u-0.72)/0.21);
+      else              c = mix3(cWhite, cInk, (u-0.93)/0.07);   // thin dark keyline along the breaking edge
+      for (let j=0;j<=NV;j++){ const v=j/NV;
+        const lip = Math.max(0,(u-0.74)/0.26);
+        const frill = lip>0 ? Math.sin(v*Math.PI*9.0)*0.13*lip + Math.sin(v*Math.PI*23.0)*0.04*lip : 0;   // ragged finger lip
+        pos.push(px + frill*0.7, py + frill, (v-0.5)*W);
+        col.push(c[0],c[1],c[2]);
+      }
+    }
+    for (let i=0;i<NU;i++) for (let j=0;j<NV;j++){
+      const a=i*(NV+1)+j, b=a+1, cc=a+(NV+1), d=cc+1; idx.push(a,cc,b, b,cc,d); }
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+    g.setAttribute('color',    new THREE.Float32BufferAttribute(col,3));
+    g.setIndex(idx); g.computeVertexNormals();   // lit shading needs normals
+    return g;
+  }
+  const CAPB=5;
+  // LIT material so the curl reads as a 3D wave (not a flat loaf); vertex colours drive the blue→white gradient
+  const mat=new THREE.MeshStandardNodeMaterial({ side:THREE.DoubleSide, roughness:0.62, metalness:0.0 });
+  mat.colorNode = attribute('color','vec3');
+  const mesh=new THREE.InstancedMesh(breakerGeo(), mat, CAPB);
+  mesh.frustumCulled=false; mesh.count=CAPB; mesh.visible=false; mesh.renderOrder=1;   // under the claw lip (renderOrder 2/3)
+  scene.add(mesh);
+  breakers = { mesh, CAPB };
+}
+
+function updateBreakers(t){
+  if (!breakers || !foamClaws) return;
+  if (!breakersOn || P.style !== 'hokusai'){ if (breakers.mesh.visible) breakers.mesh.visible=false; return; }
+  breakers.mesh.visible = true;
+  const { mesh, CAPB } = breakers, cr = _clawCrests;
+  const cam = activeCam || camera;
+  const seaScl = clampJS(seaAmp/2.5, 0.55, 2.1);     // breakers grow with the sea, like the claws
+  // pick the top-scored crests this frame (foam pass already filled _clawCrests), spaced apart
+  const idxs=[]; for (let c=0;c<cr.length;c+=6) idxs.push(c);
+  idxs.sort((p,q)=>cr[q+3]-cr[p+3]);
+  const picked=[]; let n=0;
+  for (const c of idxs){ if (n>=CAPB) break;
+    const x=cr[c], z=cr[c+1], sc=cr[c+3];              // sc = crest score (0..~1)
+    if (sc < 0.5) break;                               // only the strongest crests become hero breakers
+    let ok=true; for (const p of picked){ if (Math.hypot(x-p[0],z-p[1])<80){ ok=false; break; } }
+    if (!ok) continue; picked.push([x,z]);
+    const gd=gerstnerJS(x,z,t), wx=x+gd.dx, wz=z+gd.dz;
+    // CHEAT THE FACING: curl toward the camera so its blue concave face + white lip turn to the viewer
+    // (Great-Wave framing) instead of showing the plain back as the boat travels down-wave.
+    let fx=cam.position.x-wx, fz=cam.position.z-wz; const fl=Math.hypot(fx,fz)||1; fx/=fl; fz/=fl;
+    _clX.set(fx,0,fz); _clZ.crossVectors(_clX,_clUp).normalize(); _clY.crossVectors(_clZ,_clX).normalize();
+    _clMat.makeBasis(_clX,_clY,_clZ);
+    _clQ.setFromRotationMatrix(_clMat);
+    _clQ2.setFromAxisAngle(_clZ, -0.15); _clQ.multiply(_clQ2);        // tip the crest slightly back for a leaning-wave silhouette
+    const scale = (3.0 + sc*2.2)*seaScl, wide = 0.9 + _hash2((x|0)+5,(z|0)+9)*1.1;
+    _clObj.position.set(wx, gd.dy - curveDropJS(wx,wz) - 0.5, wz);
+    _clObj.quaternion.copy(_clQ);
+    _clObj.scale.set(scale, scale, scale*wide);
+    _clObj.updateMatrix(); mesh.setMatrixAt(n, _clObj.matrix); n++;
+  }
+  _clObj.position.set(0,-9999,0); _clObj.quaternion.identity(); _clObj.scale.setScalar(0); _clObj.updateMatrix();
+  for (; n<CAPB; n++) mesh.setMatrixAt(n, _clObj.matrix);
+  mesh.instanceMatrix.needsUpdate = true;
 }
 
 // ---- Hokusai foam-claw texture: white claws with a DARK INDIGO KEYLINE baked into the ART (so every tendril has a
@@ -2719,7 +2828,14 @@ function buildOcean() {
 
   const waveH = Fn(([p]) => { const h = float(0).toVar();
     for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed))).mul(w.amp));
-    return h.mul(uSea); });   // storm-reactive global amplitude
+    return h.mul(uSea); });   // storm-reactive global amplitude (vertical height only — used for foam/normal sampling)
+  // Gerstner/trochoidal displacement: each wave also pulls vertices horizontally toward its crest, so
+  // crests sharpen into leaning peaks instead of smooth sine humps. Returns the full (x,y,z) offset.
+  const gerstner = Fn(([p]) => { const d = vec3(0,0,0).toVar();
+    for (const w of WAVES){ const ph = dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(time.mul(w.speed));
+      const c = cos(ph).mul(w.amp).mul(uChop);
+      d.addAssign(vec3(c.mul(w.nx), sin(ph).mul(w.amp), c.mul(w.ny))); }
+    return d.mul(uSea); });   // horizontal pinch + vertical, scaled by sea state
   const waveN = Fn(([p]) => { const e = 0.9;
     const hL = waveH(p.add(vec2(-e,0))), hR = waveH(p.add(vec2(e,0)));
     const hD = waveH(p.add(vec2(0,-e))), hU = waveH(p.add(vec2(0,e)));
@@ -2874,7 +2990,7 @@ function buildOcean() {
   });
 
   oceanMat = new THREE.MeshBasicNodeMaterial();
-  oceanMat.positionNode = curveNode(positionLocal.add(vec3(0, waveH(positionLocal.xz), 0)));   // waves + tiny-planet curvature
+  oceanMat.positionNode = curveNode(positionLocal.add(gerstner(positionLocal.xz)));   // Gerstner (peaked, leaning crests) + tiny-planet curvature
   oceanMat.colorNode = oceanColor();
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
@@ -3182,6 +3298,8 @@ window.dev = {
   atmo(a){ P.atmosphere=clampJS(a,0,1); if(typeof syncSlider==='function') syncSlider('atmosphere'); },
   storm(on, inten){ P.stormOn = on!==false; if(inten!==undefined) P.stormIntensity=clampJS(inten,0,1);
     if(typeof syncSlider==='function'){ syncSlider('stormOn'); syncSlider('stormIntensity'); } },
+  chop(v){ seaChop = clampJS(v,0,2); uChop.value = seaChop; return 'chop='+seaChop; },
+  breakers(on){ breakersOn = on!==false; return 'breakers '+(breakersOn?'on':'off'); },
   claws(){ if(!foamClaws) return 'no foamClaws'; const m=new THREE.Matrix4(), p=new THREE.Vector3(), q=new THREE.Quaternion(), s=new THREE.Vector3();
     let active=0, maxS=0; for(let i=0;i<foamClaws.CAP;i++){ foamClaws.core.getMatrixAt(i,m); m.decompose(p,q,s); if(s.x>0.01){active++; if(s.x>maxS)maxS=s.x;} }
     return { style:P.style, visible:foamClaws.core.visible, CAP:foamClaws.CAP, active, maxScale:+maxS.toFixed(2),
