@@ -254,7 +254,7 @@ const P = {
   // sky & time
   autoDay: true, timeOfDay: 19.69, dayLength: 120,   // hours; dayLength = real seconds per full day
   // HUD visibility
-  showTitle: false, showHints: false, showTelemetry: false, showCompass: false, showLabels: true,
+  showTitle: false, showHints: false, showTelemetry: false, showCompass: false, showLabels: true, showConstellations: true,
   // recording transition shape: fade-out → hold-at-full → fade-in (seconds), plus ease curve
   transFadeOut: 0.4, transHold: 0.2, transFadeIn: 0.4, transEase: 1.0,  // ease 0=linear … 1=smoothstep
   // lighting
@@ -2807,6 +2807,7 @@ function buildStarMap(){
 
   // ---- constellation line-figures: only down to rank 2 (the Little-Dipper floor) — skip the obscure rank-3.
   //      rank-1 (the LABELLED ones) get THICK GLOWY tubes; rank-2 get thin starlight edges. ----
+  const conGrp=new THREE.Group(); conGrp.name='constellations'; grp.add(conGrp);   // lines+tubes+labels → one toggleable group (stars stay on)
   if (SM && SM.lines){
     const thinPos=[]; const edges=[];   // edges: [a,b] Vector3 pairs for the rank-1 tubes
     for (const c of SM.lines){ if (c.r>2) continue;
@@ -2819,7 +2820,7 @@ function buildStarMap(){
       const lg=new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(thinPos,3));
       const lmat=new THREE.LineBasicNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
       lmat.colorNode=vec3(0.34,0.50,0.86); lmat.opacityNode=uNight.mul(0.34);
-      const lines=new THREE.LineSegments(lg, lmat); lines.frustumCulled=false; lines.renderOrder=-9; grp.add(lines);
+      const lines=new THREE.LineSegments(lg, lmat); lines.frustumCulled=false; lines.renderOrder=-9; conGrp.add(lines);
     }
     if (edges.length){            // thick glowy tubes for the labelled constellations
       const geos=[], up=new THREE.Vector3(0,1,0), dir=new THREE.Vector3(), mid=new THREE.Vector3(), q=new THREE.Quaternion(), mm=new THREE.Matrix4(), one=new THREE.Vector3(1,1,1);
@@ -2835,7 +2836,7 @@ function buildStarMap(){
       const tg=new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.BufferAttribute(mp,3)); tg.setIndex(new THREE.BufferAttribute(mi,1));
       const tmat=new THREE.MeshBasicNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
       tmat.colorNode=vec3(0.46,0.66,1.0); tmat.opacityNode=uNight.mul(0.5);
-      const tubes=new THREE.Mesh(tg, tmat); tubes.frustumCulled=false; tubes.renderOrder=-9; grp.add(tubes);
+      const tubes=new THREE.Mesh(tg, tmat); tubes.frustumCulled=false; tubes.renderOrder=-9; conGrp.add(tubes);
     }
   }
 
@@ -2843,10 +2844,10 @@ function buildStarMap(){
   const labs=[];
   if (SM && SM.labels) for (const L of SM.labels){ if (L.r>1) continue;
     _raDecVec(L.ra, L.dec, _v); const sp=makeLabelSprite(L.n.toUpperCase(), 0xbcd4ff, 230, ['#eef4ff','#7aa6ff']);
-    sp.position.set(_v.x*STAR_R*0.98, _v.y*STAR_R*0.98, _v.z*STAR_R*0.98); sp.renderOrder=21; grp.add(sp); labs.push(sp);
+    sp.position.set(_v.x*STAR_R*0.98, _v.y*STAR_R*0.98, _v.z*STAR_R*0.98); sp.renderOrder=21; conGrp.add(sp); labs.push(sp);
   }
 
-  scene.add(grp); starMap={ grp, labs };
+  scene.add(grp); starMap={ grp, labs, con:conGrp };
 }
 
 const _scC0=new THREE.Vector3(), _scC1=new THREE.Vector3(), _scC2=new THREE.Vector3(), _scM=new THREE.Matrix4();
@@ -2863,6 +2864,7 @@ function _localSiderealRad(){
 function updateStarMap(){
   if (!starMap) return;
   const vis = uNight.value > 0.012; starMap.grp.visible = vis; if (!vis) return;
+  if (starMap.con) starMap.con.visible = (P.showConstellations !== false);   // stars stay; constellation lines/labels toggle
   const tgt = (controls && controls.target) ? controls.target : (activeCam||camera).position;
   starMap.grp.position.set(tgt.x, 0, tgt.z);                                      // follow like the sky dome
   const th=_localSiderealRad(), st=Math.sin(th), ct=Math.cos(th), sp=Math.sin(OBS_LAT), cp=Math.cos(OBS_LAT);
@@ -4605,6 +4607,7 @@ function buildPanel() {
   addToggle(s, 'PID telemetry graphs', P, 'showTelemetry', applyHud);
   addToggle(s, 'Compass', P, 'showCompass', applyHud);
   addToggle(s, 'Island & city labels', P, 'showLabels', applyHud);
+  addToggle(s, 'Constellations (night)', P, 'showConstellations');
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
   addToggle(s, 'Depth contour lines', P, 'contours');
   addToggle(s, 'Curved horizon (tiny planet)', P, 'curveWorld');
