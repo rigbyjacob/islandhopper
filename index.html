@@ -3407,7 +3407,7 @@ function buildBoat() {
 // then bank gently into turns. (The old Euler version pointed the hull 90° off-course.)
 const _mB = new THREE.Matrix4(), _vX = new THREE.Vector3(), _vY = new THREE.Vector3(), _vZ = new THREE.Vector3();
 function placeBoat(boat, s, t) {
-  const y = waveHeightJS(s.x, s.z, t);
+  const y = waveHeightJS(s.x, s.z, t) - curveDropJS(s.x, s.z);   // sink onto the curved (tiny-planet) sea like every other floating prop, else the boat floats as the camera pulls back
   boat.position.set(s.x, y, s.z);
   const e = 3.0;
   const hx = (waveHeightJS(s.x+e, s.z, t) - waveHeightJS(s.x-e, s.z, t)) / (2*e);
