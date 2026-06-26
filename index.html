@@ -1370,7 +1370,7 @@ function buildLights() {
   const sc = sunLight.shadow.camera;
   // tighter frustum (follows the boat) → smaller texels → steadier, sharper frond shadows.
   sc.left=-340; sc.right=340; sc.top=340; sc.bottom=-340; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();
-  sunLight.shadow.bias = -0.0006; sunLight.shadow.normalBias = 3.0;   // high normalBias: flat ground inside the shadow frustum doesn't self-shadow → no rectangular "frustum" darkening on the seabed
+  sunLight.shadow.bias = -0.0005; sunLight.shadow.normalBias = 1.4;
   scene.add(sunLight); scene.add(sunLight.target);
   // soft cool moonlight — a second directional light that fades in at night (no shadows, keeps it cheap)
   moonLight = new THREE.DirectionalLight(0xb9c6ff, 0.0);
@@ -1789,7 +1789,7 @@ function updateEnvironment(dt) {
   // the Y independently — as before — tilted the frustum off-axis and re-broke the texel alignment.)
   sunLight.position.copy(_shCtr).addScaledVector(_sun, D);
   sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
-  sunLight.castShadow = day > 0.06;
+  sunLight.castShadow = (day > 0.06) && !window._noSunShadow;
 
   renderer.toneMappingExposure = lerp(0.66, 1.08, day) * (1 - 0.72*localStorm);   // storms dim the scene only near a cell
   applyStyleLighting();   // tint sky/lights/exposure for the selected art style (layers on top of day/night)
@@ -3311,7 +3311,10 @@ function buildTerrain() {
   mat.roughnessNode = attribute('arough','float');   // wet sand glossy, foliage matte, rock in between
   mat.positionNode = curveNode(positionLocal);        // tiny-planet curvature — islands bend with the sea
   const mesh = new THREE.Mesh(geo, mat); mesh.position.y = -0.05;
-  mesh.castShadow = true; mesh.receiveShadow = true; scene.add(mesh);
+  // castShadow yes (islands shade the sea-floor/boat), but DON'T receive the sun shadow: this is one big
+  // land+seabed mesh, so receiving would paint the sun shadow-camera's rectangular frustum footprint onto the
+  // deep seabed (visible through the bathymetry water as a moving rectangle). Slope-shading gives island relief.
+  mesh.castShadow = true; mesh.receiveShadow = false; scene.add(mesh);
 }
 
 function buildBoat() {
@@ -3526,6 +3529,7 @@ window.dev = {
   storm(on, inten){ P.stormOn = on!==false; if(inten!==undefined) P.stormIntensity=clampJS(inten,0,1);
     if(typeof syncSlider==='function'){ syncSlider('stormOn'); syncSlider('stormIntensity'); } },
   chop(v){ seaChop = clampJS(v,0,2); uChop.value = seaChop; return 'chop='+seaChop; },
+  shadows(on){ window._noSunShadow = (on===false); return 'sunShadows='+(!window._noSunShadow); },   // diagnostic: force sun shadow map off
   curl(){ curlSign = -curlSign; return 'curlSign='+curlSign; },
   front(v){ frontFace = (v===undefined)?1.0:v; return 'frontFace='+frontFace; },
   rise(v){ fingerLift = (v===undefined)?0.5:v; return 'fingerLift='+fingerLift; },
