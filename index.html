@@ -1581,8 +1581,18 @@ function buildVehicles(){
     { id:'ufo',   label:'UFO',       cruiseY:135, cruiseSpeed:130, turnRate:1.6,  accelK:5.0, arriveR:75, camDist:62, camHigh:30, mesh:buildUfoMesh(),
       routeNames:['Antigua','Guadeloupe (N)','St. Kitts','Anguilla','Barbuda','Montserrat'] },
   ];
-  for (const d of defs){ d.route=routeFrom(d.routeNames); const w=d.route[0]||{x:0,z:0};
-    const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); v.routeNames=d.routeNames.slice();
+  let _vi=0;
+  for (const d of defs){
+    let rn = d.routeNames.filter(n=>BYNAME[n]);                 // keep only islands that exist in this region
+    if (rn.length < 2){                                          // unknown region → auto-route the biggest islands, angular order
+      const big = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0,6);
+      const cx=big.reduce((s,i)=>s+i.x,0)/big.length, cz=big.reduce((s,i)=>s+i.z,0)/big.length;
+      big.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));
+      const off=_vi%big.length; rn = big.slice(off).concat(big.slice(0,off)).map(i=>i.name);   // rotate per vehicle so they don't overlap
+    }
+    _vi++;
+    d.route=routeFrom(rn); const w=d.route[0]||{x:0,z:0};
+    const v=makeAgent({...d, x:w.x, y:d.cruiseY, z:w.z, yaw:0}); v.routeNames=rn.slice();   // displayed names now match the real route
     v.pathLine=makeVehLine(d.id==='sub'?0x44d0ff:d.id==='plane'?0xffd24a:0xff66cc);
     v.shown=true; v.cloak=1; v._shim=Math.random()*6.2832;
     scene.add(v.mesh); FLEET.push(v); }
