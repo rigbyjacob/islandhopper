@@ -181,6 +181,8 @@
 <script src="data/elev_b64.js"></script>
 <script src="data/bathy_b64.js"></script>
 <script src="data/aegean.js"></script>   <!-- Aegean (Cyclades) region: window.AEGEAN, built by build/gen_region.py -->
+<script src="data/japan.js"></script>     <!-- Japan · Sagami Bay region: window.JAPAN -->
+<script src="data/thailand.js"></script>  <!-- Thailand · Andaman region: window.THAILAND -->
 <script src="data/worldmap.js"></script>   <!-- shaded-relief Earth COLOR texture for the world-map globe (build/gen_worldmap.py) -->
 <script src="data/worldmap_disp.js"></script>   <!-- Earth DISPLACEMENT (height) texture for globe relief -->
 <script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
@@ -422,6 +424,34 @@ if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
   ],
   // bright clear midday Mediterranean light + a dry meltemi north wind, calmer seas, clearer air
   defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:115, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Japan · Sagami Bay (Izu volcanic islands — the Great Wave coast) ----
+if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
+  relief: { escale:16, steep:0.42, ridge:1.2, lift:2.4 },   // steep volcanic islands (Izu Ōshima's Mt Mihara)
+  palette: {
+    land: { seabed:0x14506b, wetsand:0x6f7a72, sand:0xb9b6a0,
+            grass:0x4a7a44, forest:0x2f5230, rock:0x55514c, cliff:0x36322e },   // deep forest greens + dark volcanic basalt
+    shrub: [0x3f7a3a, 0x2f5e2c],
+  },
+  flora: { palms:false },
+  cities: [ [139.36,34.75,20], [139.10,34.97,16], [139.07,35.10,18], [139.27,34.37,8], [139.42,34.69,6] ],
+  cityLabels: [ ['Motomachi',139.36,34.75],['Itō',139.10,34.97],['Atami',139.07,35.10],['Niijima',139.27,34.37] ],
+  // moody Hokusai sea: bigger swell, fresh wind, slightly hazy morning
+  defaults: { timeOfDay:9.0, atmosphere:0.55, windDirDeg:300, windStrength:11, waveHeight:2.4, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Thailand · Andaman (Phang Nga / Phuket — limestone karst & warm seas) ----
+if (window.THAILAND) REGIONS.thailand = Object.assign({}, window.THAILAND, {
+  relief: { escale:13, steep:0.5, ridge:1.6, lift:2.0 },   // steep limestone karst towers
+  palette: {
+    land: { seabed:0x1f7fa0, wetsand:0xcaa86a, sand:0xeadfba,
+            grass:0x3f8a3a, forest:0x256127, rock:0xb8b2a4, cliff:0x8f897c },   // lush jungle green + pale-grey limestone cliffs
+    shrub: [0x39882f, 0x256b22],
+  },
+  // palms ON (tropical) — leave flora default
+  cities: [ [98.39,7.88,40], [98.30,7.90,20], [98.92,8.06,18], [98.82,8.03,12], [99.08,7.62,8], [98.77,7.74,6] ],
+  cityLabels: [ ['Phuket',98.39,7.88],['Patong',98.30,7.90],['Krabi',98.92,8.06],['Ao Nang',98.82,8.03],['Ko Phi Phi',98.77,7.74] ],
+  // warm hazy tropical calm
+  defaults: { timeOfDay:13.5, atmosphere:0.6, windDirDeg:225, windStrength:4, waveHeight:0.9, stormOn:false, stormIntensity:0.0 },
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
@@ -1615,8 +1645,7 @@ function applyCloakOpacity(root, op){
       m.opacity     = m.userData._clBase * op; } });
 }
 function setVehShown(id, on){ const v=FLEET.find(x=>x.id===id); if(!v) return; v.shown=on;
-  if (ui.vehTog && ui.vehTog[id]) ui.vehTog[id].classList.toggle('active', on);
-  if (!on && dirSubjectId===id) setFleetView('ship'); }            // don't keep filming a cloaked vehicle
+  if (ui.vehTog && ui.vehTog[id]) ui.vehTog[id].classList.toggle('active', on); }   // visibility only — never touches camera/target
 function updateCloak(dt){ const t=clock.elapsedTime;
   for (const v of FLEET){ const target = v.shown===false ? 0 : 1;
     v.cloak += (target-(v.cloak??1)) * Math.min(1, dt*3.2);         // ~0.4s ease

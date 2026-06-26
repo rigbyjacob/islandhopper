@@ -32,6 +32,15 @@ KNOWN = {
     'Schoinoussa': (25.52, 36.86), 'Koufonisia': (25.60, 36.94), 'Kea': (24.34, 37.62),
     'Andros': (24.90, 37.84), 'Donousa': (25.81, 37.10),
   },
+  'japan': {
+    'Izu Ōshima': (139.39, 34.74), 'Toshima': (139.28, 34.52), 'Enoshima': (139.48, 35.30),
+    'Hatsushima': (139.17, 35.04), 'Jōgashima': (139.61, 35.13), 'Niijima': (139.27, 34.38),
+  },
+  'thailand': {
+    'Phuket': (98.34, 7.92), 'Ko Yao Yai': (98.60, 8.12), 'Ko Yao Noi': (98.62, 8.21),
+    'Ko Phi Phi': (98.77, 7.74), 'Ko Lanta': (99.05, 7.58), 'Ko Racha': (98.36, 7.61),
+    'Ko Naka': (98.43, 8.03), 'James Bond I.': (98.50, 8.27),
+  },
 }
 
 def read_asc(path):
