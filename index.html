@@ -180,6 +180,7 @@
 <script src="data/island_polys.js"></script>
 <script src="data/elev_b64.js"></script>
 <script src="data/bathy_b64.js"></script>
+<script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
 
 <script type="importmap">
 {
@@ -258,6 +259,7 @@ const P = {
   shadowDepth: 0.6,   // 0 = flat (lots of sky fill) … 1 = deep contrast (little fill, dark shaded sides)
   bloom: false,       // HDR-ish glow post-process (guarded toggle)
   atmosphere: 0.6,    // master drama for god rays / horizon haze / sunset bloom (0 = off, 1 = full)
+  moonPhase: 0.45,    // 0 = new moon (dark sky, best stars) … 1 = full moon (bright)
   style: 'tropical',  // art-style re-grade: tropical | photoreal | pissarro | gauguin
   // cinematic tour director
   cine: true,         // drive a perspective "director" camera that frames the boat cinematically (default view)
@@ -1153,6 +1155,7 @@ async function init() {
   buildNavVisuals();
   buildWake();
   buildLabels();
+  buildStarMap();   // real night sky (constellations + labels), gated to night via uNight
   buildPanel();
   applyHud();        // reflect any restored HUD-visibility settings
   onResize();        // apply any restored aspect-ratio lock + composition grid
@@ -1242,6 +1245,7 @@ async function init() {
     compositeRecording(dt);   // bake the rendered frame (+ any transition) into the recording canvas
 
     updateLabels();   // sprite labels (handles its own showLabels gating)
+    updateStarMap();  // rotate the night sky to the local sidereal time, twinkle, night-gate
     curveTrees();     // re-sink the instanced palms/shrubs onto the curved world
     if (P.showTelemetry) drawTelemetry();
     if (P.showCompass) drawCompass();
@@ -1288,6 +1292,7 @@ const uSunScreenUV = uniform(new THREE.Vector2(0.5, 0.5));   // sun position in 
 const uSunOnScreen = uniform(0.0); // 1 when the sun is in front of the camera & roughly on screen, else 0
 const _curveInsts = [];          // base transforms of instanced decorations (palms/shrubs) so they can re-curve each frame
 const uHokusai = uniform(0.0);   // Hokusai ukiyo-e water recolor + foam boost (1 when that style is active)
+const uVangogh = uniform(0.0);   // Van Gogh Starry-Night swirling impasto brushstrokes on the water (1 when active)
 // amplitude-weighted wave TRAVEL direction (xz) — lets the shader tell the BACK (rising) face from the
 // FRONT (breaking) face, so foam can sit on the back like the Great Wave while the front underbelly stays deep blue
 const uWaveDir = uniform((()=>{ let x=0,z=0; for(const w of WAVES){ x+=-w.nx*w.amp; z+=-w.ny*w.amp; } const l=Math.hypot(x,z)||1; return new THREE.Vector2(x/l, z/l); })());
@@ -1666,6 +1671,7 @@ function applyStyleLighting(){
   uGradeTint.value.set(wt[0], wt[1], wt[2]);                     // water shader tint
   uOutline.value = (P.outline === false) ? 0 : (S.outline || 0); // woodblock ink-outline strength
   uHokusai.value = (P.style === 'hokusai') ? 1 : 0;              // in-shader Great-Wave water recolor + foam boost
+  uVangogh.value = (P.style === 'vangogh') ? 1 : 0;             // in-shader Starry-Night swirling impasto on the water
 }
 function setStyle(name){ if (STYLES[name]) P.style=name; applySceneStyle(); saveSettings(); }
 
@@ -1728,7 +1734,8 @@ function updateEnvironment(dt) {
   // moon — opposite the sun, so it's up at night. Soft cool directional light + sky disk; fades with
   // night fraction and how high the moon is, dimmed by storm cloud.
   _moon.set(-Math.sin(phi), Math.cos(phi), -0.28).normalize();
-  const moonStr = uNight.value * clampJS(_moon.y, 0, 1) * (1 - 0.7*localStorm);
+  const moonPhase = (P.moonPhase!=null) ? P.moonPhase : 1.0;       // 0 = new moon (dark sky, best stars) → 1 = full moon
+  const moonStr = uNight.value * clampJS(_moon.y, 0, 1) * (1 - 0.7*localStorm) * moonPhase;
   uMoonDir.value.copy(_moon);
   uMoonInt.value = moonStr;
   if (moonLight){
@@ -2525,6 +2532,122 @@ function buildDipStick(){
   title.position.set(X, 10, Z); g.add(title);
   scene.add(g); dipStick=g;
 }
+// ============================================================================
+//  STAR MAP — the real night sky for the Caribbean (~17.7°N), rotated to the local
+//  sidereal time derived from the in-app date + time-of-day. Twinkling stars
+//  (brighter for constellation members), constellation line-figures (brighter for the
+//  famous rank-1 ones), and glowing constellation labels. Night-gated via uNight.
+//  Data: window.STARMAP (build/build_starmap.js) — falls back to procedural stars.
+// ============================================================================
+let starMap = null;
+const OBS_LAT = 17.7 * Math.PI/180, OBS_LON_DEG = -62.0, STAR_R = 4700;
+function _raDecVec(raDeg, decDeg, out){ const ra=raDeg*Math.PI/180, dec=decDeg*Math.PI/180, cd=Math.cos(dec);
+  return out.set(cd*Math.cos(ra), cd*Math.sin(ra), Math.sin(dec)); }
+
+function buildStarMap(){
+  const grp = new THREE.Group(); grp.frustumCulled=false;
+  const SM = window.STARMAP, _v = new THREE.Vector3(), cc = new THREE.Color();
+
+  // constellation-line vertices → brighten those member stars
+  const vset = new Set();
+  if (SM && SM.lines) for (const c of SM.lines) for (const seg of c.seg) for (const p of seg) vset.add(p[0].toFixed(2)+','+p[1].toFixed(2));
+
+  // ---- stars (real catalog, or a procedural fallback so the sky is never empty) ----
+  const SD = (SM && SM.stars) ? SM.stars
+    : (()=>{ const a=[]; for(let i=0;i<1300;i++) a.push([Math.random()*360-180, Math.asin(Math.random()*2-1)*180/Math.PI, 3.2+Math.random()*2.2, 0]); return a; })();
+  const N=SD.length, gp=new Float32Array(N*3), gc=new Float32Array(N*3), gs=new Float32Array(N), gph=new Float32Array(N), gtw=new Float32Array(N);
+  for (let i=0;i<N;i++){ const ra=SD[i][0], dec=SD[i][1], mag=SD[i][2], bv=SD[i][3]||0;
+    _raDecVec(ra,dec,_v); gp[i*3]=_v.x*STAR_R; gp[i*3+1]=_v.y*STAR_R; gp[i*3+2]=_v.z*STAR_R;
+    let b=Math.pow(2.512, 2.2-mag); b=Math.max(0.18, Math.min(4.0,b));            // brightness from magnitude (let the brightest run high)
+    const bright = Math.max(0, Math.min(1, (2.0-mag)/3.5));                       // 0..1 "is this a brilliant star" (mag<2 → high)
+    const isC=vset.has(ra.toFixed(2)+','+dec.toFixed(2));                          // constellation member?
+    const tc=Math.max(0,Math.min(1,(bv+0.4)/2.0));                                // B-V: blue-white → amber
+    cc.setRGB(0.72+0.28*tc, 0.82+0.05*tc, 1.0-0.35*tc);
+    const bb=Math.min(2.0, 0.70+0.85*b)*(isC?1.3:1.0);
+    gc[i*3]=cc.r*bb; gc[i*3+1]=cc.g*bb; gc[i*3+2]=cc.b*bb;
+    gs[i]=(2.2+3.4*Math.min(1.5,b)) + 7.5*bright*bright;                          // brilliant stars get a much bigger disk
+    gph[i]=Math.random()*6.2832;
+    gtw[i]=0.18 + 0.34*bright;                                                    // brighter stars twinkle more
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(gp,3));
+  g.setAttribute('acolor', new THREE.BufferAttribute(gc,3));
+  g.setAttribute('asize', new THREE.BufferAttribute(gs,1));
+  g.setAttribute('aphase', new THREE.BufferAttribute(gph,1));
+  g.setAttribute('atw', new THREE.BufferAttribute(gtw,1));
+  const mat=new THREE.PointsNodeMaterial({ transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending });
+  mat.sizeNode=attribute('asize'); mat.colorNode=attribute('acolor','vec3');
+  // twinkle: per-star amplitude (bright stars shimmer more), two beat frequencies for a livelier sparkle
+  const tw = sin(uTime.mul(2.6).add(attribute('aphase'))).mul(0.6).add(sin(uTime.mul(5.7).add(attribute('aphase').mul(1.7))).mul(0.4));
+  mat.opacityNode=uNight.mul(oneMinus(attribute('atw')).add(attribute('atw').mul(tw.mul(0.5).add(0.5))));
+  const pts=new THREE.Points(g, mat); pts.frustumCulled=false; pts.renderOrder=-9; grp.add(pts);
+
+  // ---- constellation line-figures: only down to rank 2 (the Little-Dipper floor) — skip the obscure rank-3.
+  //      rank-1 (the LABELLED ones) get THICK GLOWY tubes; rank-2 get thin starlight edges. ----
+  if (SM && SM.lines){
+    const thinPos=[]; const edges=[];   // edges: [a,b] Vector3 pairs for the rank-1 tubes
+    for (const c of SM.lines){ if (c.r>2) continue;
+      for (const seg of c.seg) for (let k=0;k<seg.length-1;k++){
+        const a=_raDecVec(seg[k][0],seg[k][1],new THREE.Vector3()).multiplyScalar(STAR_R);
+        const b=_raDecVec(seg[k+1][0],seg[k+1][1],new THREE.Vector3()).multiplyScalar(STAR_R);
+        if (c.r<=1) edges.push([a,b]); else thinPos.push(a.x,a.y,a.z, b.x,b.y,b.z);
+      } }
+    if (thinPos.length){
+      const lg=new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(thinPos,3));
+      const lmat=new THREE.LineBasicNodeMaterial({ transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending });
+      lmat.colorNode=vec3(0.34,0.50,0.86); lmat.opacityNode=uNight.mul(0.34);
+      const lines=new THREE.LineSegments(lg, lmat); lines.frustumCulled=false; lines.renderOrder=-9; grp.add(lines);
+    }
+    if (edges.length){            // thick glowy tubes for the labelled constellations
+      const geos=[], up=new THREE.Vector3(0,1,0), dir=new THREE.Vector3(), mid=new THREE.Vector3(), q=new THREE.Quaternion(), mm=new THREE.Matrix4(), one=new THREE.Vector3(1,1,1);
+      for (const [a,b] of edges){ dir.subVectors(b,a); const len=dir.length(); if (len<1) continue;
+        const cyl=new THREE.CylinderGeometry(11,11,len,6,1,true);
+        q.setFromUnitVectors(up, dir.clone().normalize()); mid.addVectors(a,b).multiplyScalar(0.5);
+        cyl.applyMatrix4(mm.compose(mid,q,one)); geos.push(cyl); }
+      // merge (manual concat — avoids an addon import)
+      let vc=0, ic=0; for(const gg of geos){ vc+=gg.attributes.position.count; ic+=gg.index.count; }
+      const mp=new Float32Array(vc*3), mi=new Uint32Array(ic); let vo=0, io=0;
+      for(const gg of geos){ mp.set(gg.attributes.position.array, vo*3); const ix=gg.index.array;
+        for(let k=0;k<ix.length;k++) mi[io+k]=ix[k]+vo; vo+=gg.attributes.position.count; io+=ix.length; }
+      const tg=new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.BufferAttribute(mp,3)); tg.setIndex(new THREE.BufferAttribute(mi,1));
+      const tmat=new THREE.MeshBasicNodeMaterial({ transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending });
+      tmat.colorNode=vec3(0.46,0.66,1.0); tmat.opacityNode=uNight.mul(0.5);
+      const tubes=new THREE.Mesh(tg, tmat); tubes.frustumCulled=false; tubes.renderOrder=-9; grp.add(tubes);
+    }
+  }
+
+  // ---- glowing constellation labels (famous ones), via the same sprite system as the towns ----
+  const labs=[];
+  if (SM && SM.labels) for (const L of SM.labels){ if (L.r>1) continue;
+    _raDecVec(L.ra, L.dec, _v); const sp=makeLabelSprite(L.n.toUpperCase(), 0xbcd4ff, 230, ['#eef4ff','#7aa6ff']);
+    sp.position.set(_v.x*STAR_R*0.98, _v.y*STAR_R*0.98, _v.z*STAR_R*0.98); sp.renderOrder=21; grp.add(sp); labs.push(sp);
+  }
+
+  scene.add(grp); starMap={ grp, labs };
+}
+
+const _scC0=new THREE.Vector3(), _scC1=new THREE.Vector3(), _scC2=new THREE.Vector3(), _scM=new THREE.Matrix4();
+function _localSiderealRad(){
+  const now=new Date(); const localH=(typeof P!=='undefined'&&P.timeOfDay!=null)?P.timeOfDay:(now.getHours()+now.getMinutes()/60);
+  const utH=localH - OBS_LON_DEG/15;                                              // local → UT
+  let y=now.getFullYear(), m=now.getMonth()+1; const D=now.getDate();
+  if(m<=2){ y-=1; m+=12; }
+  const A=Math.floor(y/100), B=2-A+Math.floor(A/4);
+  const JD=Math.floor(365.25*(y+4716))+Math.floor(30.6001*(m+1))+D+B-1524.5 + utH/24;
+  const d=JD-2451545.0; let lst=(280.46061837+360.98564736629*d)+OBS_LON_DEG;     // GMST + longitude
+  return (((lst%360)+360)%360)*Math.PI/180;
+}
+function updateStarMap(){
+  if (!starMap) return;
+  const vis = uNight.value > 0.012; starMap.grp.visible = vis; if (!vis) return;
+  const tgt = (controls && controls.target) ? controls.target : (activeCam||camera).position;
+  starMap.grp.position.set(tgt.x, 0, tgt.z);                                      // follow like the sky dome
+  const th=_localSiderealRad(), st=Math.sin(th), ct=Math.cos(th), sp=Math.sin(OBS_LAT), cp=Math.cos(OBS_LAT);
+  _scC0.set(-st, cp*ct, sp*ct); _scC1.set(ct, cp*st, sp*st); _scC2.set(0, sp, -cp);  // equatorial → local horizontal (world y-up, north=-Z)
+  _scM.makeBasis(_scC0,_scC1,_scC2); starMap.grp.quaternion.setFromRotationMatrix(_scM);
+  for (const s of starMap.labs) s.material.opacity = uNight.value*0.9;
+}
+
 function buildLabels(){
   for (const isl of ISLANDS){ const sp=makeLabelSprite(isl.name, 0xffffff, 14);   // ~14 world units tall
     sp.position.set(isl.x, Math.max(isl.h,6)+13, isl.z); scene.add(sp); labelEls.push({ sp, isl }); }
@@ -2761,7 +2884,7 @@ function updateFoamClaws(t){
 //  crests (spaced apart), oriented down-wave, riding the Gerstner-displaced surface.
 // ============================================================================
 let breakers = null;
-let breakersOn = false;   // authored hero breakers still being refined (lit normals look muddy) — off by default; dev.breakers(true) to preview
+let breakersOn = true;    // authored hero breakers (unlit blue→white curl) — on; dev.breakers(false) to hide
 function buildBreakers(){
   const mix3=(a,b,s)=>[a[0]+(b[0]-a[0])*s, a[1]+(b[1]-a[1])*s, a[2]+(b[2]-a[2])*s];
   const cDeep=[0.063,0.157,0.337], cMid=[0.149,0.310,0.576], cPale=[0.655,0.780,0.906], cWhite=[0.968,0.949,0.902], cInk=[0.043,0.090,0.205];
@@ -2788,12 +2911,13 @@ function buildBreakers(){
     const g=new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
     g.setAttribute('color',    new THREE.Float32BufferAttribute(col,3));
-    g.setIndex(idx); g.computeVertexNormals();   // lit shading needs normals
+    g.setIndex(idx);
     return g;
   }
   const CAPB=5;
-  // LIT material so the curl reads as a 3D wave (not a flat loaf); vertex colours drive the blue→white gradient
-  const mat=new THREE.MeshStandardNodeMaterial({ side:THREE.DoubleSide, roughness:0.62, metalness:0.0 });
+  // UNLIT material: the baked deep-blue→white vertex gradient IS the shading (flat ukiyo-e look), so there are
+  // no normal artifacts on the double-sided curl (the lit version went muddy). The curl silhouette gives the form.
+  const mat=new THREE.MeshBasicNodeMaterial({ side:THREE.DoubleSide });
   mat.colorNode = attribute('color','vec3');
   const mesh=new THREE.InstancedMesh(breakerGeo(), mat, CAPB);
   mesh.frustumCulled=false; mesh.count=CAPB; mesh.visible=false; mesh.renderOrder=1;   // under the claw lip (renderOrder 2/3)
@@ -2962,6 +3086,21 @@ function buildOcean() {
     hk.assign(mix(hk, vec3(0.275,0.490,0.710), smoothstep(0.52,0.84,hkT)));         // → mid cobalt #467db5
     hk.assign(mix(hk, vec3(0.655,0.780,0.906), smoothstep(0.88,1.0,hkT)));          // → pale sky-blue #A7C7E7 only at the crest tips
     col.assign(mix(col, hk, uHokusai));
+
+    // ---- Van Gogh "Starry Night" swirling IMPASTO (uVangogh) — curving directional brush-strokes in cobalt/
+    //      ultramarine with cream-yellow ridge highlights, advected along a swirl field so the sea reads as paint. ----
+    const q = xz.mul(0.05).add(vec2(time.mul(0.06), time.mul(-0.04)));
+    const w = vec2(fbm2(q).sub(0.5), fbm2(q.add(vec2(4.7,2.3))).sub(0.5)).mul(3.6);   // domain warp → the iconic swirls/eddies
+    const qs = q.add(w);
+    const strokes = fbm2(vec2(qs.x.mul(9.0), qs.y.mul(1.6)));                 // anisotropic → stretched brush streaks curving with the swirl
+    const flow = fbm2(qs.mul(0.7));                                          // big tonal masses
+    const ridge = smoothstep(0.15, 0.0, abs(strokes.sub(0.5)));              // bright impasto ridge at each brush edge
+    const vgDeep=vec3(0.043,0.094,0.345), vgMid=vec3(0.094,0.255,0.620), vgLite=vec3(0.36,0.55,0.88), vgCream=vec3(0.97,0.86,0.40);
+    const vg = mix(vgDeep, vgMid, smoothstep(0.30,0.62,strokes)).toVar();
+    vg.assign(mix(vg, vgLite, smoothstep(0.62,0.86,strokes)));
+    vg.assign(mix(vg, vgCream, ridge.mul(0.55).add(smoothstep(0.90,1.0,strokes).mul(0.5))));   // cream ridges + crest sparkle
+    vg.assign(vg.mul(float(0.74).add(flow.mul(0.5))).add(vgLite.mul(smoothstep(0.2,1.6,wh).mul(0.30))));
+    col.assign(mix(col, vg, uVangogh.mul(0.9)));
 
     // ---- FRONT-vs-BACK split (the Great Wave's key move) — the normal's horizontal lean tells which face we're on:
     // pointing WITH wave travel = the front/underbelly (breaking face) → force the two dark Prussian blues & no foam;
@@ -4105,6 +4244,7 @@ function buildPanel() {
   addSlider(s, 'Day length', P, 'dayLength', 20, 600, 10, v=>v.toFixed(0)+'s');
   addSlider(s, 'Shadow depth', P, 'shadowDepth', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Atmosphere (god rays / haze / bloom)', P, 'atmosphere', 0, 1, 0.05, v=>v.toFixed(2));
+  addMoonSlider(s, 'Moon phase (dim for stars)', P, 'moonPhase');
   ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
   addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
 
@@ -4172,7 +4312,42 @@ function addSlider(parent, label, obj, key, min, max, step, fmt, onChange){
   inp.oninput=()=>{ obj[key]=parseFloat(inp.value); val.textContent=fmt?fmt(obj[key]):obj[key]; if(onChange) onChange(obj[key]); saveSettings(); };
   sliderRefs[key]={inp,val,fmt};
 }
-function syncSlider(key){ const r=sliderRefs[key]; if(!r)return; r.inp.value=P[key]; r.val.textContent=r.fmt?r.fmt(P[key]):P[key]; }
+function syncSlider(key){ const r=sliderRefs[key]; if(!r)return; if(r.render){ r.render(); return; } r.inp.value=P[key]; r.val.textContent=r.fmt?r.fmt(P[key]):P[key]; }
+// draw a moon at illumination fraction p (0 = new/dark → 0.5 = half → 1 = full), waxing (lit on the right)
+function drawMoonPhase(cv, p){
+  const ctx=cv.getContext('2d'), W=cv.width, H=cv.height, R=Math.min(W,H)/2-1.5, cx=W/2, cy=H/2;
+  ctx.clearRect(0,0,W,H);
+  ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,R,0,7); ctx.clip();
+  ctx.fillStyle='#0c1226'; ctx.fillRect(0,0,W,H);                 // dark moon base
+  const f=Math.max(0,Math.min(1,p)), tr=R*Math.cos(Math.PI*f);    // terminator semi-width (f=0→R, .5→0, 1→−R)
+  ctx.fillStyle='#eaf0ff';                                        // lit silver
+  ctx.beginPath();
+  ctx.arc(cx,cy,R, -Math.PI/2, Math.PI/2, false);                 // right limb, top→bottom
+  ctx.ellipse(cx,cy, Math.abs(tr), R, 0, Math.PI/2, -Math.PI/2, tr>0);  // terminator back to top
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(cx,cy,R,0,7); ctx.strokeStyle='rgba(176,198,255,0.55)'; ctx.lineWidth=1; ctx.stroke();
+}
+// slider whose draggable handle is a live moon showing the current phase
+function addMoonSlider(parent, label, obj, key){
+  const row=el('div','row',parent);
+  el('label','',row).textContent=label;
+  const val=el('div','val',row);
+  const track=el('div','',row);
+  track.style.cssText='grid-column:1 / 3; position:relative; height:24px; margin-top:4px; border-radius:12px; cursor:pointer;'+
+    'background:linear-gradient(90deg, #0c1226, #1a2c5a);';
+  const handle=el('div','',track);
+  handle.style.cssText='position:absolute; top:1px; width:22px; height:22px; transform:translateX(-50%); pointer-events:none;'+
+    'filter:drop-shadow(0 0 5px rgba(150,180,255,0.7));';
+  const cv=document.createElement('canvas'); cv.width=cv.height=22; cv.style.cssText='display:block;width:22px;height:22px;border-radius:50%';
+  handle.appendChild(cv);
+  function render(){ const t=Math.max(0,Math.min(1,obj[key])); handle.style.left=(6+t*88)+'%'; drawMoonPhase(cv,t); val.textContent=Math.round(t*100)+'%'; }
+  function setFromX(clientX){ const r=track.getBoundingClientRect(); let t=(clientX-r.left)/r.width; obj[key]=+Math.max(0,Math.min(1,t)).toFixed(2); render(); saveSettings(); }
+  track.addEventListener('pointerdown', (e)=>{ track.setPointerCapture(e.pointerId); setFromX(e.clientX);
+    const mv=(ev)=>setFromX(ev.clientX), up=()=>{ track.removeEventListener('pointermove',mv); track.removeEventListener('pointerup',up); };
+    track.addEventListener('pointermove',mv); track.addEventListener('pointerup',up); });
+  sliderRefs[key]={ render, val }; render();
+}
 function addToggle(parent, label, obj, key, onChange){
   const t=el('div','tg'+(obj[key]?' on':''),parent);
   el('div','box',t); const l=el('div','lab',t); l.textContent=label;

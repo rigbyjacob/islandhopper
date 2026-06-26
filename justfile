@@ -77,3 +77,17 @@ clean: stop
 pack:
     node build/pack.js
     @ls -lh dist/index.html
+
+# Clear stale git lock files (a concurrent host git process keeps leaving .git/*.lock behind,
+# which blocks commits). Safe to run whenever a commit fails with "Unable to create ... .lock".
+unlock:
+    @rm -f .git/index.lock .git/HEAD.lock .git/refs/heads/*.lock .git/objects/*/tmp_obj_* 2>/dev/null; echo "git locks cleared"
+
+# Clear locks, then stage + commit everything:  just save "your message"
+save msg:
+    @rm -f .git/index.lock .git/HEAD.lock .git/refs/heads/*.lock 2>/dev/null || true
+    git add -A && git commit -m "{{msg}}"
+
+# Build the real star catalog (one-time / when you want fresh data): node fetches d3-celestial data
+stars:
+    node build/build_starmap.js
