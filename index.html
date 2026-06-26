@@ -391,10 +391,27 @@ const REGIONS = {
 // land elevation is sampled straight from the GEBCO grid in buildTerrainField).
 if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
   relief: { escale:22, steep:0.2, ridge:0.5, lift:2.2 },   // arid rolling Cycladic hills, not volcanic spires
-  palette: { land: {                                       // arid Cyclades: dry golden scrub + pale limestone, almost no lush green
-    seabed:0x1d6c84, wetsand:0xc2a266, sand:0xeaddb4,
-    grass:0xb6a85f, forest:0x8f8a4e, rock:0xc3b6a0, cliff:0x9c917b,
-  } },
+  palette: {                                               // arid Cyclades: dry golden scrub + pale limestone, almost no lush green
+    land: { seabed:0x1d6c84, wetsand:0xc2a266, sand:0xeaddb4,
+            grass:0xb6a85f, forest:0x8f8a4e, rock:0xc3b6a0, cliff:0x9c917b },
+    shrub: [0x97914e, 0x7c7a44],                            // muted olive/sage scrub (thyme & low brush), not lush green
+  },
+  flora: { palms:false },                                  // no palms in the Cyclades — arid scrub only
+  // real Aegean town locations (lon,lat,weight) → whitewashed villages + night lights
+  cities: [
+    [24.94,37.44,40],  // Ermoupoli (Syros)
+    [25.33,37.45,30],  // Mykonos (Chora)
+    [25.38,37.10,24],  // Naxos (Chora)
+    [25.15,37.08,22],  // Parikia (Paros)
+    [25.43,36.42,26],  // Fira (Santorini)
+    [25.38,36.46,14],  // Oia (Santorini)
+    [25.16,37.54,14],  // Tinos (Chora)
+    [24.94,37.84,12],  // Andros (Chora)
+    [25.28,36.72,10],  // Ios (Chora)
+    [24.71,36.98,8],   // Apollonia (Sifnos)
+    [25.03,37.04,5],   // Antiparos
+    [25.86,36.83,6],   // Katapola (Amorgos)
+  ],
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
@@ -2219,14 +2236,15 @@ function makeFireballTexture(){
     const o=(j*N+i)*4; d[o]=d[o+1]=d[o+2]=255; d[o+3]=Math.round(255*a*a); }   // squared → very soft feathered edge
   ctx.putImageData(img,0,0); return new THREE.CanvasTexture(c);
 }
-// real city locations (lon,lat,population-weight) → light clusters; San Juan metro is the standout
-const CITIES = [
+// real city locations (lon,lat,population-weight) → light clusters + town motifs. Region-driven.
+const CITY_LL = REGION.cities || [
   [-66.06,18.46,100],[-66.04,18.23,28],[-66.61,18.01,30],[-66.72,18.45,18],[-65.83,18.15,12],[-65.65,18.33,10], // Puerto Rico
   [-65.44,18.15,4],[-65.30,18.30,3],                                                                            // Vieques, Culebra
   [-64.93,18.34,16],[-64.73,18.33,4],[-64.62,18.42,9],[-64.43,18.45,3],                                         // USVI/BVI
   [-63.07,18.06,15],[-63.05,18.22,5],[-62.85,17.90,5],[-62.98,17.49,3],[-63.24,17.63,3],                        // St Martin..Saba
   [-62.72,17.30,12],[-62.62,17.14,5],[-61.85,17.12,15],[-61.83,17.63,3],[-62.21,16.75,4],[-61.73,16.24,12],     // Kitts..Guadeloupe
-].map(([lon,lat,w]) => { const p = proj(lon,lat); return { x:p.x, z:p.z, w }; });
+];
+const CITIES = CITY_LL.map(([lon,lat,w]) => { const p = proj(lon,lat); return { x:p.x, z:p.z, w }; });
 
 function buildIslandLights(){
   const tex = makeDotTexture();
@@ -2299,6 +2317,7 @@ function makePalm(o){   // o: {trunkH, lean, nf, frondLen, droop, trunkR}
   return mergeGeos(geos);
 }
 function buildPalms(){
+  if (REGION.flora && REGION.flora.palms===false) return;   // arid regions (Cyclades) have no palms
   const variants = [
     makePalm({ trunkH:5.2, lean:0.02, nf:8, frondLen:3.3, droop:0.55, trunkR:0.24 }),  // tall
     makePalm({ trunkH:3.2, lean:0.06, nf:9, frondLen:2.6, droop:0.85, trunkR:0.28 }),  // short, bushy, heavy droop
@@ -2331,9 +2350,10 @@ function buildPalms(){
 // ---- low shrub / bush ground cover: merged blobby geometry, scattered densely on lowlands ----
 function makeBush(){
   const geos=[];
+  const sc = (REGION.palette && REGION.palette.shrub) || [0x47853a, 0x396e2f];   // [light,dark]; Caribbean lush green default
   for (let i=0;i<3;i++){ const s=new THREE.IcosahedronGeometry(0.55+Math.random()*0.3, 0);
     s.translate((Math.random()-0.5)*0.7, 0.4+Math.random()*0.25, (Math.random()-0.5)*0.7);
-    setGeoColor(s, i%2 ? 0x396e2f : 0x47853a); geos.push(s); }
+    setGeoColor(s, sc[i%2]); geos.push(s); }
   return mergeGeos(geos);
 }
 function buildShrubs(){
@@ -2359,29 +2379,42 @@ function buildShrubs(){
 
 // ---- colonial town motifs: clustered pastel buildings + a church steeple, near the city markers ----
 function buildTownMotifs(){
-  const wallCols=[0xead6b8,0xe8b7a0,0xcfe0d0,0xf0d59a,0xd8b0c8,0xefe6d2], roofCol=0x8a4b39;
-  const churchCol=0xf3efe6, spireCol=0x9a5a3a;
+  const aeg = REGION.id==='aegean';
+  // Cyclades: whitewashed cubic houses, flat roofs, the odd blue-domed church. Caribbean: pastel walls + tile roofs.
+  const wallCols = aeg ? [0xf3f1ea,0xeef0ec,0xf7f4ec,0xfbfaf4,0xe9ebe8] : [0xead6b8,0xe8b7a0,0xcfe0d0,0xf0d59a,0xd8b0c8,0xefe6d2];
+  const roofCol = aeg ? 0xeae8e0 : 0x8a4b39;
+  const churchCol=0xf5f3ec, domeCol = aeg ? 0x2f6fb0 : 0x9a5a3a;   // iconic blue dome vs colonial spire
   const onLand=(x,z)=>terrainHeight(x,z)>2.0;
   const geos=[];
   for (const ct of CITIES){
     if (ct.w<3) continue;
-    const count=clampJS(Math.round(Math.sqrt(ct.w)*1.4), 2, 16), spread=4+Math.sqrt(ct.w)*2.0;
+    const count=clampJS(Math.round(Math.sqrt(ct.w)*(aeg?2.7:1.4)), aeg?3:2, aeg?34:16), spread=(aeg?2.6:4)+Math.sqrt(ct.w)*(aeg?1.1:2.0);
     let placed=0, tries=0;
     while (placed<count && tries<count*16){ tries++;
       const a=Math.random()*Math.PI*2, rr=Math.pow(Math.random(),0.7)*spread;
       const x=ct.x+Math.cos(a)*rr, z=ct.z+Math.sin(a)*rr; if (!onLand(x,z)) continue;
       const base=terrainHeight(x,z);
-      const w=1.4+Math.random()*1.6, dp=1.4+Math.random()*1.6, h=1.6+Math.random()*(2.0+ct.w*0.04);
+      const w=(aeg?0.9:1.4)+Math.random()*(aeg?1.0:1.6), dp=(aeg?0.9:1.4)+Math.random()*(aeg?1.0:1.6), h= aeg ? (1.1+Math.random()*1.2) : (1.6+Math.random()*(2.0+ct.w*0.04));
       const b=new THREE.BoxGeometry(w,h,dp); b.translate(x, base+h/2, z); setGeoColor(b, wallCols[(Math.random()*wallCols.length)|0]); geos.push(b);
-      const rf=new THREE.ConeGeometry(Math.max(w,dp)*0.62, 0.8+Math.random()*0.6, 4); rf.rotateY(Math.PI/4); rf.translate(x, base+h+0.4, z); setGeoColor(rf, roofCol); geos.push(rf);
+      if (aeg){                                                     // flat white roof: a thin cap, no tile cone
+        const cap=new THREE.BoxGeometry(w*1.04, 0.18, dp*1.04); cap.translate(x, base+h+0.09, z); setGeoColor(cap, roofCol); geos.push(cap);
+      } else {
+        const rf=new THREE.ConeGeometry(Math.max(w,dp)*0.62, 0.8+Math.random()*0.6, 4); rf.rotateY(Math.PI/4); rf.translate(x, base+h+0.4, z); setGeoColor(rf, roofCol); geos.push(rf);
+      }
       placed++;
     }
-    if (ct.w>=8){                                                  // a church/landmark tower for sizable towns
+    if (ct.w>=8){                                                  // a church/landmark for sizable towns
       let cx=ct.x, cz=ct.z, ok=onLand(cx,cz), t=0;
       while (!ok && t<12){ t++; const a=Math.random()*Math.PI*2, rr=Math.random()*spread*0.5; cx=ct.x+Math.cos(a)*rr; cz=ct.z+Math.sin(a)*rr; ok=onLand(cx,cz); }
       if (ok){ const base=terrainHeight(cx,cz);
-        const tower=new THREE.BoxGeometry(1.5,5.0,1.5); tower.translate(cx, base+2.5, cz); setGeoColor(tower, churchCol); geos.push(tower);
-        const spire=new THREE.ConeGeometry(1.1,2.4,4); spire.rotateY(Math.PI/4); spire.translate(cx, base+5.0+1.2, cz); setGeoColor(spire, spireCol); geos.push(spire);
+        if (aeg){                                                   // whitewashed chapel topped with a blue dome
+          const body=new THREE.BoxGeometry(2.0,2.2,2.0); body.translate(cx, base+1.1, cz); setGeoColor(body, churchCol); geos.push(body);
+          const drum=new THREE.CylinderGeometry(0.7,0.7,0.6,12); drum.translate(cx, base+2.5, cz); setGeoColor(drum, churchCol); geos.push(drum);
+          const dome=new THREE.SphereGeometry(0.78,14,8,0,Math.PI*2,0,Math.PI/2); dome.translate(cx, base+2.8, cz); setGeoColor(dome, domeCol); geos.push(dome);
+        } else {
+          const tower=new THREE.BoxGeometry(1.5,5.0,1.5); tower.translate(cx, base+2.5, cz); setGeoColor(tower, churchCol); geos.push(tower);
+          const spire=new THREE.ConeGeometry(1.1,2.4,4); spire.rotateY(Math.PI/4); spire.translate(cx, base+5.0+1.2, cz); setGeoColor(spire, domeCol); geos.push(spire);
+        }
       }
     }
   }
