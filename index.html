@@ -1547,7 +1547,8 @@ async function init() {
     const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
     const useGodray = !useRain && !useOutline && godrayActive && godrayPost && P.atmosphere > 0.01;   // atmosphere pass: god rays (sun-gated inside) + bloom + haze
     try {
-      if (worldMapOpen && globeScene){ updateGlobe(dt); renderer.render(globeScene, globeCam); }
+      if (_swapping){ /* hold the present while a region's pipelines compile — the dive colour-fade covers the screen */ }
+      else if (worldMapOpen && globeScene){ updateGlobe(dt); renderer.render(globeScene, globeCam); }
       else if (fleetView==='grid'){ renderFleetGrid(); }
       else if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
       else if (useOutline){ outlineScenePass.camera = activeCam; outlineScenePass.scene = scene; outlinePost.render(); }
@@ -5480,7 +5481,11 @@ function buildWorldMap(){
   buildGlobe();
 }
 function openWorldMap(){ const ov=document.getElementById('worldmap'); if(!ov) return; ov.classList.remove('hidden');
-  worldMapOpen=true; _prevCtrlEnabled=controls?controls.enabled:false; if(controls) controls.enabled=false; faceRegion(REGION.id); }
+  worldMapOpen=true; _prevCtrlEnabled=controls?controls.enabled:false; if(controls) controls.enabled=false;
+  _diveZoom=null; _globeVel.x=_globeVel.y=0;
+  if (globeCam){ globeCam.position.set(0,0,4.0); globeCam.lookAt(0,0,0); }   // reset the dive-zoom so the reopen shows the full globe, not the patch we dove into
+  if (typeof _diveFade==='function') _diveFade(0);
+  faceRegion(REGION.id); }
 function closeWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) ov.classList.add('hidden');
   worldMapOpen=false; if(controls) controls.enabled=_prevCtrlEnabled; }
 function travelToRegion(id){ if(!REGIONS[id]||_diveZoom) return;
@@ -5488,10 +5493,10 @@ function travelToRegion(id){ if(!REGIONS[id]||_diveZoom) return;
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0,0,1));   // bring the patch dead-centre, then dive the camera straight into it
   _diveZoom={ t:0, dur:1.15, id, same:(id===REGION.id) };
 }
-function _diveLand(d){
+async function _diveLand(d){
   closeWorldMap();
-  if (!d.same) swapRegion(d.id);   // OTHER region: stream it in live under the dive fade — no reload, no load screen
-  startDescent();                  // fly the camera down onto the (now-current) region's boat
+  if (!d.same) await swapRegion(d.id);   // OTHER region: stream it in live under the dive fade — no reload, no load screen. await: build+compile the region before descending
+  startDescent();                        // fly the camera down onto the (now-current) region's boat
 }
 // fly the sailing camera down from high orbit to the normal view, reusing the free-fly cam (hands back to orbit cleanly)
 function startDescent(){
@@ -5528,14 +5533,20 @@ function teardownRegionWorld(){
   if (typeof islandLightsGroup!=='undefined' && islandLightsGroup){ while(islandLightsGroup.children.length){ const c=islandLightsGroup.children.pop(); c.material&&c.material.dispose&&c.material.dispose(); } }
   _heightTex = null; terrainMesh = null;
 }
-function swapRegion(id){
+let _swapping = false;   // while true the animate loop holds the 3D render (the dive colour-fade covers the screen) so we never present a half-built scene
+async function swapRegion(id){
   if (!REGIONS[id] || REGION.id===id) return;
+  _swapping = true;
   REGION = REGIONS[id];
   recomputeRegion();
   teardownRegionWorld();
   buildRegionWorld();
+  // precompile the new region's (heavy) WebGPU pipelines off the render path — rendering them before they're ready
+  // stalls the canvas present (the whole image freezes). compileAsync builds them, then rendering resumes cleanly.
+  try { await renderer.compileAsync(scene, camera); } catch(e){ console.warn('region compile', e); }
   Object.assign(boat3, { x:START_POS.x, z:START_POS.z, psi:_startPsi, u:8, v:0, r:0, thr:0.4, delta:0, grounded:false, assist:false });
   wpIdx = 0; path = null; planKey=''; targetRingKey=''; kf = new KalmanFilter(boat3.x, boat3.z); replan(boat3); applyTourPacing();
+  _swapping = false;
 }
 window.swapRegion = swapRegion;   // console helper: stream a region in live, e.g. swapRegion('japan')
 
