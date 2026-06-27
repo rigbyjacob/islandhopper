@@ -5314,10 +5314,7 @@ function makeRegionMarker(id, cur){      // a glowing outline ring on the surfac
   const disc=new THREE.Mesh(new THREE.CircleGeometry(0.05, 28),
     new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.22, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
   disc.rotation.x=-Math.PI/2; disc.position.y=0.002; g.add(disc);
-  const beam=new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.12, 12, 1, true),
-    new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.3, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
-  beam.position.y=0.06; g.add(beam);
-  g.userData.ring=ring; g.userData.disc=disc; g.userData.beam=beam; g.userData.pulse=Math.random()*6.2832;
+  g.userData.ring=ring; g.userData.disc=disc; g.userData.pulse=Math.random()*6.2832;   // (beacon cone removed — the region geometry marks the spot now)
   g.traverse(o=>{ if(o.isMesh) o.userData.regionId=id; }); g.userData.regionId=id;
   return g;
 }
