@@ -471,7 +471,7 @@ if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
     shrub: [0x44824a, 0x346030],
   },
   flora: { palms:false },
-  cities: [ [139.36,34.75,20], [139.10,34.97,16], [139.07,35.10,18], [139.27,34.37,8], [139.42,34.69,6] ],
+  cities: [ [139.36,34.75,20], [139.10,34.97,16], [139.07,35.10,18], [139.27,34.37,8], [139.42,34.69,6], [139.53,34.08,7], [139.15,34.21,5] ],   // + Miyakejima, Kōzushima
   cityLabels: [ ['Motomachi',139.36,34.75],['Itō',139.10,34.97],['Atami',139.07,35.10],['Niijima',139.27,34.37] ],
   // moody Hokusai sea: bigger swell, fresh wind, slightly hazy morning
   defaults: { timeOfDay:9.0, atmosphere:0.55, windDirDeg:300, windStrength:11, waveHeight:1.35, stormOn:false, stormIntensity:0.0 },
@@ -487,8 +487,8 @@ if (window.THAILAND) REGIONS.thailand = Object.assign({}, window.THAILAND, {
     shrub: [0x39882f, 0x256b22],
   },
   // palms ON (tropical) — leave flora default
-  cities: [ [98.39,7.88,40], [98.30,7.90,20], [98.92,8.06,18], [98.82,8.03,12], [99.08,7.62,8], [98.77,7.74,6] ],
-  cityLabels: [ ['Phuket',98.39,7.88],['Patong',98.30,7.90],['Krabi',98.92,8.06],['Ao Nang',98.82,8.03],['Ko Phi Phi',98.77,7.74] ],
+  cities: [ [98.39,7.88,40], [98.30,7.90,20], [98.92,8.06,18], [98.82,8.03,12], [99.08,7.62,8], [98.77,7.74,6], [98.53,8.45,14], [98.25,8.64,8] ],   // + Phang Nga town, Khao Lak
+  cityLabels: [ ['Phuket',98.39,7.88],['Patong',98.30,7.90],['Krabi',98.92,8.06],['Ao Nang',98.82,8.03],['Ko Phi Phi',98.77,7.74],['Phang Nga',98.53,8.45],['Khao Lak',98.25,8.64] ],
   // warm hazy tropical calm
   defaults: { timeOfDay:13.5, atmosphere:0.6, windDirDeg:225, windStrength:4, waveHeight:0.9, stormOn:false, stormIntensity:0.0 },
 });
@@ -1244,8 +1244,9 @@ function _cROUTE(){
   const tourNames = REGION.tour || ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
                      'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
   route = tourNames.map(n => BYNAME[n]).filter(Boolean);
-  if (route.length < 2) {                                  // unknown region → auto-tour the biggest islands, ordered into a loop
-    route = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0, 11);
+  if (route.length < 2) {                                  // unknown region → auto-tour the biggest NAMED islands, ordered into a loop
+    const named = ISLANDS.filter(i=>i.name && i.name!=='islet');
+    route = (named.length>=2 ? named : ISLANDS.slice()).sort((a,b)=>b.r-a.r).slice(0, 11);   // destinations should be real islands, never anonymous islets
     const cx=route.reduce((s,i)=>s+i.x,0)/route.length, cz=route.reduce((s,i)=>s+i.z,0)/route.length;
     route.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));   // angular order → smooth circuit
   }
@@ -1850,7 +1851,8 @@ function buildVehicles(){
   for (const d of defs){
     let rn = d.routeNames.filter(n=>BYNAME[n]);                 // keep only islands that exist in this region
     if (rn.length < 2){                                          // region without a hand-tuned route → a DISTINCT smooth loop per vehicle (different islands, direction & start)
-      const all = ISLANDS.slice().sort((a,b)=>b.r-a.r);
+      const _named = ISLANDS.filter(i=>i.name && i.name!=='islet');
+      const all = (_named.length>=3 ? _named : ISLANDS.slice()).sort((a,b)=>b.r-a.r);     // loop named islands, not anonymous islets
       let pick = _vi===0 ? all.slice(0, Math.min(7, all.length))                          // sub  → the main islands, a tighter inner loop
                : _vi===1 ? all.slice(0, Math.min(10, all.length))                         // plane→ a wide circuit of more islands
                :           all.filter((_,k)=>k%2===0).slice(0, Math.min(7, all.length));  // ufo  → every-other island, a different shape
