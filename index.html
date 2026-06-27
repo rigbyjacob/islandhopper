@@ -1676,9 +1676,9 @@ function buildSky() {
     const f  = normalize(warp.add(vec2(0.0012, 0.0008)));                              // flow direction (curves with the swirls)
     const pf = vec2(f.y.negate(), f.x);
     const along = base.dot(f), across = base.dot(pf);
-    const strokeA = _nfbm2(vec2(along.mul(7.0), across.mul(12.0)));                    // shorter along-flow → discrete dabs (modest anisotropy, not windswept)
-    const strokeB = _nfbm2(vec2(along.mul(14.0), across.mul(24.0)).add(vec2(2.3,5.1)));
-    const strokes = strokeA.mul(0.62).add(strokeB.mul(0.38));
+    const strokeA = _nfbm2(vec2(along.mul(5.0), across.mul(6.5)));                     // WIDER dabs: low across-freq → thick strokes (Van Gogh's loaded brush), modest anisotropy
+    const strokeB = _nfbm2(vec2(along.mul(10.0), across.mul(13.0)).add(vec2(2.3,5.1)));
+    const strokes = strokeA.mul(0.64).add(strokeB.mul(0.36));
     const skyVG = mix(vec3(0.016,0.042,0.145), vec3(0.060,0.155,0.385), smoothstep(0.34,0.74,swirl)).toVar();   // DEEP indigo → cobalt body
     skyVG.assign(skyVG.mul(float(0.70).add(strokes.mul(0.62))));                       // stronger impasto light/dark stroke modulation
     skyVG.assign(mix(skyVG, vec3(0.42,0.56,0.80), smoothstep(0.66,0.90,strokes).mul(0.45)));   // lighter cobalt brush dabs woven in
@@ -3163,8 +3163,11 @@ function buildLabels(){
 }
 function updateLabels(){
   const on = P.showLabels, tgtName = (P.mode==='tour' && route[wpIdx]) ? route[wpIdx].name : null;
-  const cam = activeCam || camera, k = 0.019;   // cap apparent near-size: world scale = min(base, k·distance)
-  const rescale = (sp)=>{ const d=sp.position.distanceTo(cam.position), ws=Math.min(sp.userData.base, k*d);
+  const cam = activeCam || camera, k = 0.019;   // cap apparent near-size: world scale = min(base·scale, k·distance)
+  // bigger maps view islands from further out, past the shrink threshold (base/k) → labels went tiny. Scale the
+  // cap with the map extent so labels keep a readable size out to the larger viewing distances of big regions.
+  const lblScale = Math.max(1, Math.min(3.5, Math.max(GRID.maxX-GRID.minX, GRID.maxZ-GRID.minZ)/1200));
+  const rescale = (sp)=>{ const d=sp.position.distanceTo(cam.position), ws=Math.min(sp.userData.base*lblScale, k*d);
     sp.scale.set(ws*sp.userData.aspect, ws, 1); };
   const curveY = (sp)=>{ if(sp.userData.baseY===undefined) sp.userData.baseY=sp.position.y;   // sink labels onto the curved world
     sp.position.y = sp.userData.baseY - curveDropJS(sp.position.x, sp.position.z); };
