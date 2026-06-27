@@ -5346,7 +5346,7 @@ function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0.25,0.15,1).normalize()); }   // bring the region to the front, tilted nicely
 function updateGlobe(){
   if (!globeSpin) return;
-  const a=window.innerWidth/window.innerHeight; if (Math.abs(globeCam.aspect-a)>1e-3){ globeCam.aspect=a; globeCam.updateProjectionMatrix(); }
+  const cv=renderer.domElement, a=cv.width/cv.height; if (Math.abs(globeCam.aspect-a)>1e-3){ globeCam.aspect=a; globeCam.updateProjectionMatrix(); }   // match the ACTUAL render-target aspect (not the window — they differ under an aspect-lock), or the sphere stretches
   if (!_globeDrag){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // drag momentum only — NO auto-spin
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
     _globeVel.x*=0.9; _globeVel.y*=0.9; }
