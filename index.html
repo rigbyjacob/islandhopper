@@ -693,6 +693,26 @@ function buildDistLand() {   // hex-distance to nearest blocked cell — mid-cha
   while (head<q.length){ const ci=q[head++], r=Math.floor(ci/GRID.cols), c=ci-r*GRID.cols;
     hexNbrs(c,r,nb); for(let k=0;k<nb.length;k+=2){ const ni=gIdx(nb[k],nb[k+1]); if(DLAND[ni]>DLAND[ci]+1){ DLAND[ni]=DLAND[ci]+1; q.push(ni); } } }
 }
+// ---- HIERARCHICAL A*: a coarse F×F abstraction of the nav grid. A goal-distance field on the coarse grid
+//      (obstacle-aware, routes around islands) becomes the heuristic for the fine A* — it explores far fewer
+//      cells on long paths across an archipelago, while never constraining the path (always finds a valid one).
+let COARSE=null, _coarseDist=null, _coarseKey=-1;
+function buildCoarseNav(){
+  if (!BLOCKED){ COARSE=null; return; }
+  const F=6, cc=Math.ceil(GRID.cols/F), cr=Math.ceil(GRID.rows/F), free=new Uint8Array(cc*cr);
+  for (let r=0;r<GRID.rows;r++) for (let c=0;c<GRID.cols;c++) if(!BLOCKED[gIdx(c,r)]) free[((r/F)|0)*cc+((c/F)|0)]=1;   // coarse cell open if ANY fine cell is open (keeps channels)
+  COARSE={ F, cc, cr, free, cellW:F*GRID.dx }; _coarseKey=-1;
+}
+function coarseGoalDist(gc, gr){   // unit-cost 8-conn BFS from the goal's coarse cell over open coarse cells (cached per goal)
+  if (!COARSE) return null;
+  const { F, cc, cr, free } = COARSE, gC=((gr/F)|0)*cc+((gc/F)|0);
+  if (_coarseKey===gC && _coarseDist) return _coarseDist;
+  const dist=new Int32Array(cc*cr).fill(-1), q=[gC]; let head=0; dist[gC]=0;
+  const NB=[1,0, -1,0, 0,1, 0,-1, 1,1, 1,-1, -1,1, -1,-1];
+  while(head<q.length){ const ci=q[head++], cx=ci%cc, cy=(ci/cc)|0;
+    for(let k=0;k<16;k+=2){ const nx=cx+NB[k], ny=cy+NB[k+1]; if(nx<0||nx>=cc||ny<0||ny>=cr) continue; const ni=ny*cc+nx; if(!free[ni]||dist[ni]>=0) continue; dist[ni]=dist[ci]+1; q.push(ni); } }
+  _coarseKey=gC; _coarseDist=dist; return dist;
+}
 function nearestFree(c,r){ if(!BLOCKED[gIdx(c,r)]) return {c,r};   // BFS outward to the nearest open hex
   const seen=new Uint8Array(GRID.cols*GRID.rows), nb=[]; let frontier=[c,r]; seen[gIdx(c,r)]=1;
   for(let d=0; d<240 && frontier.length; d++){ const nf=[];
@@ -813,7 +833,16 @@ function planRaw(sx, sz, gx, gz) {
   const sC=worldToCell(sx,sz), gC=worldToCell(gx,gz);
   const s=nearestFree(sC.c,sC.r), g=nearestFree(gC.c,gC.r);
   _gScore.fill(Infinity); _came.fill(-1); _closed.fill(0);
-  const gp=cellCenter(g.c,g.r), h=(c,r)=>{ const p=cellCenter(c,r); return Math.hypot(p.x-gp.x,p.z-gp.z); };
+  const gp=cellCenter(g.c,g.r);
+  // HIERARCHICAL heuristic: max(straight-line, obstacle-aware coarse goal-distance) — routes the fine search
+  // around big landmasses. Default OFF: with weighted A* + scattered islands (open channels), it gives no
+  // speedup here (the flat search is already ~9ms for a whole-archipelago path). Enable (P.hierNav=true) for
+  // continent-scale regions with large concave coastlines, where it cuts exploration.
+  const cgd = (P.hierNav===true) ? coarseGoalDist(g.c, g.r) : null;
+  const CF = COARSE ? COARSE.F : 1, CC = COARSE ? COARSE.cc : 0, CW = COARSE ? COARSE.cellW*0.9 : 0;
+  const h = cgd
+    ? (c,r)=>{ const p=cellCenter(c,r), eu=Math.hypot(p.x-gp.x,p.z-gp.z); const cd=cgd[((r/CF)|0)*CC+((c/CF)|0)]; return cd>=0 ? Math.max(eu, cd*CW) : eu; }
+    : (c,r)=>{ const p=cellCenter(c,r); return Math.hypot(p.x-gp.x,p.z-gp.z); };
   const WA=1.18;   // weighted A* — slightly greedy heuristic explores far fewer cells (~6x faster) for near-optimal paths
   const open=new Heap(), sI=gIdx(s.c,s.r); _gScore[sI]=0; open.push({c:s.c,r:s.r,f:h(s.c,s.r)*WA});
   let cu=null;
@@ -1348,6 +1377,7 @@ async function init() {
 
   BLOCKED = buildBlocked();
   buildDistLand();
+  buildCoarseNav();   // hierarchical-A* coarse abstraction (heuristic for the fine search)
   kf = new KalmanFilter(boat3.x, boat3.z);
 
   // heading the boat at the first waypoint to start
@@ -4242,6 +4272,11 @@ function updateFlyCam(dt){
 // dev.lookAt(px,py,pz, tx,ty,tz) — stand at p, look at t.   dev.sun(distBack) — frame the sun over the boat.
 // dev.time(18.2) — set time of day (pauses auto-cycle).      dev.atmo(0.8) — set the Atmosphere slider.
 window.dev = {
+  // hierarchical-A* benchmark: time a long boat→far-island plan with the coarse heuristic on vs off
+  navBench(){ if(!BLOCKED) return 'no grid'; const far=ISLANDS.slice().sort((a,b)=>Math.hypot(b.x-boat3.x,b.z-boat3.z)-Math.hypot(a.x-boat3.x,a.z-boat3.z))[0]||{x:GRID.maxX,z:GRID.maxZ};
+    const run=(on)=>{ P.hierNav=on; _coarseKey=-1; const t0=performance.now(); let pts=0; for(let i=0;i<25;i++){ const r=planRaw(boat3.x,boat3.z,far.x,far.z); pts=r.pts.length; } return {ms:+( (performance.now()-t0)/25 ).toFixed(2), pts}; };
+    const flat=run(false), hier=run(true); P.hierNav=true;
+    return { to:far.name, flat, hier, speedup:+(flat.ms/Math.max(hier.ms,0.001)).toFixed(2)+'x' }; },
   lookAt(px,py,pz, tx,ty,tz){ if(!flyMode) setFly(true);
     flyState.pos.set(px,py,pz);
     const dx=tx-px, dy=ty-py, dz=tz-pz, l=Math.hypot(dx,dy,dz)||1;
