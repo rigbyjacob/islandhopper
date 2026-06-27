@@ -76,7 +76,7 @@ clean: stop
 # stays editable; packing inlines them back into a single portable file.
 pack:
     node build/pack.js
-    @ls -lh dist/index.html
+    @ls -lh dist/index.html docs/index.html
 
 # Clear stale git lock files (a concurrent host git process keeps leaving .git/*.lock behind,
 # which blocks commits). Safe to run whenever a commit fails with "Unable to create ... .lock".

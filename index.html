@@ -142,7 +142,7 @@
 <div id="overlay">
   <div class="box">
     <div class="spinner"></div>
-    <h2>Charting the Leeward Islands…</h2>
+    <h2>Building the Planet…</h2>
     <p>Loading the WebGPU renderer and building the sea. First boot compiles shaders — a few seconds.</p>
     <div id="err"></div>
   </div>
@@ -5588,11 +5588,11 @@ const REGION_ART_COL = {
 // A little tabletop DIORAMA of each region on the globe: the REAL island outlines, sculpted into hills (coast→green→
 // rock) sitting in a tinted sea — so spinning the planet gives a believable sense of each archipelago before you dive.
 const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', aegean:'med', japan:'temp', sweden:'nord' };
-const _PAL = {   // per-biome natural palette: sea, beach, vegetated lowland, rocky peak
-  trop:{ sea:0x1f86ab, beach:0xe7d8aa, low:0x4ea049, peak:0x6f8a4e },
-  med: { sea:0x2a7ea2, beach:0xdac99a, low:0x9aa05c, peak:0xb89a62 },
-  temp:{ sea:0x215f86, beach:0xccbf98, low:0x53853f, peak:0x9a8f72 },
-  nord:{ sea:0x1c4763, beach:0xa9a786, low:0x46673b, peak:0x6c705c },   // dark steel-blue Baltic, NOT turquoise
+const _PAL = {   // per-biome palette: sea, beach, vegetated lowland, rocky peak — punchy & saturated so the dioramas read as FUN destinations against the grayscale Earth
+  trop:{ sea:0x16b4dd, beach:0xf6e6ad, low:0x33c43f, peak:0x8fb44a },   // vivid tropical cyan, bright sand, lush jungle green
+  med: { sea:0x1fa6d2, beach:0xefdca0, low:0xbcc25e, peak:0xd6ad5e },   // Aegean blue + olive/terracotta hills
+  temp:{ sea:0x1f86bf, beach:0xe0d09c, low:0x5cb23f, peak:0xb1a37e },   // bright cobalt sea, fresh green
+  nord:{ sea:0x1f5c7e, beach:0xc2bd92, low:0x5a8a3f, peak:0x868a6c },   // steel-blue Baltic (kept cool) but brighter pine & granite
 };
 function buildRegionPatch(r){
   let polys = (r.islandPolys||[]).filter(p=>{ const ring=p.r||p.ring; return ring && ring.length>=4; });
@@ -5608,29 +5608,49 @@ function buildRegionPatch(r){
   const cBeach=new THREE.Color(pal.beach), cLow=new THREE.Color(pal.low), cPeak=new THREE.Color(pal.peak);
 
   // plinth (a tile seated on the globe) + a tinted sea the islands sit IN
-  const base=new THREE.Mesh(new THREE.CylinderGeometry(R*1.05, R*0.93, 0.05, 56),
+  const base=new THREE.Mesh(new THREE.CylinderGeometry(R*1.05, R*0.93, 0.05, 128),
     new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
   base.position.y=0.025; grp.add(base);
-  const sea=new THREE.Mesh(new THREE.CircleGeometry(R, 56),
-    new THREE.MeshStandardMaterial({ color:pal.sea, roughness:0.38, metalness:0.0 }));
+  const sea=new THREE.Mesh(new THREE.CircleGeometry(R, 128),
+    new THREE.MeshStandardMaterial({ color:pal.sea, roughness:0.34, metalness:0.0, emissive:new THREE.Color(pal.sea).multiplyScalar(0.28), emissiveIntensity:1.0 }));   // faint self-glow keeps the lagoon bright & vivid
   sea.rotation.x=-Math.PI/2; sea.position.y=0.052; grp.add(sea);
 
-  // sculpted island hills — a coast→mid→peak fan per real outline, vertex-shaded beach→green→rock
-  const landMat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.86, metalness:0.0, side:THREE.DoubleSide });
-  const seaY=0.05, PEAK=0.062;
+  // sculpted island hills — each real outline becomes a stack of concentric rings (coast→summit) with a smooth
+  // dome profile + smooth-shaded normals → rounded hills, not faceted cones. Vertex-coloured beach→green→rock.
+  const landMat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.72, metalness:0.0, side:THREE.DoubleSide });
+  const seaY=0.05, PEAK=0.062, RINGS=8;
+  const lerp3=(a,b,t)=>[a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+  const beachC=[cBeach.r,cBeach.g,cBeach.b], lowC=[cLow.r,cLow.g,cLow.b];
+  const _resampleRing=(ring,M)=>{                                        // re-sample a closed ring to M evenly-spaced points (arc length) for clean strips
+    const N=ring.length, cum=[0]; let per=0;
+    for(let i=0;i<N;i++){ const a=ring[i], b=ring[(i+1)%N]; per+=Math.hypot(b[0]-a[0],b[1]-a[1]); cum.push(per); }
+    if(per<1e-9) return null;
+    const out=[];
+    for(let m=0;m<M;m++){ const target=(m/M)*per; let j=0; while(j<N && cum[j+1]<target) j++; if(j>=N) j=N-1;
+      const t=(target-cum[j])/((cum[j+1]-cum[j])||1), a=ring[j], b=ring[(j+1)%N];
+      out.push([a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t]); }
+    return out;
+  };
   for (const p of polys){ let ring=(p.r||p.ring).map(v=>[(v[0]-cx)*scale,(v[1]-cz)*scale]);
     if (ring.length>1 && ring[0][0]===ring[ring.length-1][0] && ring[0][1]===ring[ring.length-1][1]) ring=ring.slice(0,-1);
-    const N=ring.length; if (N<3) continue;
-    let ax=0,az=0; for (const q of ring){ ax+=q[0]; az+=q[1]; } ax/=N; az/=N;
+    if (ring.length<3) continue;
+    const M=clampJS(Math.round(ring.length*1.4),36,80);                 // angular resolution of the rounded hill
+    ring=_resampleRing(ring,M); if(!ring) continue;
+    let ax=0,az=0; for (const q of ring){ ax+=q[0]; az+=q[1]; } ax/=M; az/=M;
     const ih=clampJS((p.h||1)/maxH,0.25,1), h=ih*PEAK;
-    const peakCol=cLow.clone().lerp(cPeak, clampJS((ih-0.5)*2,0,1));     // tall island → rocky peak, short → green
+    const peakC=lerp3(lowC,[cPeak.r,cPeak.g,cPeak.b],clampJS((ih-0.5)*2,0,1));   // tall island → rocky peak, short → stays green
+    const colAt=(hf)=> hf<0.12 ? beachC : hf<0.45 ? lerp3(beachC,lowC,(hf-0.12)/0.33) : lerp3(lowC,peakC,(hf-0.45)/0.55);
     const V=[], C=[], idx=[];
-    V.push(ax, seaY+h, az); C.push(peakCol.r,peakCol.g,peakCol.b);        // 0: summit
-    for (let i=0;i<N;i++){ const mx=ring[i][0]+(ax-ring[i][0])*0.5, mz=ring[i][1]+(az-ring[i][1])*0.5;   // 1..N: mid slope
-      V.push(mx, seaY+h*0.5, mz); C.push(cLow.r,cLow.g,cLow.b); }
-    for (let i=0;i<N;i++){ V.push(ring[i][0], seaY-0.003, ring[i][1]); C.push(cBeach.r,cBeach.g,cBeach.b); }   // N+1..2N: coast
-    for (let i=0;i<N;i++){ idx.push(0, 1+i, 1+(i+1)%N); }                 // summit → mid fan
-    for (let i=0;i<N;i++){ const mi=1+i, mj=1+(i+1)%N, bi=1+N+i, bj=1+N+(i+1)%N; idx.push(mi,bi,bj, mi,bj,mj); }   // mid → coast skirt
+    for(let k=0;k<RINGS;k++){                                           // concentric rings, coast (k=0) → near-summit
+      const t=k/RINGS, prof=Math.sin(t*Math.PI*0.5), shrink=t;          // sine profile = rounded dome; shrink contracts toward centroid
+      const y=seaY + h*prof - (k===0?0.004:0), col=colAt(prof);
+      for(let i=0;i<M;i++){ const vx=ring[i][0]+(ax-ring[i][0])*shrink, vz=ring[i][1]+(az-ring[i][1])*shrink;
+        V.push(vx,y,vz); C.push(col[0],col[1],col[2]); }
+    }
+    const apex=RINGS*M; V.push(ax, seaY+h, az); { const c=colAt(1); C.push(c[0],c[1],c[2]); }   // summit apex
+    for(let k=0;k<RINGS-1;k++){ const a=k*M, b=(k+1)*M;                 // quad strips between consecutive rings
+      for(let i=0;i<M;i++){ const j=(i+1)%M; idx.push(a+i,b+i,b+j, a+i,b+j,a+j); } }
+    { const a=(RINGS-1)*M; for(let i=0;i<M;i++){ const j=(i+1)%M; idx.push(a+i, apex, a+j); } }   // cap fan to apex
     const geo=new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(V,3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(C,3));
@@ -5643,8 +5663,8 @@ function buildRegionPatch(r){
 function buildGlobe(){
   globeScene=new THREE.Scene();
   globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,4.0);
-  globeScene.add(new THREE.HemisphereLight(0xeaf2ff, 0x1c2430, 0.78));   // lower ambient floor → deeper shadows (Ansel Adams chiaroscuro on the relief)
-  const dir=new THREE.DirectionalLight(0xffffff,1.85); dir.position.set(2.5,2,3.5); globeScene.add(dir);   // strong neutral key light
+  globeScene.add(new THREE.HemisphereLight(0xf4f9ff, 0x2a3340, 1.12));   // brighter sky fill so the coloured dioramas read vivid (not muddy) against the gray Earth
+  const dir=new THREE.DirectionalLight(0xfff6e8, 2.15); dir.position.set(2.5,2,3.5); globeScene.add(dir);   // warm sunny key light, still strong enough to model the relief
   const sg=new THREE.BufferGeometry(), N=700, sp=new Float32Array(N*3);
   for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(40+Math.random()*25); sp.set([v.x,v.y,v.z], i*3); }
   sg.setAttribute('position', new THREE.BufferAttribute(sp,3));
@@ -5666,7 +5686,7 @@ function buildGlobe(){
     const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
-    const labCol=new THREE.Color(artCol).lerp(new THREE.Color(0xffffff), r.id===REGION.id?0.55:0.4).getHex();   // art colour, lightened for legibility
+    const labCol=new THREE.Color(artCol).lerp(new THREE.Color(0xffffff), r.id===REGION.id?0.32:0.18).getHex();   // keep the art colour vivid & saturated (only a touch of white for legibility)
     const lab=_globeLabel(m.tag, labCol);
     lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R*1.18)); globeSpin.add(lab);
   }
@@ -5735,7 +5755,7 @@ function buildWorldMap(){
   const btn=document.createElement('div'); btn.id='wm-open'; btn.textContent='🌍 World'; btn.title='Travel to another region';
   btn.onclick=openWorldMap; document.body.appendChild(btn);
   const ov=document.createElement('div'); ov.id='worldmap'; ov.className='hidden';
-  ov.innerHTML = `<div class="wm-title">The Small Planet</div>
+  ov.innerHTML = `<div class="wm-title">Island Hopper</div>
     <div class="wm-hint">drag to spin the planet · click a region to set sail</div>
     <button class="wm-close">✕ stay here</button>`;
   document.body.appendChild(ov);

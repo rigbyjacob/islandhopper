@@ -16,6 +16,10 @@ const root = path.resolve(__dirname, '..');
 const srcPath = path.join(root, 'index.html');
 const outDir = path.join(root, 'dist');
 const outPath = path.join(outDir, 'index.html');
+// GitHub Pages publish dir: serve the same self-contained file from /docs on the
+// default branch (Settings → Pages → Deploy from a branch → main / docs).
+const docsDir = path.join(root, 'docs');
+const docsPath = path.join(docsDir, 'index.html');
 
 let html = fs.readFileSync(srcPath, 'utf8');
 
@@ -36,5 +40,11 @@ if (count === 0) {
 fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(outPath, html);
 
+// Also publish to /docs for GitHub Pages. .nojekyll stops Pages' Jekyll pass from
+// mangling the static file (and is required if any asset path starts with "_").
+fs.mkdirSync(docsDir, { recursive: true });
+fs.writeFileSync(docsPath, html);
+fs.writeFileSync(path.join(docsDir, '.nojekyll'), '');
+
 const mb = (Buffer.byteLength(html) / (1024 * 1024)).toFixed(2);
-console.log(`pack: inlined ${count} data file(s) → dist/index.html (${mb} MB)`);
+console.log(`pack: inlined ${count} data file(s) → dist/index.html + docs/index.html (${mb} MB)`);
