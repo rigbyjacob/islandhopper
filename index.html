@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Caribbean PID Helmsman</title>
+<title>Island Hopper</title>
 <style>
   :root { color-scheme: dark; --pad: 12px; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #06121f;
@@ -60,14 +60,42 @@
     background: rgba(8,20,33,.82); backdrop-filter: blur(9px); border: 1px solid rgba(140,200,255,.22);
     border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.45); user-select: none; pointer-events: auto; }
   #skullBtn:hover { background: rgba(30,60,90,.9); }
+  /* demo mode stepper */
+  #demobar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 120; display: flex; align-items: center; gap: 10px;
+    background: rgba(8,18,30,.82); backdrop-filter: blur(10px); border: 1px solid rgba(140,200,255,.22); border-radius: 14px; padding: 8px 12px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5); font: 13px ui-sans-serif, system-ui; color: #dfeefb; max-width: 92vw; }
+  #demobar .demo-nav { font-size: 22px; line-height: 1; padding: 2px 9px; cursor: pointer; opacity: .7; border-radius: 8px; user-select: none; }
+  #demobar .demo-nav:hover { opacity: 1; background: rgba(140,200,255,.14); }
+  #demobar .demo-mid { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+  #demobar .demo-name { font-weight: 650; font-size: 13.5px; letter-spacing: .2px; }
+  #demobar .demo-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: 70vw; }
+  #demobar .demo-pill { padding: 4px 11px; border-radius: 999px; cursor: pointer; background: rgba(140,200,255,.1); border: 1px solid rgba(140,200,255,.18); white-space: nowrap; font-size: 12px; opacity: .85; }
+  #demobar .demo-pill:hover { background: rgba(140,200,255,.2); opacity: 1; }
+  #demobar .demo-pill.active { background: #2f7bd6; border-color: #5b9fe6; color: #fff; opacity: 1; }
+  #demobar .demo-exit { font-size: 14px; padding: 4px 9px; cursor: pointer; opacity: .6; border-radius: 8px; user-select: none; }
+  #demobar .demo-exit:hover { opacity: 1; background: rgba(255,120,120,.18); }
+  .scn-input { width: 100%; box-sizing: border-box; background: rgba(0,0,0,.25); border: 1px solid rgba(140,200,255,.25); color: #dfeefb; border-radius: 7px; padding: 5px 8px; font: 12px ui-sans-serif; margin: 4px 0; }
+  .scn-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 11.5px; }
+  .scn-row .scn-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .scn-row .scn-mode { font-size: 10px; padding: 1px 6px; border-radius: 6px; cursor: pointer; border: 1px solid rgba(140,200,255,.25); opacity: .85; }
+  .scn-row .scn-del { cursor: pointer; opacity: .5; padding: 0 4px; }
+  .scn-row .scn-del:hover { opacity: 1; color: #ff8a8a; }
   .ttlrow { display: flex; align-items: center; justify-content: space-between; }
   .collapse { cursor: pointer; font-size: 16px; opacity: .8; padding: 0 2px; user-select: none; }
   .collapse:hover { opacity: 1; }
   #panel .ttl { font-weight: 650; font-size: 12.5px; letter-spacing: .2px; }
   #panel .read { font-variant-numeric: tabular-nums; opacity: .85; font-size: 11px; margin-top: 2px; }
   .sec { margin-top: 11px; border-top: 1px solid rgba(140,200,255,.12); padding-top: 9px; }
+  .sec.dragging { opacity: .45; }
   .sec-h { font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
-    color: #8fd0ff; margin-bottom: 7px; opacity: .9; }
+    color: #8fd0ff; margin-bottom: 7px; opacity: .9; display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
+  .sec-h:hover { opacity: 1; }
+  .sec-caret { font-size: 9px; opacity:.65; transition: transform .15s; }
+  .sec.collapsed .sec-caret { transform: rotate(-90deg); }
+  .sec.collapsed .sec-body { display:none; }
+  .sec.collapsed { margin-bottom:0; }
+  .sec-grip { margin-left:auto; opacity:.3; font-size:12px; letter-spacing:-2px; cursor:grab; }
+  .sec-h:hover .sec-grip { opacity:.6; }
   .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px; margin: 6px 0; }
   .row label { font-size: 11.5px; opacity: .9; }
   .row .val { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .8; min-width: 42px; text-align: right; }
@@ -126,7 +154,7 @@
 <div id="labels"></div>
 
 <div class="hud" id="title">
-  <h1>⚓ Caribbean PID Helmsman</h1>
+  <h1>⚓ Island Hopper</h1>
   <p>Autonomous helm over the Leeward Islands. Tune the loops, throw weather at it, and watch P, I and D fight the sea.</p>
 </div>
 
@@ -143,7 +171,7 @@
   <div class="box">
     <div class="spinner"></div>
     <h2>Building the Planet…</h2>
-    <p>Loading the WebGPU renderer and building the sea. First boot compiles shaders — a few seconds.</p>
+    <p>Charting islands, reefs, and warm seas — just a few seconds.</p>
     <div id="err"></div>
   </div>
 </div>
@@ -282,6 +310,8 @@ const P = {
   curveWorld: true,   // "tiny planet" — bend the sea + land down into the distance (no hard flat map edge)
   curveRadius: 9000,  // curvature radius R (world units); larger = gentler bend
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
+  panelOrder: null,   // control-panel section order (array of section titles) — set by drag-reorder, persisted
+  panelCollapsed: null,   // control-panel collapsed sections ({title:1}) — set by clicking section headers, persisted
   showClouds: true,   // clouds (can hide them for a clean debug view)
   cloudSoft: true,    // cloud look: true = soft naturalistic, false = cartoon cel-shaded puffs
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
@@ -1141,28 +1171,30 @@ function randn(){ if(gaussSpare!==null){ const v=gaussSpare; gaussSpare=null; re
 // ============================================================================
 // Start in open water just off the main island, INSIDE whichever region's cluster is loaded.
 // (Was a hard-coded Caribbean point, which left Greece/Thailand/Japan starting far outside their islands.)
-let START_POS, _startPsi=0;
+let START_POS, _startPsi=0, _startWp=0, route = [];   // route declared early so _cSTART can read it (empty → fallback on first call, filled after _cROUTE)
+function _shoveClear(p, pad){ for (let it=0; it<20; it++){ let hit=null, worst=0;   // push a point out of any island it lands inside
+    for (const isl of ISLANDS){ const d=Math.hypot(p.x-isl.x, p.z-isl.z), pen=(isl.r+pad)-d; if (pen>worst){ worst=pen; hit=isl; } }
+    if (!hit) break; const ox=p.x-hit.x, oz=p.z-hit.z, ol=Math.hypot(ox,oz)||1; p.x=hit.x+ox/ol*(hit.r+pad); p.z=hit.z+oz/ol*(hit.r+pad); }
+  return p; }
 function _cSTART(){
+  // PREFER: seat the ship mid-region, already ON the tour path, heading along it → demos start underway (no off-island sticking)
+  if (typeof route!=='undefined' && route && route.length>=2){
+    const cx=route.reduce((s,i)=>s+i.x,0)/route.length, cz=route.reduce((s,i)=>s+i.z,0)/route.length;   // region centre
+    let bi=0, bd=Infinity;
+    for (let i=0;i<route.length;i++){ const a=route[i], b=route[(i+1)%route.length]; const mx=(a.x+b.x)/2, mz=(a.z+b.z)/2, d=Math.hypot(mx-cx,mz-cz); if(d<bd){ bd=d; bi=i; } }
+    const a=route[bi], b=route[(bi+1)%route.length];
+    const p=_shoveClear({ x:a.x+(b.x-a.x)*0.45, z:a.z+(b.z-a.z)*0.45 }, 85);   // 45% along the central leg, in open water
+    START_POS={ x:p.x, z:p.z }; _startPsi=Math.atan2(b.z-p.z, b.x-p.x); _startWp=(bi+1)%route.length;   // heading to the next waypoint; that's our first target
+    return;
+  }
+  // FALLBACK (route not built yet, e.g. very first load): just off the main island
   const _byR = ISLANDS.slice().sort((a,b)=>b.r-a.r);
-  START_POS = (function(){
-    if (!_byR.length) return { x: 0, z: 0 };
-    const big = _byR.slice(0, Math.min(8, _byR.length));
-    const cx = big.reduce((s,i)=>s+i.x,0)/big.length, cz = big.reduce((s,i)=>s+i.z,0)/big.length;   // heart of the archipelago
-    const main = _byR[0];
-    let dx = cx-main.x, dz = cz-main.z, dl = Math.hypot(dx,dz);
-    if (dl < 1){ dx = 1; dz = 0.5; dl = Math.hypot(dx,dz); }                                          // lone dominant island → arbitrary offshore heading
-    dx/=dl; dz/=dl;
-    let p = { x: main.x + dx*(main.r+170), z: main.z + dz*(main.r+170) };                             // just off the main island, facing the rest of the chain
-    for (let it=0; it<16; it++){                                                                      // shove clear of any island it lands inside
-      let hit=null, worst=0;
-      for (const isl of _byR){ const d=Math.hypot(p.x-isl.x, p.z-isl.z), pen=(isl.r+90)-d; if (pen>worst){ worst=pen; hit=isl; } }
-      if (!hit) break;
-      const ox=p.x-hit.x, oz=p.z-hit.z, ol=Math.hypot(ox,oz)||1; p.x=hit.x+ox/ol*(hit.r+90); p.z=hit.z+oz/ol*(hit.r+90);
-    }
-    return p;
-  })();
-  const _faceTo = _byR[0] || { x: 0, z: 0 };
-  _startPsi = Math.atan2(_faceTo.z - START_POS.z, _faceTo.x - START_POS.x);   // face toward the main island / into the chain
+  if (!_byR.length){ START_POS={x:0,z:0}; _startPsi=0; _startWp=0; return; }
+  const big=_byR.slice(0,Math.min(8,_byR.length));
+  const cx=big.reduce((s,i)=>s+i.x,0)/big.length, cz=big.reduce((s,i)=>s+i.z,0)/big.length, main=_byR[0];
+  let dx=cx-main.x, dz=cz-main.z, dl=Math.hypot(dx,dz); if(dl<1){ dx=1; dz=0.5; dl=Math.hypot(dx,dz); } dx/=dl; dz/=dl;
+  const p=_shoveClear({ x:main.x+dx*(main.r+170), z:main.z+dz*(main.r+170) }, 90);
+  START_POS=p; _startPsi=Math.atan2(_byR[0].z-p.z, _byR[0].x-p.x); _startWp=0;
 }
 _cSTART();
 const boat3 = { x: START_POS.x, z: START_POS.z, psi: _startPsi,
@@ -1207,7 +1239,7 @@ function stepDynamics(s, dt, t) {
 // ============================================================================
 // Guidance — A* path + pure-pursuit, producing desired heading + speed
 // ============================================================================
-let route = [];
+// (route is declared earlier, near START_POS)
 function _cROUTE(){
   const tourNames = REGION.tour || ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
                      'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
@@ -1219,7 +1251,9 @@ function _cROUTE(){
   }
 }
 _cROUTE();
-let wpIdx = 0;
+_cSTART();   // route now exists → re-seat the ship ON the path (the first _cSTART above ran before the route was built)
+boat3.x = START_POS.x; boat3.z = START_POS.z; boat3.psi = _startPsi;
+let wpIdx = _startWp;
 
 // ---- saved routes (localStorage) + apply a named island sequence as the live tour ----
 const ROUTES_KEY = 'pidHelmsman.routes.v1';
@@ -1552,7 +1586,7 @@ async function init() {
     const useGodray = !useRain && !useOutline && godrayActive && godrayPost && P.atmosphere > 0.01;   // atmosphere pass: god rays (sun-gated inside) + bloom + haze
     try {
       if (_swapping){ /* hold the present while a region's pipelines compile — the dive colour-fade covers the screen */ }
-      else if (worldMapOpen && globeScene){ updateGlobe(dt); renderer.render(globeScene, globeCam); }
+      else if (worldMapOpen && globeScene){ updateGlobe(dt); renderer.render(globeScene, globeCam); _grabGlobeFrame(); }
       else if (fleetView==='grid'){ renderFleetGrid(); }
       else if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
       else if (useOutline){ outlineScenePass.camera = activeCam; outlineScenePass.scene = scene; outlinePost.render(); }
@@ -1815,11 +1849,17 @@ function buildVehicles(){
   let _vi=0;
   for (const d of defs){
     let rn = d.routeNames.filter(n=>BYNAME[n]);                 // keep only islands that exist in this region
-    if (rn.length < 2){                                          // unknown region → auto-route the biggest islands, angular order
-      const big = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0,6);
-      const cx=big.reduce((s,i)=>s+i.x,0)/big.length, cz=big.reduce((s,i)=>s+i.z,0)/big.length;
-      big.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));
-      const off=_vi%big.length; rn = big.slice(off).concat(big.slice(0,off)).map(i=>i.name);   // rotate per vehicle so they don't overlap
+    if (rn.length < 2){                                          // region without a hand-tuned route → a DISTINCT smooth loop per vehicle (different islands, direction & start)
+      const all = ISLANDS.slice().sort((a,b)=>b.r-a.r);
+      let pick = _vi===0 ? all.slice(0, Math.min(7, all.length))                          // sub  → the main islands, a tighter inner loop
+               : _vi===1 ? all.slice(0, Math.min(10, all.length))                         // plane→ a wide circuit of more islands
+               :           all.filter((_,k)=>k%2===0).slice(0, Math.min(7, all.length));  // ufo  → every-other island, a different shape
+      if (pick.length<2) pick = all.slice(0, Math.min(6, all.length));
+      const cx=pick.reduce((s,i)=>s+i.x,0)/pick.length, cz=pick.reduce((s,i)=>s+i.z,0)/pick.length;
+      pick.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));               // angular order → a smooth circuit
+      if (_vi===1) pick.reverse();                                                        // plane loops the OTHER way around
+      const off=(_vi*2)%pick.length; pick = pick.slice(off).concat(pick.slice(0,off));    // each starts at a different point
+      rn = pick.map(i=>i.name);
     }
     _vi++;
     d.route=routeFrom(rn); const w=d.route[0]||{x:0,z:0};
@@ -2981,19 +3021,28 @@ function updateFireworks(dt){
 
 // ---- fake soft contact shadow under the boat (water doesn't receive real shadows) ----
 let boatShadow;
+function _softShadowTex(){
+  const S=128, c=document.createElement('canvas'); c.width=c.height=S; const x=c.getContext('2d');
+  const g=x.createRadialGradient(S/2,S/2,S*0.05, S/2,S/2,S*0.5);
+  g.addColorStop(0,'rgba(0,0,0,0.92)'); g.addColorStop(0.5,'rgba(0,0,0,0.55)'); g.addColorStop(1,'rgba(0,0,0,0)');   // soft feathered edge
+  x.fillStyle=g; x.fillRect(0,0,S,S); return new THREE.CanvasTexture(c);
+}
 function buildBoatShadow(){
-  const g=new THREE.CircleGeometry(6.5,22); g.rotateX(-Math.PI/2);
-  boatShadow=new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color:0x06121c, transparent:true, opacity:0.22, depthWrite:false }));
+  const g=new THREE.PlaneGeometry(1,1); g.rotateX(-Math.PI/2);
+  boatShadow=new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map:_softShadowTex(), color:0x04101a, transparent:true, opacity:0.3, depthWrite:false }));
   boatShadow.renderOrder=1; scene.add(boatShadow);
 }
 function updateBoatShadow(day){
   if(!boatShadow) return;
   boatShadow.visible = day>0.05;
-  const y=waveHeightJS(boat3.x, boat3.z, clock.elapsedTime)+0.07;
-  boatShadow.position.set(boat3.x - _sun.x*2.5, y, boat3.z - _sun.z*2.5);
-  boatShadow.rotation.y = -Math.atan2(_sun.z, _sun.x);
-  boatShadow.scale.set(1 + (1-clampJS(_sun.y,0.05,1))*2.2, 1, 1);
-  boatShadow.material.opacity = 0.26*clampJS(day,0,1);
+  const y=waveHeightJS(boat3.x, boat3.z, clock.elapsedTime)+0.05;
+  const sunEl=clampJS(_sun.y,0.06,1), low=1-sunEl;                       // 0 = sun overhead, 1 = sun on the horizon
+  const hx=_sun.x, hz=_sun.z, hl=Math.hypot(hx,hz)||1, ux=hx/hl, uz=hz/hl;   // horizontal anti-sun direction
+  const len=12 + low*30;                                                 // shadow stretches long as the sun sinks
+  boatShadow.position.set(boat3.x - ux*(len*0.5-5), y, boat3.z - uz*(len*0.5-5));   // near end stays under the hull, far end reaches away from the sun
+  boatShadow.rotation.y = Math.atan2(uz, ux);                            // long axis points away from the sun
+  boatShadow.scale.set(len, 1, 8.5);                                     // long & narrow — a believable cast shadow, not a round disc
+  boatShadow.material.opacity = clampJS(day,0,1)*(0.36 - low*0.14);      // crisp near noon, softer & longer toward dusk
 }
 
 // ============================================================================
@@ -3288,7 +3337,7 @@ function triggerSounding(){ buildDipStick(boat3.x, boat3.z); _soundingShown=true
 //  Data: window.STARMAP (build/build_starmap.js) — falls back to procedural stars.
 // ============================================================================
 let starMap = null;
-const OBS_LAT = 17.7 * Math.PI/180, OBS_LON_DEG = -62.0, STAR_R = 4700;
+const OBS_LAT = 17.7 * Math.PI/180, OBS_LON_DEG = -62.0, STAR_R = 9000;   // big dome, centred on the CAMERA → reads as the far sky, not a close shell
 function _raDecVec(raDeg, decDeg, out){ const ra=raDeg*Math.PI/180, dec=decDeg*Math.PI/180, cd=Math.cos(dec);
   return out.set(cd*Math.cos(ra), cd*Math.sin(ra), Math.sin(dec)); }
 
@@ -3350,7 +3399,7 @@ function buildStarMap(){
     if (edges.length){            // thick glowy tubes for the labelled constellations
       const geos=[], up=new THREE.Vector3(0,1,0), dir=new THREE.Vector3(), mid=new THREE.Vector3(), q=new THREE.Quaternion(), mm=new THREE.Matrix4(), one=new THREE.Vector3(1,1,1);
       for (const [a,b] of edges){ dir.subVectors(b,a); const len=dir.length(); if (len<1) continue;
-        const cyl=new THREE.CylinderGeometry(11,11,len,6,1,true);
+        const cyl=new THREE.CylinderGeometry(STAR_R*0.0023,STAR_R*0.0023,len,6,1,true);   // tube thickness scales with dome radius (keeps the same on-screen weight)
         q.setFromUnitVectors(up, dir.clone().normalize()); mid.addVectors(a,b).multiplyScalar(0.5);
         cyl.applyMatrix4(mm.compose(mid,q,one)); geos.push(cyl); }
       // merge (manual concat — avoids an addon import)
@@ -3390,8 +3439,8 @@ function updateStarMap(){
   if (!starMap) return;
   const vis = uNight.value > 0.012; starMap.grp.visible = vis; if (!vis) return;
   if (starMap.con) starMap.con.visible = (P.showConstellations !== false);   // stars stay; constellation lines/labels toggle
-  const tgt = (controls && controls.target) ? controls.target : (activeCam||camera).position;
-  starMap.grp.position.set(tgt.x, 0, tgt.z);                                      // follow like the sky dome
+  const cam=(activeCam||camera);
+  starMap.grp.position.copy(cam.position);                                        // centre the dome on the CAMERA → zero parallax, stars sit at infinity
   const th=_localSiderealRad(), st=Math.sin(th), ct=Math.cos(th), sp=Math.sin(OBS_LAT), cp=Math.cos(OBS_LAT);
   _scC0.set(-st, cp*ct, sp*ct); _scC1.set(ct, cp*st, sp*st); _scC2.set(0, sp, -cp);  // equatorial → local horizontal (world y-up, north=-Z)
   _scM.makeBasis(_scC0,_scC1,_scC2); starMap.grp.quaternion.setFromRotationMatrix(_scM);
@@ -4975,6 +5024,10 @@ function initInput() {
   const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA');
   window.addEventListener('keydown', (e) => {
     if (typing(e)) return;
+    if (demoMode){ if(e.key==='Escape') exitDemoMode(); else if(e.key==='ArrowRight'||e.key===' ') demoGo(_demoIdx+1); else if(e.key==='ArrowLeft') demoGo(_demoIdx-1);
+      if(e.key===' '||e.key.indexOf('Arrow')===0) e.preventDefault(); return; }   // demo stepper owns the keys
+    if (worldMapOpen) return;                       // globe view has its own keys (arrows/space/enter/esc)
+    if (e.key === ' '){ if(typeof triggerSounding==='function') triggerSounding(); e.preventDefault(); return; }   // Space = depth sounding (camera-up is on E)
     if (e.key === 'v' || e.key === 'V') setView(!fpsMode);
     if (e.key === 'f' || e.key === 'F') setFly(!flyMode);
     if (flyMode){ flyState.keys[e.key.toLowerCase()] = true; if(e.key===' ') e.preventDefault(); }
@@ -5266,7 +5319,7 @@ function applyHud(){
 }
 function setPanelOpen(open){
   document.getElementById('panel').style.display = open?'':'none';
-  document.getElementById('skullBtn').style.display = open?'none':'';
+  document.getElementById('skullBtn').style.display = open?'none':'block';   // 'block' (not '') — '' falls back to the CSS display:none and the skull never reappears
 }
 function buildPanel() {
   const panel = document.getElementById('panel');
@@ -5299,6 +5352,9 @@ function buildPanel() {
   addToggle(s, 'Clouds', P, 'showClouds');
   addToggle(s, 'Soft clouds (off = cartoon)', P, 'cloudSoft', ()=>setCloudStyle());
   addToggle(s, 'Rain particles + splashes', P, 'showRainParticles');
+  ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
+  addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
+  addToggle(s, 'Route path (wedge markers)', P, 'showPath');   // the ship/sub wedge route — independent of the debug view below
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
   // View
@@ -5471,8 +5527,7 @@ function buildPanel() {
   addSlider(s, 'Cross-track gain', P, 'xteGain', 0, 0.04, 0.002, v=>v.toFixed(3));
   addSlider(s, 'Boat draft', P, 'draft', 1, 6, 0.2, v=>v.toFixed(1));
   addSlider(s, 'GPS noise σ', P, 'gpsNoise', 0, 16, 0.5, v=>v.toFixed(1));
-  addToggle(s, 'Show planned path', P, 'showPath');
-  addToggle(s, 'Full route (off = next waypoint only)', P, 'pathFull');
+  addToggle(s, 'Full route (off = next waypoint only)', P, 'pathFull');   // "Route path" toggle now lives in the Display section
   addToggle(s, 'Show GPS fixes', P, 'showGps');
 
   // Sky & time
@@ -5485,8 +5540,8 @@ function buildPanel() {
   addSlider(s, 'Shadow depth', P, 'shadowDepth', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Atmosphere (god rays / haze / bloom)', P, 'atmosphere', 0, 1, 0.05, v=>v.toFixed(2));
   addMoonSlider(s, 'Moon phase (dim for stars)', P, 'moonPhase');
-  ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
-  addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
+
+  buildDemoSection(panel);   // Demo / Scenarios — capture, list, enter demo mode, export
 
   // Actions
   s = section(panel, '');
@@ -5496,7 +5551,7 @@ function buildPanel() {
   const resetTune = el('div','btn',acts); resetTune.textContent='Reset gains';
   resetTune.onclick=()=>{ for (const k of ['hKp','hKi','hKd','sKp','sKi','sKd']) { P[k]=DEFAULTS[k]; syncSlider(k); } headingPID.reset(); speedPID.reset(); };
   const resetBoat = el('div','btn',acts); resetBoat.textContent='Reset boat';
-  resetBoat.onclick=()=>{ Object.assign(boat3,{x:START_POS.x,z:START_POS.z,u:8,v:0,r:0,thr:0.4,delta:0}); wpIdx=0; const t0=activeTarget(); boat3.psi=Math.atan2(t0.z-boat3.z,t0.x-boat3.x); headingPID.reset(); speedPID.reset(); TEL.length=0; kf=new KalmanFilter(boat3.x,boat3.z); path=null; planKey=''; replan(boat3); };
+  resetBoat.onclick=()=>{ _cSTART(); Object.assign(boat3,{x:START_POS.x,z:START_POS.z,psi:_startPsi,u:8,v:0,r:0,thr:0.4,delta:0}); wpIdx=_startWp; headingPID.reset(); speedPID.reset(); TEL.length=0; kf=new KalmanFilter(boat3.x,boat3.z); path=null; planKey=''; replan(boat3); };
 
   // Restore EVERY control (PID, weather, nav, sky, HUD toggles…) to factory defaults.
   // Clearing the saved blob + reloading is the foolproof way to resync all DOM controls at once.
@@ -5531,6 +5586,7 @@ function buildPanel() {
   };
 
   setMode(P.mode);
+  applyPanelLayout();                 // restore saved section order + collapsed state
 }
 
 function setMode(m) {
@@ -5553,7 +5609,7 @@ const REGION_META = {
   sweden:    { tag:'Sweden · Stockholm', blurb:'Granite skerries & pine · Djurö→Stavsnäs' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
-let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false;
+let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[];
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
@@ -5576,23 +5632,48 @@ function _globeLabel(text, color){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthTest:false, depthWrite:false }));
   const s=0.085; sp.scale.set(s*w/h, s, 1); sp.renderOrder=40; return sp;
 }
+function _arcLabel(text, color){                       // region name as curved text ringing the diorama's circular border (billboard → readable from any angle)
+  const S=512, cv=document.createElement('canvas'); cv.width=cv.height=S;
+  const ctx=cv.getContext('2d'), cx=S/2, cy=S/2, R=S*0.40;
+  ctx.font='bold 38px ui-sans-serif, system-ui, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.lineJoin='round';
+  const chars=[...text], widths=chars.map(ch=>ctx.measureText(ch).width), spc=1.05;
+  const totalA=widths.reduce((a,w)=>a+(w*spc)/R,0);
+  let ang=-Math.PI/2 - totalA/2;                       // centre the arc over the top of the circle, walk clockwise
+  const cc=new THREE.Color(color), fill=`rgb(${cc.r*255|0},${cc.g*255|0},${cc.b*255|0})`;
+  ctx.lineWidth=8; ctx.strokeStyle='rgba(4,8,15,0.94)';
+  for(let i=0;i<chars.length;i++){ const aw=(widths[i]*spc)/R; ang+=aw/2;
+    ctx.save(); ctx.translate(cx+Math.cos(ang)*R, cy+Math.sin(ang)*R); ctx.rotate(ang+Math.PI/2);
+    ctx.strokeText(chars[i],0,0); ctx.fillStyle=fill; ctx.fillText(chars[i],0,0); ctx.restore(); ang+=aw/2; }
+  const tex=new THREE.CanvasTexture(cv); tex.colorSpace=THREE.SRGBColorSpace; tex.anisotropy=4;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:true, depthWrite:false }));
+  sp.scale.set(0.62,0.62,1); sp.renderOrder=43; return sp;
+}
+function _regionGlow(artCol){                          // soft additive halo behind a diorama; opacity fades in when it's the current target
+  const S=160, cv=document.createElement('canvas'); cv.width=cv.height=S;
+  const ctx=cv.getContext('2d'), c=new THREE.Color(artCol), rgb=`${c.r*255|0},${c.g*255|0},${c.b*255|0}`;
+  const g=ctx.createRadialGradient(S/2,S/2,S*0.30, S/2,S/2,S*0.5);
+  g.addColorStop(0,`rgba(${rgb},0)`); g.addColorStop(0.6,`rgba(${rgb},0.7)`); g.addColorStop(1,`rgba(${rgb},0)`);   // hollow centre → a soft translucent ring hugging the diorama, not a wash over it
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(S/2,S/2,S*0.5,0,7); ctx.fill();
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending, opacity:0 }));
+  sp.scale.set(0.56,0.56,1); sp.renderOrder=38; return { mesh:sp, mat:sp.material };
+}
 // A "fun" per-region colour drawn from each place's art history — used for the relief patch, ring & label.
 const REGION_ART_COL = {
   caribbean: 0x1fb6b0,   // Caribbean sea & Haitian naïve art — vivid turquoise
   aegean:    0xe07a3c,   // Greek red-figure pottery — terracotta
   japan:     0x3a57b0,   // Hokusai ukiyo-e — Prussian "Berlin" blue
   thailand:  0xe8a82a,   // Thai temple gilding — leaf gold
-  sweden:    0xb83f2e,   // Swedish folk art (Dalarna / Carl Larsson) — Falu red
+  sweden:    0x1f7fd0,   // Swedish flag blue (was Falu red — blue reads more "Sweden")
   hawaii:    0xdd4f8c,   // Hawaiian lei & kapa — hibiscus pink
 };
 // A little tabletop DIORAMA of each region on the globe: the REAL island outlines, sculpted into hills (coast→green→
 // rock) sitting in a tinted sea — so spinning the planet gives a believable sense of each archipelago before you dive.
 const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', aegean:'med', japan:'temp', sweden:'nord' };
 const _PAL = {   // per-biome palette: sea, beach, vegetated lowland, rocky peak — punchy & saturated so the dioramas read as FUN destinations against the grayscale Earth
-  trop:{ sea:0x16b4dd, beach:0xf6e6ad, low:0x33c43f, peak:0x8fb44a },   // vivid tropical cyan, bright sand, lush jungle green
-  med: { sea:0x1fa6d2, beach:0xefdca0, low:0xbcc25e, peak:0xd6ad5e },   // Aegean blue + olive/terracotta hills
-  temp:{ sea:0x1f86bf, beach:0xe0d09c, low:0x5cb23f, peak:0xb1a37e },   // bright cobalt sea, fresh green
-  nord:{ sea:0x1f5c7e, beach:0xc2bd92, low:0x5a8a3f, peak:0x868a6c },   // steel-blue Baltic (kept cool) but brighter pine & granite
+  trop:{ sea:0x12c2ea, beach:0xffe7a3, low:0x2ed83f, peak:0x8ad348 },   // electric tropical cyan, bright sand, vivid jungle
+  med: { sea:0x18b6e6, beach:0xf4dc9e, low:0x9ad84a, peak:0xe6bd56 },   // bright Aegean blue, fresh green-gold hills, warm gold rock
+  temp:{ sea:0x1f95d4, beach:0xe6d49c, low:0x44c93c, peak:0xc2b070 },   // bright cobalt sea, fresh spring green
+  nord:{ sea:0x2a76a0, beach:0xd2cc92, low:0x4fb841, peak:0xa4ab7c },   // steel-blue Baltic (kept cool, not turquoise) + cheerful bright pine & light granite
 };
 function buildRegionPatch(r){
   let polys = (r.islandPolys||[]).filter(p=>{ const ring=p.r||p.ring; return ring && ring.length>=4; });
@@ -5611,8 +5692,22 @@ function buildRegionPatch(r){
   const base=new THREE.Mesh(new THREE.CylinderGeometry(R*1.05, R*0.93, 0.05, 128),
     new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
   base.position.y=0.025; grp.add(base);
-  const sea=new THREE.Mesh(new THREE.CircleGeometry(R, 128),
-    new THREE.MeshStandardMaterial({ color:pal.sea, roughness:0.34, metalness:0.0, emissive:new THREE.Color(pal.sea).multiplyScalar(0.28), emissiveIntensity:1.0 }));   // faint self-glow keeps the lagoon bright & vivid
+  const seaC=new THREE.Color(pal.sea), seaMat=new THREE.MeshStandardNodeMaterial({ roughness:0.3, metalness:0.0 });
+  {                                                                    // organic animated ripple: domain-warped, multi-directional travelling swells (no grid), driven by TSL time
+    const pp=uv().sub(vec2(0.5,0.5));
+    const warp=vec2( sin(pp.y.mul(7.0).add(time.mul(0.5))), sin(pp.x.mul(6.3).sub(time.mul(0.43))) ).mul(0.05);   // slow swirl that bends the wavefronts
+    const q=pp.add(warp);
+    const w1=sin( dot(q, vec2(0.92,0.39)).mul(33.0).sub(time.mul(1.7)) );      // three swells travelling at irregular angles → interfere organically
+    const w2=sin( dot(q, vec2(-0.45,0.89)).mul(26.0).add(time.mul(1.25)) );
+    const w3=sin( dot(q, vec2(0.31,-0.95)).mul(43.0).sub(time.mul(2.05)) );
+    const ring=sin( length(pp).mul(38.0).sub(time.mul(1.5)) );                 // soft concentric undertone
+    const wv=w1.mul(0.32).add(w2.mul(0.28)).add(w3.mul(0.22)).add(ring.mul(0.18));
+    const wn=clamp(wv.mul(0.5).add(0.5),0.0,1.0);                              // 0..1 crest factor
+    const baseC=vec3(seaC.r,seaC.g,seaC.b), crestC=baseC.mul(1.42).add(0.05);
+    seaMat.colorNode=mix(baseC, crestC, pow(wn,2.0).mul(0.7));                 // brighten the crests
+    seaMat.emissiveNode=baseC.mul(0.3).add(crestC.mul(wn.mul(0.14)));          // self-glow keeps the lagoon vivid + crest sparkle
+  }
+  const sea=new THREE.Mesh(new THREE.CircleGeometry(R, 128), seaMat);
   sea.rotation.x=-Math.PI/2; sea.position.y=0.052; grp.add(sea);
 
   // sculpted island hills — each real outline becomes a stack of concentric rings (coast→summit) with a smooth
@@ -5663,15 +5758,16 @@ function buildRegionPatch(r){
 function buildGlobe(){
   globeScene=new THREE.Scene();
   globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,4.0);
-  globeScene.add(new THREE.HemisphereLight(0xf4f9ff, 0x2a3340, 1.12));   // brighter sky fill so the coloured dioramas read vivid (not muddy) against the gray Earth
-  const dir=new THREE.DirectionalLight(0xfff6e8, 2.15); dir.position.set(2.5,2,3.5); globeScene.add(dir);   // warm sunny key light, still strong enough to model the relief
+  globeScene.add(new THREE.HemisphereLight(0xf8fbff, 0x3c4757, 1.5));    // strong bright fill so EVERY diorama reads vivid (not muddy), wherever it sits on the planet
+  const dir=new THREE.DirectionalLight(0xfff4e2, 1.9); dir.position.set(2.5,2,3.5); globeScene.add(dir);    // warm sunny key light models the relief
+  const fill=new THREE.DirectionalLight(0xe0ecff, 0.9); fill.position.set(-2.5,-1.2,-2.0); globeScene.add(fill);   // cool back-fill lifts the shadow-side dioramas so none look dull
   const sg=new THREE.BufferGeometry(), N=700, sp=new Float32Array(N*3);
   for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(40+Math.random()*25); sp.set([v.x,v.y,v.z], i*3); }
   sg.setAttribute('position', new THREE.BufferAttribute(sp,3));
   globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color:0xbcd4ff, size:0.16, sizeAttenuation:true, transparent:true, opacity:0.85 })));
   globeSpin=new THREE.Group(); globeScene.add(globeSpin);
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
-  if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.075; oceanMatOpts.displacementBias=-0.0375; }
+  if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.10; oceanMatOpts.displacementBias=-0.05; }   // sea level (disp 0.5) stays at radius; land +0.05, deep ocean -0.05
   const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R,360,180), new THREE.MeshStandardMaterial(oceanMatOpts));
   globeSpin.add(ocean);
   if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map → grayscale planet
@@ -5679,23 +5775,25 @@ function buildGlobe(){
       const c2=cv.getContext('2d', { willReadFrequently:true }); c2.drawImage(img,0,0);
       // Per-pixel luminance (Rec.601) + contrast 1.55 + brightness 1.06 — done manually because canvas ctx.filter
       // is silently ignored by some engines (Safari/WebKit), which left the globe in colour on those browsers.
-      try { const id=c2.getImageData(0,0,cv.width,cv.height), d=id.data;
-        for(let i=0;i<d.length;i+=4){ let g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; g=(g-128)*1.55+128; g*=1.06;
-          d[i]=d[i+1]=d[i+2]= g<0?0:g>255?255:g; }
+      try { const id=c2.getImageData(0,0,cv.width,cv.height), d=id.data, kC=0.05;   // kC = fraction of original colour kept — barely-there hint of colour
+        for(let i=0;i<d.length;i+=4){ const r=d[i],g=d[i+1],b=d[i+2], lum=0.299*r+0.587*g+0.114*b;
+          let R=(lum+(r-lum)*kC-128)*1.55+128; R*=1.06; let G=(lum+(g-lum)*kC-128)*1.55+128; G*=1.06; let B=(lum+(b-lum)*kC-128)*1.55+128; B*=1.06;
+          d[i]=R<0?0:R>255?255:R; d[i+1]=G<0?0:G>255?255:G; d[i+2]=B<0?0:B>255?255:B; }
         c2.putImageData(id,0,0);
-      } catch(_e){ c2.filter='grayscale(1) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0); }   // fallback if readback is ever blocked
+      } catch(_e){ c2.filter='grayscale(0.95) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0); }   // fallback if readback is ever blocked
       const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; ocean.material.map=t; ocean.material.color.setScalar(1); ocean.material.needsUpdate=true; };
     img.src=window.WORLDMAP; }
-  _globePicks=[];
+  _globePicks=[]; _regionGlows=[];
   for (const r of Object.values(REGIONS)){
+    const artCol=REGION_ART_COL[r.id]||0x86d8ff;
+    const glow=_regionGlow(artCol); glow.mesh.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.01)); globeSpin.add(glow.mesh); _regionGlows.push({ id:r.id, mat:glow.mat });   // target highlight (billboard)
     const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
     if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R-0.012); globeSpin.add(patch); _globePicks.push(patch); }   // sink the plinth slightly so it seats flush on the sphere
-    const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
-    const labCol=new THREE.Color(artCol).lerp(new THREE.Color(0xffffff), r.id===REGION.id?0.32:0.18).getHex();   // keep the art colour vivid & saturated (only a touch of white for legibility)
-    const lab=_globeLabel(m.tag, labCol);
-    lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R*1.18)); globeSpin.add(lab);
+    const _h={}; new THREE.Color(artCol).getHSL(_h);                  // push each art colour to a near-max-saturation, bright, "fun" version so labels really POP off the gray Earth
+    const labCol=new THREE.Color().setHSL(_h.h, Math.min(1,_h.s*1.4+0.35), clampJS(_h.l*0.4+0.64, 0.68, 0.86)).getHex();
+    const lab=_arcLabel(m.tag, labCol); lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.012)); globeSpin.add(lab);   // curved label ringing the diorama border
   }
   faceRegion(REGION.id);
 }
@@ -5704,26 +5802,62 @@ function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0.25,0.15,1).normalize()); }   // bring the region to the front, tilted nicely
 // ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
 //      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
-let _diveZoom=null, _descent=null, _descentReturnView='cine';
+let _diveZoom=null, _globeRise=null, _descent=null, _descentReturnView='cine';
 function _diveFade(a, id){ let f=document.getElementById('dive-fade');
   if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;'; document.body.appendChild(f); }
   const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018; f.style.background='#'+('000000'+(c>>>0).toString(16)).slice(-6); f.style.opacity=clampJS(a,0,1); }
+let _globeIdle=0, _globeLevel=null, _globeFocus=null, _wmPrevPanel='';
+function _faceQuat(localVec){ const f=localVec.clone().normalize();      // quaternion that puts localVec dead-front (+Z) with the north pole upright (no roll)
+  const phi=Math.asin(clampJS(f.y,-1,1)), lam=Math.atan2(f.x,f.z);
+  const qy=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), -lam);
+  const qx=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), phi);
+  return qx.multiply(qy); }
+function _globeGotoRegion(id,dur){ const r=REGIONS[id]; if(!r||!globeSpin) return;   // SLERP the globe to centre a region, north up
+  _globeLevel={ from:globeSpin.quaternion.clone(), to:_faceQuat(latLonToVec(r.lat0||0,r.lon0||0,1)), t:0, dur:dur||0.9 };
+  _globeIdle=0; _globeVel.x=_globeVel.y=0; }
+function _globeCycle(dir){ if(!globeSpin) return;                        // step focus to the next/prev region by longitude (right = eastwards)
+  const ids=Object.values(REGIONS).map(r=>r.id).sort((a,b)=>(REGIONS[a].lon0||0)-(REGIONS[b].lon0||0));
+  if(!ids.length) return; let i=ids.indexOf(_globeFocus); if(i<0) i=0; i=(i+dir+ids.length)%ids.length;
+  _globeFocus=ids[i]; _globeGotoRegion(_globeFocus,0.9); }
 function updateGlobe(dt){
   if (!globeSpin) return;
   const cv=renderer.domElement, a=cv.width/cv.height; if (Math.abs(globeCam.aspect-a)>1e-3){ globeCam.aspect=a; globeCam.updateProjectionMatrix(); }   // match the ACTUAL render-target aspect (not the window — they differ under an aspect-lock), or the sphere stretches
+  if (_globeRise){ _globeRise.t += (dt||0.016)/_globeRise.dur; const k=Math.min(_globeRise.t,1), e=1-Math.pow(1-k,3);   // reverse dive: ease-OUT, sucked back up to orbit
+    globeCam.position.set(0,0, 1.05+(4.0-1.05)*e); globeCam.lookAt(0,0,0);
+    _diveFade(Math.max(0, 1 - k*1.8), _globeRise.id);                                 // clear the region colour over the first ~55%
+    if (k>=1){ _globeRise=null; globeCam.position.set(0,0,4.0); _diveFade(0); }
+    return; }
   if (_diveZoom){ _diveZoom.t += (dt||0.016)/_diveZoom.dur; const k=Math.min(_diveZoom.t,1), e=k*k;   // accelerate toward the surface
     globeCam.position.set(0,0, 4.0-(4.0-1.05)*e); globeCam.lookAt(0,0,0);
     _diveFade(Math.max(0,(k-0.5)*2), _diveZoom.id);                                   // fade to the region colour over the last half of the dive
     if (k>=1){ const d=_diveZoom; _diveZoom=null; globeCam.position.set(0,0,4); _diveLand(d); }
     return; }
-  if (!_globeDrag){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // drag momentum only — NO auto-spin
+  if (!_globeDrag && !_globeLevel){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // flick momentum — fast pulls keep spinning, slow drags settle at once
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
-    _globeVel.x*=0.9; _globeVel.y*=0.9; }
+    _globeVel.x*=0.955; _globeVel.y*=0.955;                                              // gentle decay → a satisfying glide
+    if(Math.abs(_globeVel.x)<5e-5) _globeVel.x=0; if(Math.abs(_globeVel.y)<5e-5) _globeVel.y=0; }
+  // idle auto-level: after 30s untouched, ease the north pole back upright (arcball drag can leave the globe rolled/tilted)
+  // while preserving the focal point (whatever is currently centred at the front stays centred).
+  const _busy = !!_globeDrag || (Math.abs(_globeVel.x)+Math.abs(_globeVel.y))>1e-4 || !!_diveZoom;
+  if (_busy){ _globeIdle=0; _globeLevel=null; }
+  else {
+    _globeIdle += dt||0.016;
+    if (_globeIdle>1 && !_globeLevel){
+      const f=new THREE.Vector3(0,0,1).applyQuaternion(globeSpin.quaternion.clone().invert());   // local point currently facing the camera
+      _globeLevel={ from:globeSpin.quaternion.clone(), to:_faceQuat(f), t:0, dur:1.6 };           // stand it upright, preserving the focal point
+    }
+  }
+  if (_globeLevel){ _globeLevel.t += (dt||0.016)/_globeLevel.dur;
+    const k=Math.min(_globeLevel.t,1), e=k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2;   // ease in-out
+    globeSpin.quaternion.copy(_globeLevel.from).slerp(_globeLevel.to, e);
+    if (k>=1){ _globeLevel=null; _globeIdle=0; } }
   const t=performance.now()*0.001;
   for (const g of _globePicks){ const p=0.6+0.4*Math.sin(t*2.2+(g.userData.pulse||0));   // gentle beacon pulse
     if (g.userData.ring) g.userData.ring.material.opacity=0.55+0.45*p;
     if (g.userData.disc) g.userData.disc.material.opacity=0.12+0.18*p;
     if (g.userData.beam) g.userData.beam.material.opacity=0.18+0.22*p; }
+  const ease=1-Math.exp(-(dt||0.016)*9);                                 // quick ease in/out for the target highlight
+  for (const g of _regionGlows){ const tgt=(g.id===_globeFocus)?0.45:0; g.mat.opacity += (tgt-g.mat.opacity)*ease; }
 }
 let _globeMoved=0;
 function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; }
@@ -5733,7 +5867,8 @@ function _gPointerMove(e){ if(!worldMapOpen||!_globeDrag) return;
   _globeMoved+=Math.abs(dx)+Math.abs(dy);
   globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), dx*0.0045);
   globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), dy*0.0045);
-  _globeVel.y=dx*0.0009; _globeVel.x=dy*0.0009; }
+  _globeVel.y=clampJS(_globeVel.y*0.35 + dx*0.0011*0.65, -0.05, 0.05);   // smoothed, speed-scaled flick velocity (capped)
+  _globeVel.x=clampJS(_globeVel.x*0.35 + dy*0.0011*0.65, -0.05, 0.05); }
 function _gPointerUp(){ _globeDrag=null; }
 function _gClick(e){ if(!worldMapOpen || _globeMoved>10) return;       // a real click (not the end of a spin) → pick a region
   const rect=renderer.domElement.getBoundingClientRect();
@@ -5742,11 +5877,26 @@ function _gClick(e){ if(!worldMapOpen || _globeMoved>10) return;       // a real
   const hits=rc.intersectObjects(_globePicks, true);
   if (hits.length){ let o=hits[0].object; while(o && !o.userData.regionId) o=o.parent; if (o && o.userData.regionId) travelToRegion(o.userData.regionId); }
 }
+function _gKey(e){ if(!worldMapOpen || demoMode) return;   // during a demo globe-dive the demo stepper owns the keys
+  if (e.target && (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')) return;
+  let h=true;
+  switch(e.key){
+    case 'ArrowRight': case 'ArrowDown': _globeCycle(+1); break;        // next target (eastwards), SLERP into place
+    case 'ArrowLeft':  case 'ArrowUp':   _globeCycle(-1); break;        // previous target
+    case ' ': _globeCycle(+1); break;                                  // Space → next region to the right
+    case 'Enter': if(_globeFocus) travelToRegion(_globeFocus); break;  // dive into the focused region
+    case 'Escape': closeWorldMap(); break;                             // back to the current region (old "stay here")
+    default: h=false;
+  }
+  if(h){ e.preventDefault(); e.stopPropagation(); }
+}
 function buildWorldMap(){
   const st=document.createElement('style'); st.textContent = `
     #wm-open{ position:fixed; top:14px; left:14px; z-index:50; background:rgba(10,20,30,.7); color:#cfe6f5;
       padding:7px 12px; border:1px solid #2a5a78; border-radius:8px; font:600 13px ui-sans-serif,system-ui; cursor:pointer; backdrop-filter:blur(6px); }
     #wm-open:hover{ background:rgba(20,40,55,.9); }
+    #wm-open.thumb{ width:46px; height:46px; padding:0; border-radius:50%; background-size:cover; background-position:center; border:1px solid rgba(150,205,255,.5); box-shadow:0 4px 16px rgba(0,0,0,.5); }
+    #wm-open.thumb:hover{ border-color:rgba(180,225,255,.85); }
     #worldmap{ position:fixed; inset:0; z-index:100; pointer-events:auto; cursor:grab;
       background:radial-gradient(circle at 50% 42%, rgba(11,26,44,.35) 0%, rgba(4,8,15,.78) 75%); }
     #worldmap.grabbing{ cursor:grabbing; }
@@ -5762,26 +5912,46 @@ function buildWorldMap(){
   const btn=document.createElement('div'); btn.id='wm-open'; btn.textContent='🌍 World'; btn.title='Travel to another region';
   btn.onclick=openWorldMap; document.body.appendChild(btn);
   const ov=document.createElement('div'); ov.id='worldmap'; ov.className='hidden';
-  ov.innerHTML = `<div class="wm-title">Island Hopper</div>
-    <div class="wm-hint">drag to spin the planet · click a region to set sail</div>
-    <button class="wm-close">✕ stay here</button>`;
+  ov.innerHTML = '';                                  // globe-only screen: no title / hint / stay-here button (Esc returns · arrows/space cycle · Enter dives)
   document.body.appendChild(ov);
-  ov.querySelector('.wm-close').onclick=(e)=>{ e.stopPropagation(); closeWorldMap(); };
   ov.addEventListener('pointerdown', e=>{ ov.classList.add('grabbing'); _gPointerDown(e); });
   window.addEventListener('pointermove', _gPointerMove);
   window.addEventListener('pointerup', e=>{ ov.classList.remove('grabbing'); _gPointerUp(e); });
   ov.addEventListener('click', _gClick);
+  window.addEventListener('keydown', _gKey, true);    // capture phase so the sailing handler never sees globe keys
   buildGlobe();
 }
 function openWorldMap(){ const ov=document.getElementById('worldmap'); if(!ov) return; ov.classList.remove('hidden');
   worldMapOpen=true; _prevCtrlEnabled=controls?controls.enabled:false; if(controls) controls.enabled=false;
   _diveZoom=null; _globeVel.x=_globeVel.y=0;
-  if (globeCam){ globeCam.position.set(0,0,4.0); globeCam.lookAt(0,0,0); }   // reset the dive-zoom so the reopen shows the full globe, not the patch we dove into
-  if (typeof _diveFade==='function') _diveFade(0);
-  faceRegion(REGION.id); }
+  { const _n=latLonToVec(REGION.lat0||0, REGION.lon0||0, 1); globeSpin.quaternion.copy(_faceQuat(_n)); }   // centre the current region, north up — consistent every open (matches where idle-level settles → no post-arrival drift)
+  if (globeCam){ globeCam.position.set(0,0,1.05); globeCam.lookAt(0,0,0); }   // start zoomed IN, under the region colour…
+  if (typeof _diveFade==='function') _diveFade(1, REGION.id);
+  _globeRise={ t:0, dur:1.05, id:REGION.id };                            // …then get sucked back up to the world view (reverse dive)
+  _globeIdle=0; _globeLevel=null; _globeFocus=REGION.id;                  // restart idle auto-level + focus the current region
+  const _ob=document.getElementById('wm-open'); if(_ob) _ob.style.display='none';        // the globe is its own screen — hide the World button, Helm panel & skull
+  const _pn=document.getElementById('panel'); if(_pn){ _wmPrevPanel=_pn.style.display; _pn.style.display='none'; }
+  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display='none'; }
 function closeWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) ov.classList.add('hidden');
-  worldMapOpen=false; if(controls) controls.enabled=_prevCtrlEnabled; }
+  worldMapOpen=false;
+  if(demoMode) return;                                  // demo manages its own chrome (panel/skull stay hidden; startDescent handles controls)
+  if(controls) controls.enabled=_prevCtrlEnabled;
+  const _ob=document.getElementById('wm-open'); if(_ob) _ob.style.display='';
+  const _pn=document.getElementById('panel'); if(_pn) _pn.style.display=_wmPrevPanel;
+  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display=(_pn && _pn.style.display==='none')?'block':'none'; }   // re-show the skull only if the panel was left collapsed
+// World button = a live snapshot of the globe as it looked right before the dive.
+let _thumbCanvas=null, _globeThumb=null, _thumbTick=0;
+function _grabGlobeFrame(){ if(_diveZoom) return; if((_thumbTick++ & 3)!==0) return;   // cheap GPU blit into a small canvas every 4th steady frame (no readback here)
+  try { const src=renderer.domElement; if(!src.width) return;
+    if(!_thumbCanvas){ _thumbCanvas=document.createElement('canvas'); _thumbCanvas.width=_thumbCanvas.height=110; }
+    const w=src.width,h=src.height, sz=Math.min(w,h)*0.64, sx=(w-sz)/2, sy=(h-sz)/2;
+    _thumbCanvas.getContext('2d').drawImage(src, sx,sy,sz,sz, 0,0,110,110);
+  } catch(_){}
+}
+function _captureGlobeThumb(){ try { if(_thumbCanvas){ _globeThumb=_thumbCanvas.toDataURL('image/png'); _applyWorldBtnThumb(); } } catch(_){}}   // readback once, at dive time
+function _applyWorldBtnThumb(){ const b=document.getElementById('wm-open'); if(b && _globeThumb){ b.classList.add('thumb'); b.textContent=''; b.style.backgroundImage='url('+_globeThumb+')'; } }
 function travelToRegion(id){ if(!REGIONS[id]||_diveZoom) return;
+  _captureGlobeThumb();                                                   // snapshot the globe (as last seen) → becomes the World button icon
   const r=REGIONS[id], n=latLonToVec(r.lat0||0, r.lon0||0, 1);
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0,0,1));   // bring the patch dead-centre, then dive the camera straight into it
   _diveZoom={ t:0, dur:1.15, id, same:(id===REGION.id) };
@@ -5793,7 +5963,7 @@ async function _diveLand(d){
 }
 // fly the sailing camera down from high orbit to the normal view, reusing the free-fly cam (hands back to orbit cleanly)
 function startDescent(){
-  _descentReturnView = fpsMode ? 'fps' : (cineMode ? 'cine' : 'orbit');   // remember the sailing view so we land back in it (Director follow by default), not high orbit
+  _descentReturnView = fpsMode ? 'fps' : 'cine';   // ALWAYS land in the Director follow cam (the default view) unless piloting in first-person — every region should start following the ship
   setFly(true);
   const bx=boat3.x, bz=boat3.z;
   flyState.pos.set(bx-70, 1700, bz+70); flyState.yaw=Math.atan2(-70,70); flyState.pitch=-1.2; flyState.keys={};
@@ -5804,7 +5974,7 @@ function startDescent(){
 // LIVE region swap (Path A): rebuild the world for a new region in place — no reload, no load screen.
 // ============================================================================
 let _regionObjs = [], _tagRegion = false;   // every scene.add during a region build is tagged here for teardown
-function recomputeRegion(){ recomputeRegionData(); _cBATHY(); _cGRID(); _cSTART(); _cCITIES(); _cCITYLABELS(); _cROUTE(); }
+function recomputeRegion(){ recomputeRegionData(); _cBATHY(); _cGRID(); _cCITIES(); _cCITYLABELS(); _cROUTE(); _cSTART(); }   // _cSTART after _cROUTE so the ship can seat on the path
 function buildRegionWorld(){
   _tagRegion = true;
   buildTerrainField();
@@ -5828,6 +5998,11 @@ function teardownRegionWorld(){
   FLEET.length = 0; labelEls.length = 0; cityLabelEls.length = 0; _curveInsts.length = 0; clipLevels.length = 0;
   if (typeof islandLightsGroup!=='undefined' && islandLightsGroup) islandLightsGroup.clear();   // detach only, no dispose (see above)
   _heightTex = null; terrainMesh = null;
+  // clear the persistent nav visuals so the OLD region's wedge ribbons / target glow never linger over the new map
+  if (pathRibbon){ pathRibbon.visible=false; pathRibbon.geometry.setDrawRange(0,0); }
+  if (subRibbon){ subRibbon.visible=false; subRibbon.geometry.setDrawRange(0,0); }
+  if (targetRing){ targetRing.visible=false; } targetRingKey='';
+  path=null; planKey='';
 }
 let _swapping = false;   // while true the animate loop holds the 3D render (the dive colour-fade covers the screen) so we never present a half-built scene
 async function swapRegion(id){
@@ -5841,14 +6016,147 @@ async function swapRegion(id){
   // stalls the canvas present (the whole image freezes). compileAsync builds them, then rendering resumes cleanly.
   try { await renderer.compileAsync(scene, camera); } catch(e){ console.warn('region compile', e); }
   Object.assign(boat3, { x:START_POS.x, z:START_POS.z, psi:_startPsi, u:8, v:0, r:0, thr:0.4, delta:0, grounded:false, assist:false });
-  wpIdx = 0; path = null; planKey=''; targetRingKey=''; kf = new KalmanFilter(boat3.x, boat3.z); replan(boat3); applyTourPacing();
+  wpIdx = _startWp; path = null; planKey=''; targetRingKey=''; kf = new KalmanFilter(boat3.x, boat3.z); replan(boat3); applyTourPacing();
   _swapping = false;
 }
 window.swapRegion = swapRegion;   // console helper: stream a region in live, e.g. swapRegion('japan')
 
+// ============================================================================
+// DEMO MODE — curated "scenarios" (region + settings + route + view) you build in-app,
+// save, and let viewers click through with a clean stepper (the full Helm panel hidden).
+// ============================================================================
+const BAKED_SCENARIOS = [];                         // ← paste Export output here to SHIP scenarios baked into the file
+const DEMO_KEY = 'islandHopper.scenarios.v1';
+let demoMode=false, _demoIdx=0, _demoBar=null, _demoBusy=false;
+let demoScenarios = (()=>{ try{ const s=localStorage.getItem(DEMO_KEY); if(s) return JSON.parse(s); }catch(_){} return JSON.parse(JSON.stringify(BAKED_SCENARIOS)); })();
+function _saveScenarios(){ try{ localStorage.setItem(DEMO_KEY, JSON.stringify(demoScenarios)); }catch(_){} }
+function _animate(fn,dur){ return new Promise(res=>{ const t0=performance.now(); (function step(){ const k=Math.min(1,(performance.now()-t0)/(dur*1000)); fn(k); if(k<1) requestAnimationFrame(step); else res(); })(); }); }
+function captureScenario(name){
+  const s=JSON.parse(JSON.stringify(P)); delete s.panelOrder; delete s.panelCollapsed; s.paused=false;
+  return { name:name||('Scenario '+(demoScenarios.length+1)), region:REGION.id, present:'snap',
+    view: cineMode?'cine':(fpsMode?'fps':(flyMode?'fly':'orbit')), cineView:P.cineView, fleet:fleetView,
+    route: currentRouteNames(), settings:s };
+}
+async function _applyScenarioCore(sc){
+  const oldLod=P.lodTerrain, sameRegion=(!sc.region || sc.region===REGION.id);
+  if (sc.settings){ const a=P.panelOrder, b=P.panelCollapsed; Object.assign(P, sc.settings); P.panelOrder=a; P.panelCollapsed=b; P.paused=false; }   // settings FIRST so the region rebuild below uses the right LOD
+  if (!sameRegion) await swapRegion(sc.region);                          // rebuilds the region's terrain (clipmap/static) per P.lodTerrain — no extra setTerrainLOD needed
+  else if (P.lodTerrain!==oldLod){ try{ setTerrainLOD(P.lodTerrain); }catch(_){} }   // same region but LOD toggled → swap terrain live
+  try{ setStyle(P.style); }catch(_){}
+  try{ setCloudStyle(); }catch(_){}
+  try{ applyHud(); }catch(_){}
+  try{ if(P.bloom) enableBloom(); else disableBloom(); }catch(_){}
+  if (sc.route && sc.route.length){ try{ if(setRoute(sc.route)) applyTourPacing(); }catch(_){} }
+  try{ setFleetView(sc.fleet||'off'); }catch(_){}
+  try{ setFly(false); setView(false); setCine(false);
+    if (sc.view==='cine'){ if(sc.cineView) setCineView(sc.cineView); setCine(true); }
+    else if (sc.view==='fps') setView(true);
+    else if (sc.view==='fly') setFly(true);
+  }catch(_){}
+  saveSettings();
+}
+function syncPanelToP(){ const p=document.getElementById('panel'); if(!p) return;   // rebuild panel controls from P (after demo changed many values under the hood)
+  p.innerHTML=''; for(const k in ui) delete ui[k]; buildPanel(); }
+async function presentScenario(sc){
+  if(!sc || _demoBusy) return; _demoBusy=true;
+  try{
+    const sameRegion = (!sc.region || sc.region===REGION.id);
+    if (sc.present==='dive' && !sameRegion){ await _demoGlobeDive(sc); }   // cross-region: dive OUT to the globe, find the target, dive IN
+    else if (sc.present==='dive'){                   // same region: soft in-place crossfade (no pointless trip to the globe)
+      await _animate(t=> _diveFade(t, sc.region||REGION.id), 0.32);
+      await _applyScenarioCore(sc);
+      await new Promise(r=>setTimeout(r,100));
+      await _animate(t=> _diveFade(1-t, sc.region||REGION.id), 0.5); _diveFade(0);
+    } else { await _applyScenarioCore(sc); }          // snap
+  } finally { _demoBusy=false; }
+}
+async function _demoGlobeDive(sc){                    // globe choreography for a cross-region scenario
+  const wait=ms=>new Promise(r=>setTimeout(r,ms));
+  if(_demoBar) _demoBar.style.opacity='0';
+  openWorldMap();                                     // 1. dive OUT: zoomed-in on the current region → pull back to orbit
+  await wait(1200);
+  _globeFocus=sc.region; _globeGotoRegion(sc.region, 1.0);   // 2. find the target: SLERP the globe to it
+  await wait(1250);
+  await _applyScenarioCore(sc);                       // 3. pre-apply settings + stream the target region in (under the globe)
+  travelToRegion(sc.region);                          // 4. dive IN: zoom into the patch, fade to its colour, descend onto the boat
+  await wait(1500);
+  if(_demoBar) _demoBar.style.opacity='';
+}
+function enterDemoMode(){ if(!demoScenarios.length){ return; }
+  demoMode=true; _demoIdx=0;
+  setPanelOpen(false); const sk=document.getElementById('skullBtn'); if(sk) sk.style.display='none';   // hide panel AND the skull recover button
+  const wb=document.getElementById('wm-open'); if(wb) wb.style.display='none';
+  _buildDemoBar(); presentScenario(demoScenarios[0]);
+}
+function exitDemoMode(){ demoMode=false; if(_demoBar){ _demoBar.remove(); _demoBar=null; }
+  const wb=document.getElementById('wm-open'); if(wb) wb.style.display=''; syncPanelToP(); setPanelOpen(true); }
+function demoGo(i){ if(!demoScenarios.length) return; _demoIdx=(i+demoScenarios.length)%demoScenarios.length; _updateDemoBar(); presentScenario(demoScenarios[_demoIdx]); }
+function _buildDemoBar(){
+  if(_demoBar) _demoBar.remove();
+  const bar=el('div','', null); bar.id='demobar';
+  const prev=el('div','demo-nav',bar); prev.textContent='‹'; prev.title='Previous'; prev.onclick=()=>demoGo(_demoIdx-1);
+  const mid=el('div','demo-mid',bar);
+  const nm=el('div','demo-name',mid); nm.id='demo-name';
+  const btns=el('div','demo-btns',mid); btns.id='demo-btns';
+  demoScenarios.forEach((sc,i)=>{ const b=el('div','demo-pill',btns); b.textContent=sc.name; b.onclick=()=>demoGo(i); });
+  const next=el('div','demo-nav',bar); next.textContent='›'; next.title='Next'; next.onclick=()=>demoGo(_demoIdx+1);
+  const exit=el('div','demo-exit',bar); exit.textContent='✕'; exit.title='Exit demo (Esc)'; exit.onclick=exitDemoMode;
+  document.body.appendChild(bar); _demoBar=bar; _updateDemoBar();
+}
+function _updateDemoBar(){ const nm=document.getElementById('demo-name'); if(nm&&demoScenarios[_demoIdx]) nm.textContent=demoScenarios[_demoIdx].name;
+  const bs=document.getElementById('demo-btns'); if(bs) [...bs.children].forEach((b,i)=>b.classList.toggle('active', i===_demoIdx)); }
+function buildDemoSection(panel){
+  const s=section(panel,'Demo / Scenarios');
+  ui.scnName=el('input','scn-input',s); ui.scnName.type='text'; ui.scnName.placeholder='Scenario name…';
+  const saveB=el('div','btn',s); saveB.textContent='➕ Save current as scenario';
+  saveB.onclick=()=>{ demoScenarios.push(captureScenario((ui.scnName.value||'').trim())); _saveScenarios(); ui.scnName.value=''; _refreshScenarioList(); };
+  ui.scnList=el('div','',s); _refreshScenarioList();
+  const enterB=el('div','btn',s); enterB.textContent='▶ Enter demo mode'; enterB.onclick=()=>enterDemoMode();
+  const expB=el('div','btn',s); expB.textContent='⬇ Export scenarios (JSON)'; expB.title='Download + copy the scenarios JSON to paste into BAKED_SCENARIOS and ship in the file';
+  expB.onclick=()=>{ const json=JSON.stringify(demoScenarios,null,2);
+    try{ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([json],{type:'application/json'})); a.download='island-hopper-scenarios.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);}catch(_){}
+    try{ navigator.clipboard&&navigator.clipboard.writeText(json);}catch(_){}
+    const o=expB.textContent; expB.textContent='✓ Saved + copied'; expB.classList.add('active'); setTimeout(()=>{ expB.textContent=o; expB.classList.remove('active'); },1500); };
+}
+function _refreshScenarioList(){ const c=ui.scnList; if(!c) return; c.innerHTML='';
+  if(!demoScenarios.length){ const e=el('div','read',c); e.textContent='No scenarios yet — set up a scene, then save.'; return; }
+  demoScenarios.forEach((sc,i)=>{ const row=el('div','scn-row',c);
+    const nm=el('div','scn-name',row); nm.textContent=(i+1)+'. '+sc.name; nm.title='Apply this scenario now'; nm.onclick=()=>presentScenario(sc);
+    const md=el('div','scn-mode',row); md.textContent=sc.present==='dive'?'dive':'snap'; md.title='Toggle how it presents (snap / dive)';
+    md.onclick=()=>{ sc.present=(sc.present==='dive')?'snap':'dive'; _saveScenarios(); md.textContent=sc.present; };
+    const del=el('div','scn-del',row); del.textContent='✕'; del.title='Delete scenario'; del.onclick=()=>{ demoScenarios.splice(i,1); _saveScenarios(); _refreshScenarioList(); };
+  });
+}
+
 // --- small UI factory ---
 function el(tag, cls, parent){ const e=document.createElement(tag); if(cls)e.className=cls; if(parent)parent.appendChild(e); return e; }
-function section(parent, title){ const s=el('div','sec',parent); if(title){ const h=el('div','sec-h',s); h.textContent=title; } return s; }
+let _dragSec=null;
+function section(parent, title){
+  const s=el('div','sec',parent);
+  if(!title) return s;                                   // untitled (Actions) → not collapsible/draggable, pinned to bottom
+  const h=el('div','sec-h',s);
+  el('span','sec-caret',h).textContent='▾';
+  el('span','sec-h-lbl',h).textContent=title;
+  el('span','sec-grip',h).textContent='⠿';              // drag handle hint
+  const body=el('div','sec-body',s);
+  s.dataset.sec=title;
+  h.setAttribute('draggable','true');
+  h.addEventListener('click', ()=>{ s.classList.toggle('collapsed'); savePanelLayout(); });   // click header → collapse/expand
+  h.addEventListener('dragstart', e=>{ _dragSec=s; s.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain', title); }catch(_){} });
+  h.addEventListener('dragend', ()=>{ s.classList.remove('dragging'); _dragSec=null; savePanelLayout(); });
+  s.addEventListener('dragover', e=>{ if(!_dragSec||_dragSec===s) return; e.preventDefault();   // live-reorder as you drag over another section
+    const r=s.getBoundingClientRect(); s.parentNode.insertBefore(_dragSec, (e.clientY < r.top + r.height/2) ? s : s.nextSibling); });
+  return body;
+}
+function _panelSecs(){ const p=document.getElementById('panel'); return p ? Array.from(p.querySelectorAll(':scope > .sec[data-sec]')) : []; }
+function savePanelLayout(){ P.panelOrder=_panelSecs().map(s=>s.dataset.sec);
+  P.panelCollapsed={}; _panelSecs().forEach(s=>{ if(s.classList.contains('collapsed')) P.panelCollapsed[s.dataset.sec]=1; });
+  saveSettings(); }
+function applyPanelLayout(){ const p=document.getElementById('panel'); if(!p) return;
+  const secs={}; _panelSecs().forEach(s=>secs[s.dataset.sec]=s);
+  if(Array.isArray(P.panelOrder)) for(const name of P.panelOrder){ if(secs[name]) p.appendChild(secs[name]); }   // reorder per saved order
+  p.querySelectorAll(':scope > .sec:not([data-sec])').forEach(s=>p.appendChild(s));                              // keep Actions pinned at the bottom
+  if(P.panelCollapsed) Object.values(secs).forEach(s=>s.classList.toggle('collapsed', !!P.panelCollapsed[s.dataset.sec])); }
 const sliderRefs = {};
 function addSlider(parent, label, obj, key, min, max, step, fmt, onChange){
   const row=el('div','row',parent);

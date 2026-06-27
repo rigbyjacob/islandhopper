@@ -42,8 +42,8 @@ gray = img.mean(-1, keepdims=True)
 img = np.clip(gray + (img - gray) * 1.18, 0, 255)
 img = np.clip(img * 1.0, 0, 255).astype(np.uint8)[::-1]            # flip so top = north
 
-# ---- DISPLACEMENT (sea level = mid-grey; land up, ocean slightly down) ----
-disp = np.where(land, 0.5 + 0.5 * np.clip(Z / 4000.0, 0, 1), 0.5 - 0.2 * np.clip(-Z / 6000.0, 0, 1))
+# ---- DISPLACEMENT (sea level = mid-grey; land up 0.5..1.0, ocean sunk 0.5..0.0 with real bathymetry) ----
+disp = np.where(land, 0.5 + 0.5 * np.clip(Z / 4000.0, 0, 1), 0.5 - 0.5 * np.clip(-Z / 6000.0, 0, 1))
 disp = np.clip(disp * 255, 0, 255).astype(np.uint8)[::-1]
 
 def datauri(arr, mode, q):
