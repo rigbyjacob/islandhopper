@@ -3209,8 +3209,9 @@ function buildBathyTexture(){
   const W=900, H=800, data=new Uint8Array(W*H*4);
   for (let j=0;j<H;j++) for (let i=0;i<W;i++){
     const x=lerp(BATHY_RGN.x0,BATHY_RGN.x1,i/(W-1)), z=lerp(BATHY_RGN.z0,BATHY_RGN.z1,j/(H-1));
-    const depth=clampJS(-seabedHeight(x,z), 0, 80), v=Math.round(depth/80*255), k=(j*W+i)*4;   // 0..80u compressed depth
-    data[k]=v; data[k+1]=v; data[k+2]=v; data[k+3]=255;
+    const depth=clampJS(-seabedHeight(x,z), 0, 80), v=Math.round(depth/80*255), k=(j*W+i)*4;   // R/B: 0..80u compressed REAL depth (shallow colour)
+    const cd=clampJS(-terrainHeight(x,z), 0, 14);                                                // G: DISTANCE-TO-COAST (nav shelf) — 0 at any coastline, grows offshore, independent of bank depth
+    data[k]=v; data[k+1]=Math.round(cd/14*255); data[k+2]=v; data[k+3]=255;
   }
   // force the outer border to "deep" so ClampToEdge beyond the tile reads as uniform abyss (never streaks)
   for (let j=0;j<H;j++) for (let i=0;i<W;i++){ if(i===0||i===W-1||j===0||j===H-1){ const k=(j*W+i)*4; data[k]=data[k+1]=data[k+2]=255; } }
@@ -3707,8 +3708,12 @@ function buildOcean() {
     // shoreline foam — a THIN broken ring hugging each island's actual coastline (the shallowest strip only), so the
     // open/deeper water between island clusters stays blue instead of one big milky shallow wash. `sp` follows the real
     // bathymetry, so keying foam to just the highest sp (≈ right at the coast) traces each island's true outline.
-    const lap = sin(sp.mul(48.0).sub(time.mul(2.3))).mul(0.5).add(0.5);
-    const shoreFoam = smoothstep(0.90,0.997,sp).mul(smoothstep(0.30,0.62, fnoise)).mul(float(0.55).add(lap.mul(0.55)));
+    const cuvF = vec2( positionWorld.x.sub(BATHY_RGN.x0).div(BATHY_RGN.x1-BATHY_RGN.x0),
+                       positionWorld.z.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0) );
+    const coastN = texture(bathyTex, clamp(cuvF, vec2(0.0), vec2(1.0))).g;      // DISTANCE to the nearest coast (not depth): 0 at the shore → 1 far out
+    const lap = sin(coastN.mul(55.0).sub(time.mul(2.3))).mul(0.5).add(0.5);     // foam laps in/out along the distance gradient
+    const ring = smoothstep(0.46, 0.015, coastN);                              // a SOFT RING hugging each island (≈6u wide); open water between clusters stays blue
+    const shoreFoam = ring.mul(smoothstep(0.30,0.60, fnoise)).mul(float(0.5).add(lap.mul(0.5)));
     const foamCol = mix(vec3(0.95,0.98,1.0), vec3(0.965,0.940,0.860), uHokusai);   // warm cream foam for Hokusai, cold white otherwise
     const foam = clamp(max(whitecap, shoreFoam).mul(uFoam).mul(oneMinus(vgNightSea)), 0.0, 1.0);   // uFoam dials the whole region down; the Van Gogh night sea (sky mirror) has NO white foam
     col.assign(mix(col, foamCol, foam));
@@ -5319,16 +5324,11 @@ function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   return new THREE.Vector3(r*Math.cos(a)*Math.cos(o), r*Math.sin(a), -r*Math.cos(a)*Math.sin(o)); }
 function _placeOnSphere(obj, lat, lon, r){ const n=latLonToVec(lat,lon,1);
   obj.position.copy(n.clone().multiplyScalar(r)); obj.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n); }
-function makeRegionMarker(id, cur, artCol){      // a glowing outline ring on the surface, tagged for picking
+function makeRegionMarker(id, cur, artCol){      // INVISIBLE pick target only — the sculpted relief marks the spot (no ring/cone)
   const g=new THREE.Group();
-  const col = new THREE.Color(artCol||0x86d8ff).lerp(new THREE.Color(0xffffff), cur?0.45:0.18).getHex();   // the region's art colour, brightened (more for the current region)
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.009, 8, 30),
-    new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false }));
-  ring.rotation.x=Math.PI/2; g.add(ring);                                   // lie flat in the surface tangent plane
-  const disc=new THREE.Mesh(new THREE.CircleGeometry(0.05, 28),
-    new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.22, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
-  disc.rotation.x=-Math.PI/2; disc.position.y=0.002; g.add(disc);
-  g.userData.ring=ring; g.userData.disc=disc; g.userData.pulse=Math.random()*6.2832;   // (beacon cone removed — the region geometry marks the spot now)
+  const disc=new THREE.Mesh(new THREE.CircleGeometry(0.09, 18),
+    new THREE.MeshBasicMaterial({ transparent:true, opacity:0, depthWrite:false }));   // opacity 0 → unseen but still raycastable
+  disc.rotation.x=-Math.PI/2; disc.position.y=0.004; g.add(disc);
   g.traverse(o=>{ if(o.isMesh) o.userData.regionId=id; }); g.userData.regionId=id;
   return g;
 }
