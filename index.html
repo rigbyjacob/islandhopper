@@ -3593,11 +3593,11 @@ function curveTrees(){
   const touched = new Set();
   for (const t of _curveInsts){
     const drop = on ? curveDropJS(t.x, t.z) : 0;
-    _curveObj.position.set(t.x, t.y - drop, t.z);
-    _curveObj.rotation.set(0, t.ry, 0);
-    _curveObj.scale.set(t.sx, t.sy, t.sz);
-    _curveObj.updateMatrix();
-    t.m.setMatrixAt(t.i, _curveObj.matrix); touched.add(t.m);
+    // Only the tiny-planet droop (translation-Y) changes each frame; rotation/scale were baked into the
+    // instance matrix at build and never change. So skip the full TRS recompose (Euler→matrix per instance,
+    // the costly part) and write just the Y translation element (col-major index 13) in place — identical result.
+    t.m.instanceMatrix.array[t.i*16 + 13] = t.y - drop;
+    touched.add(t.m);
   }
   for (const m of touched) m.instanceMatrix.needsUpdate = true;
   _treesCurved = on;
