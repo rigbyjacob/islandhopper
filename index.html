@@ -74,8 +74,11 @@
   #demobar .demo-pill.active { background: #2f7bd6; border-color: #5b9fe6; color: #fff; opacity: 1; }
   #demobar .demo-exit { font-size: 14px; padding: 4px 9px; cursor: pointer; opacity: .6; border-radius: 8px; user-select: none; }
   #demobar .demo-exit:hover { opacity: 1; background: rgba(255,120,120,.18); }
-  /* On small / mobile screens the full pill list wraps into many rows and eats the view —
-     collapse to just the current scenario name with ‹ › arrows (which are already present & wired up). */
+  /* When the full pill list would wrap onto more than one row (small / mobile / foldable screens — a
+     fixed px breakpoint can't catch every device's CSS-px width, so this is driven by JS wrap-detection
+     via the .compact class), collapse to just the current scenario name + ‹ › arrows (already wired up). */
+  #demobar.compact .demo-btns { display: none; }
+  #demobar.compact .demo-name { font-size: 14px; }
   @media (max-width: 640px){ #demobar .demo-btns { display: none; } #demobar .demo-name { font-size: 14px; } }
   .scn-input { width: 100%; box-sizing: border-box; background: rgba(0,0,0,.25); border: 1px solid rgba(140,200,255,.25); color: #dfeefb; border-radius: 7px; padding: 5px 8px; font: 12px ui-sans-serif; margin: 4px 0; }
   .scn-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 11.5px; }
@@ -6164,6 +6167,18 @@ function _buildDemoBar(){
   const next=el('div','demo-nav',bar); next.textContent='›'; next.title='Next'; next.onclick=()=>demoGo(_demoIdx+1);
   const exit=el('div','demo-exit',bar); exit.textContent='✕'; exit.title='Exit demo (Esc)'; exit.onclick=exitDemoMode;
   document.body.appendChild(bar); _demoBar=bar; _updateDemoBar();
+  if(!_demoFitBound){ const onResize=()=>setTimeout(_fitDemoBar,60); window.addEventListener('resize',onResize); window.addEventListener('orientationchange',onResize); _demoFitBound=true; }
+  requestAnimationFrame(_fitDemoBar);   // measure once laid out
+}
+// Collapse the pill list to "name + ‹ › arrows" whenever it would wrap onto more than one row.
+// Width-based detection works on ANY device/DPR (incl. foldables a fixed px breakpoint misses).
+let _demoFitBound=false;
+function _fitDemoBar(){
+  if(!_demoBar) return;
+  _demoBar.classList.remove('compact');                       // expand first so we can measure the true layout
+  const btns=document.getElementById('demo-btns'); if(!btns || !btns.children.length) return;
+  const first=btns.children[0], last=btns.children[btns.children.length-1];
+  if(last.offsetTop > first.offsetTop + 1) _demoBar.classList.add('compact');   // pills spilled to a 2nd row → collapse
 }
 function _updateDemoBar(){ const nm=document.getElementById('demo-name'); if(nm&&demoScenarios[_demoIdx]) nm.textContent=demoScenarios[_demoIdx].name;
   const bs=document.getElementById('demo-btns'); if(bs) [...bs.children].forEach((b,i)=>b.classList.toggle('active', i===_demoIdx)); }
