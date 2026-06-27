@@ -2214,8 +2214,8 @@ function updateEnvironment(dt) {
   uChop.value = Math.min(seaChop, 0.92 / Math.max(WAVE_KSUM * seaAmp, 1e-3));
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   uContour.value += ((P.contours?1:0) - uContour.value) * Math.min(1, dt*4);   // smooth contour-line fade (independent toggle)
-  if (dipStick){ dipStick.visible = uBathy.value > 0.04;               // depth sounding shows with bathymetry
-    dipStick.position.y = -curveDropJS(dipX, dipZ); }                  // sink the sounder onto the curved sea (its fixed X,Z)
+  if (dipStick){ dipStick.visible = (uBathy.value > 0.04) || _soundingShown;   // shows with bathymetry OR after a manual sounding
+    dipStick.position.y = -curveDropJS(dipX, dipZ); }                  // sink the sounder onto the curved sea (its X,Z)
   uRain.value = localStorm;                                             // rain-on-lens follows the FELT (proximity) storm, not the global switch
 
   if (P.autoDay) { P.timeOfDay = (P.timeOfDay + dt*24/Math.max(P.dayLength,5)) % 24; syncSlider('timeOfDay'); }
@@ -3083,21 +3083,25 @@ function makeLabelSprite(text, color, sizeY, grad){
 }
 // a "depth sounding" pole in southern open water: ticks at the surface, every 500 m, and the seabed —
 // labels reveal how much real depth the vertical scale is compressing (only shown in bathymetry mode)
-let dipStick = null, dipX = 200, dipZ = -80;
-function buildDipStick(){
-  // Caribbean: the deep trench south of St Kitts / St Eustatius. Other regions: auto-pick the deepest central water.
-  const k=BYNAME['St. Kitts'], e=BYNAME['St. Eustatius'];
+let dipStick = null, dipX = 200, dipZ = -80, _soundingShown = false;
+// round a span into a "nice" tick step (1/2/5 × 10ⁿ) so there are ~target intervals → clean whole-number labels
+function _niceStep(span, target){ const raw=Math.max(span/Math.max(target,1), 1e-6), pow=Math.pow(10,Math.floor(Math.log10(raw))), n=raw/pow; return (n<=1?1:n<=2?2:n<=5?5:10)*pow; }
+function buildDipStick(px, pz){
   let X, Z;
-  if (REGION.dip){ X=REGION.dip.x; Z=REGION.dip.z; }
-  else if (k&&e){ X=(k.x+e.x)/2; Z=Math.max(k.z,e.z)+120; }
-  else {                                               // deepest water near the map centre (clear of all islands)
-    let best=-1e9; X=MAP.cx; Z=MAP.cz;
-    for (let i=0;i<600;i++){ const tx=MAP.minX+Math.random()*(MAP.maxX-MAP.minX), tz=MAP.minZ+Math.random()*(MAP.maxZ-MAP.minZ);
-      const depth=-gebcoMetres(tx,tz); if (depth<60 || terrainHeight(tx,tz)>0.5) continue;   // real open water only
-      const score=depth - 0.03*Math.hypot(tx-MAP.cx, tz-MAP.cz); if (score>best){ best=score; X=tx; Z=tz; } }
+  if (px!==undefined){ X=px; Z=pz; }                   // explicit sounding spot (the ship's position, from the button)
+  else {                                               // region default: deep trench / deepest central open water
+    _soundingShown=false;                              // a fresh region hides the sounder until re-triggered
+    const k=BYNAME['St. Kitts'], e=BYNAME['St. Eustatius'];
+    if (REGION.dip){ X=REGION.dip.x; Z=REGION.dip.z; }
+    else if (k&&e){ X=(k.x+e.x)/2; Z=Math.max(k.z,e.z)+120; }
+    else { let best=-1e9; X=MAP.cx; Z=MAP.cz;
+      for (let i=0;i<600;i++){ const tx=MAP.minX+Math.random()*(MAP.maxX-MAP.minX), tz=MAP.minZ+Math.random()*(MAP.maxZ-MAP.minZ);
+        const depth=-gebcoMetres(tx,tz); if (depth<60 || terrainHeight(tx,tz)>0.5) continue;   // real open water only
+        const score=depth - 0.03*Math.hypot(tx-MAP.cx, tz-MAP.cz); if (score>best){ best=score; X=tx; Z=tz; } } }
   }
+  if (dipStick){ scene.remove(dipStick); dipStick.traverse(o=>{ o.geometry&&o.geometry.dispose&&o.geometry.dispose(); o.material&&o.material.dispose&&o.material.dispose(); }); dipStick=null; }
   dipX=X; dipZ=Z;
-  const maxM = Math.max(0, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
+  const maxM = Math.max(1, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
   const g = new THREE.Group(); g.visible = false;
   const poleMat = new THREE.MeshBasicMaterial({ color:0xffe6a8, transparent:true, opacity:0.85, depthTest:false });
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,-seabedY,8), poleMat);
@@ -3110,17 +3114,20 @@ function buildDipStick(){
     const rad = 1.8 + 6.0*(maxM>0 ? m/maxM : 0);                          // surface ≈1.8u → seabed ≈7.8u
     const rg = new THREE.TorusGeometry(rad, 0.32, 6, 22); rg.rotateX(Math.PI/2);
     const ring=new THREE.Mesh(rg, ringMat); ring.position.set(X,y,Z); ring.renderOrder=19; g.add(ring);
-    if (txt && (force || Math.abs(y-lastLabelY) > 7)){                    // skip labels that would collide
+    if (txt && (force || Math.abs(y-lastLabelY) > 6)){                    // skip labels that would collide
       const lab=makeLabelSprite(txt, 0xffffff, 6.5, ['#dfe6ea','#cf7a2a']); lab.material.depthTest=false; lab.material.color.setScalar(0.62);   // dimmed below the bloom threshold so it doesn't glow
       lab.position.set(X+8+rad*0.5, y, Z); g.add(lab); lastLabelY=y; }   // offset further out as rings widen
   };
-  tick(0, null);                                               // surface ring, no label
-  for (let m=500; m<maxM-250; m+=500) tick(m, (m===500||m===1000) ? (m+' m') : null);   // label only 500 & 1000
-  tick(maxM, '≈'+(Math.round(maxM/10)*10)+' m', true);         // label the max depth at the seabed
+  // DYNAMIC ticks: a nice round step sized to THIS spot's depth (deep abyss → 1000s, shallow bank → 10s), ~5 rings so it never clutters
+  const step=_niceStep(maxM, 5);
+  tick(0, null);
+  for (let m=step; m<maxM-step*0.4; m+=step) tick(m, m+' m');             // whole-number rings; surface→seabed
+  tick(maxM, '≈'+(Math.round(maxM/(step>=100?50:10))*(step>=100?50:10))+' m', true);   // labelled seabed depth, rounded sensibly
   const title=makeLabelSprite('▼  depth sounding', 0xffffff, 8); title.material.depthTest=false; title.material.color.setScalar(0.5);   // matte, below the bloom bright-pass so it doesn't glow
   title.position.set(X, 10, Z); g.add(title);
-  scene.add(g); dipStick=g;
+  scene.add(g); dipStick=g; if(_soundingShown) g.visible=true;
 }
+function triggerSounding(){ buildDipStick(boat3.x, boat3.z); _soundingShown=true; if(dipStick) dipStick.visible=true; }   // drop the sounder at the ship & recompute the scale
 // ============================================================================
 //  STAR MAP — the real night sky for the Caribbean (~17.7°N), rotated to the local
 //  sidereal time derived from the in-app date + time-of-day. Twinkling stars
@@ -5148,6 +5155,9 @@ function buildPanel() {
   ui.flyBtn = el('div','btn', el('div','btns',s)); ui.flyBtn.textContent = '✈ Fly the map (F)';
   ui.flyBtn.onclick = () => setFly(!flyMode);
   const fhint = el('div','read',s); fhint.innerHTML = '<b>WASD</b>/arrows move · <b>E</b> up · <b>Q</b> down · hold to accelerate · <b>Shift</b> boost · drag to look';
+  ui.soundBtn = el('div','btn', el('div','btns',s)); ui.soundBtn.textContent = '⤓ Depth sounding here';
+  ui.soundBtn.onclick = () => triggerSounding();
+  const sndhint = el('div','read',s); sndhint.innerHTML = 'drops the sounder at the ship &amp; re-scales the rings to the depth';
 
   // Fleet — independent vehicles + Brady-Bunch grid
   s = section(panel, 'Fleet (multi-vehicle)');
