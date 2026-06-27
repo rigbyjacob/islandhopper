@@ -5335,18 +5335,20 @@ function _globeLabel(text, color){
 function buildRegionPatch(r){
   const polys = r.islandPolys || [];
   if (!polys.length) return null;
-  let mnx=Infinity,mxx=-Infinity,mnz=Infinity,mxz=-Infinity;
-  for (const p of polys){ const ring=p.r||p.ring; if(!ring) continue; for (const v of ring){ mnx=Math.min(mnx,v[0]); mxx=Math.max(mxx,v[0]); mnz=Math.min(mnz,v[1]); mxz=Math.max(mxz,v[1]); } }
+  let mnx=Infinity,mxx=-Infinity,mnz=Infinity,mxz=-Infinity, maxH=1;
+  for (const p of polys){ const ring=p.r||p.ring; if(!ring) continue; maxH=Math.max(maxH, p.h||1); for (const v of ring){ mnx=Math.min(mnx,v[0]); mxx=Math.max(mxx,v[0]); mnz=Math.min(mnz,v[1]); mxz=Math.max(mxz,v[1]); } }
   if (!isFinite(mnx)) return null;
   const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, ext=Math.max(mxx-mnx, mxz-mnz)||1;
   const PATCH=0.26, scale=PATCH/ext;
   const grp=new THREE.Group();
-  const landMat=new THREE.MeshStandardMaterial({ color:0xa6c766, emissive:0x1a2a10, roughness:0.8, metalness:0.0, side:THREE.DoubleSide });
+  const landCol=(r.palette&&r.palette.land&&r.palette.land.grass)||0x8fae5a;   // each region wears its own character colour
+  const landMat=new THREE.MeshStandardMaterial({ color:landCol, emissive:new THREE.Color(landCol).multiplyScalar(0.10), roughness:0.78, metalness:0.0 });
   for (const p of polys){ const ring=p.r||p.ring; if(!ring||ring.length<4) continue;
     const sh=new THREE.Shape();
     ring.forEach((v,i)=>{ const x=(v[0]-cx)*scale, y=(v[1]-cz)*scale; i?sh.lineTo(x,y):sh.moveTo(x,y); });
-    let geo; try { geo=new THREE.ShapeGeometry(sh); } catch(_){ continue; }
-    geo.rotateX(-Math.PI/2);                              // lie flat in the tangent (XZ) plane
+    const depth=clampJS((p.h||1)/maxH, 0.14, 1.0)*0.045;   // taller islands rise more from the planet (globe units)
+    let geo; try { geo=new THREE.ExtrudeGeometry(sh, {depth, bevelEnabled:false, steps:1}); } catch(_){ try{ geo=new THREE.ShapeGeometry(sh);}catch(__){continue;} }
+    geo.rotateX(-Math.PI/2);                              // footprint in the tangent plane, real height rises along +Y (the surface normal)
     grp.add(new THREE.Mesh(geo, landMat));
   }
   if (!grp.children.length) return null;
@@ -5363,12 +5365,15 @@ function buildGlobe(){
   sg.setAttribute('position', new THREE.BufferAttribute(sp,3));
   globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color:0xbcd4ff, size:0.16, sizeAttenuation:true, transparent:true, opacity:0.85 })));
   globeSpin=new THREE.Group(); globeScene.add(globeSpin);
-  const oceanMatOpts={ roughness:0.9, metalness:0.0 };
-  if (window.WORLDMAP){ const tex=new THREE.TextureLoader().load(window.WORLDMAP); tex.colorSpace=THREE.SRGBColorSpace; oceanMatOpts.map=tex; }
-  else oceanMatOpts.color=0x2f86b8;
+  const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
   if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.075; oceanMatOpts.displacementBias=-0.0375; }
   const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R,360,180), new THREE.MeshStandardMaterial(oceanMatOpts));
   globeSpin.add(ocean);
+  if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map via canvas → grayscale planet
+      const cv=document.createElement('canvas'); cv.width=img.width; cv.height=img.height;
+      const c2=cv.getContext('2d'); c2.filter='grayscale(1) brightness(0.96) contrast(0.9)'; c2.drawImage(img,0,0);
+      const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; ocean.material.map=t; ocean.material.color.setScalar(1); ocean.material.needsUpdate=true; };
+    img.src=window.WORLDMAP; }
   _globePicks=[];
   for (const r of Object.values(REGIONS)){
     const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
