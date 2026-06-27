@@ -4010,36 +4010,28 @@ function buildClipmapTerrain(){
   const V=CLIP_N+1;
   for (let l=0; l<CLIP_LEVELS; l++){
     const cell=CLIP_BASE*(1<<l), half=CLIP_N*cell/2;
-    const main=V*V;
-    // outer perimeter loop (in order) → a downward SKIRT wall that hides T-junction cracks against the coarser ring
-    const perim=[];
-    for (let cc=0;cc<V;cc++) perim.push(cc);                    // top row L→R
-    for (let r=1;r<V;r++) perim.push(r*V+(V-1));                // right col T→B
-    for (let cc=V-2;cc>=0;cc--) perim.push((V-1)*V+cc);         // bottom row R→L
-    for (let r=V-2;r>=1;r--) perim.push(r*V);                   // left col B→T
-    const PN=perim.length;
     const geo=new THREE.BufferGeometry();
-    const pos=new Float32Array((main+PN)*3), askirt=new Float32Array(main+PN);
+    const pos=new Float32Array(V*V*3);
     for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc; pos[i*3]=cc*cell-half; pos[i*3+1]=0; pos[i*3+2]=r*cell-half; }
-    for (let k=0;k<PN;k++){ const s=perim[k], d=main+k; pos[d*3]=pos[s*3]; pos[d*3+2]=pos[s*3+2]; askirt[d]=1; }   // skirt copies of the perimeter
-    const idx=[]; const q0=CLIP_N/4, q1=CLIP_N*3/4;
+    // SHRUNK hole: each ring laps OVER its finer neighbour by ~HOLEMARGIN cells, so the two never pull apart into a gap
+    // even when their independently-snapped centres differ by a cell or two. (Finer ring wins via polygonOffset below.)
+    const HOLEMARGIN=6, q0=CLIP_N/4+HOLEMARGIN, q1=CLIP_N*3/4-HOLEMARGIN;
+    const idx=[];
     for (let r=0;r<CLIP_N;r++) for (let cc=0;cc<CLIP_N;cc++){
-      if (l>0 && r>=q0 && r<q1 && cc>=q0 && cc<q1) continue;            // hole for the finer ring
+      if (l>0 && r>=q0 && r<q1 && cc>=q0 && cc<q1) continue;            // hole for the finer ring to overlap into
       const a=r*V+cc, b=r*V+cc+1, d=(r+1)*V+cc, e2=(r+1)*V+cc+1; idx.push(a,d,b, b,d,e2);
     }
-    for (let k=0;k<PN;k++){ const a=perim[k], b=perim[(k+1)%PN], c2=main+k, d2=main+((k+1)%PN); idx.push(a,c2,b, b,c2,d2); }   // skirt wall quads
     geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
-    geo.setAttribute('askirt', new THREE.BufferAttribute(askirt,1));
     geo.setIndex(idx);
     geo.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0), 1e7);   // verts move in the shader → never frustum-cull
     const uCenter=uniform(new THREE.Vector2(0,0));
     const mat=new THREE.MeshStandardNodeMaterial({ metalness:0.0, roughness:0.92 });
+    mat.polygonOffset=true; mat.polygonOffsetFactor=l*1.0; mat.polygonOffsetUnits=l*8.0;   // push coarser rings back → in the overlap band the finer ring always wins (no z-fight)
     const e=float(cell);
-    // VERTEX: world XZ = local grid offset + this ring's snapped centre; displace from the height texture; curve; skirt verts hang down
+    // VERTEX: world XZ = local grid offset + this ring's snapped centre; displace from the height texture; tiny-planet curve
     const vx=positionLocal.x.add(uCenter.x), vz=positionLocal.z.add(uCenter.y), vh=_hAt(vx,vz);
     const vd=vec2(vx.sub(cameraPosition.x), vz.sub(cameraPosition.z));
-    const skirtDrop=attribute('askirt','float').mul(55.0);
-    mat.positionNode=vec3(vx, vh.sub(dot(vd,vd).mul(uCurveK)).sub(skirtDrop), vz);
+    mat.positionNode=vec3(vx, vh.sub(dot(vd,vd).mul(uCurveK)), vz);
     // FRAGMENT: ramp colour + gradient normal, sampled from the height texture at the world XZ
     const wx=positionWorld.x, wz=positionWorld.z;
     const h=_hAt(wx,wz), hL=_hAt(wx.sub(e),wz), hR=_hAt(wx.add(e),wz), hD=_hAt(wx,wz.sub(e)), hU=_hAt(wx,wz.add(e));
