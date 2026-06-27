@@ -181,7 +181,6 @@
 <script src="data/elev_b64.js"></script>
 <script src="data/bathy_b64.js"></script>
 <script src="data/aegean.js"></script>   <!-- Aegean (Cyclades) region: window.AEGEAN, built by build/gen_region.py -->
-<script src="data/aegeanbig.js"></script>   <!-- Aegean (greater) — large map to exercise clipmap LOD -->
 <script src="data/japan.js"></script>     <!-- Japan · Sagami Bay region: window.JAPAN -->
 <script src="data/thailand.js"></script>  <!-- Thailand · Andaman region: window.THAILAND -->
 <script src="data/sweden.js"></script>    <!-- Sweden · Stockholm Archipelago region: window.SWEDEN (lonscale-corrected for 59°N) -->
@@ -429,14 +428,7 @@ if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
   // bright clear midday Mediterranean light + a dry meltemi north wind, calmer seas, clearer air
   defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:115, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
 });
-// ---- Aegean (greater) — most of the Greek archipelago; a big map to exercise the clipmap LOD ----
-if (window.AEGEANBIG) REGIONS.aegeanbig = Object.assign({}, window.AEGEANBIG, {
-  relief: { escale:22, steep:0.2, ridge:0.5, lift:2.2 },
-  palette: { land: { seabed:0x1d6c84, wetsand:0xc2a266, sand:0xeaddb4, grass:0xb6a85f, forest:0x8f8a4e, rock:0xc3b6a0, cliff:0x9c917b },
-             shrub: [0x97914e, 0x7c7a44] },
-  flora: { palms:false },
-  defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:115, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
-});
+// (the old 'aegeanbig' test region is retired — the main Aegean now covers the full Cyclades, so it was a duplicate)
 // ---- Japan · Sagami Bay (Izu volcanic islands — the Great Wave coast) ----
 if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
   relief: { escale:20, steep:0.17, ridge:0.28, lift:2.9 },   // broad, gentle volcanic cones — no jagged ridges
@@ -1644,14 +1636,33 @@ function buildSky() {
     // moon — small cool disk + faint halo, rises at night
     const moonV = normalize(vec3(uMoonDir.x, uMoonDir.y.sub(uHorizonDrop), uMoonDir.z));
     const md = max(dot(vd, moonV), 0.0);
+    const vgNight = uVangogh.mul(smoothstep(0.12, -0.10, uSunDir.y.sub(uHorizonDrop)));   // Starry-Night sky active (vangogh + sun down)
     const mglow = pow(md, 40.0).mul(0.12).add(pow(md, 1400.0).mul(6.0));
-    col.addAssign(uMoonCol.mul(mglow).mul(uMoonInt));
+    col.addAssign(uMoonCol.mul(mglow).mul(uMoonInt).mul(oneMinus(vgNight)));   // ordinary moon suppressed under the Van Gogh sky (a warm one is drawn below)
     // ---- ATMOSPHERE: warm horizon haze — a glowing band hugging the horizon, brightest toward the sun and swelling
     // at sunset (uWarm), scaled by the Atmosphere slider. Reliable golden-hour glow, independent of god-ray contrast.
     const hzBand = smoothstep(0.32, -0.05, vd.y.add(uHorizonDrop));          // 1 at/below the horizon → 0 up the sky
     const azSun  = max(dot(normalize(vec3(vd.x, 0.001, vd.z)), normalize(vec3(sunV.x, 0.001, sunV.z))), 0.0);
     const haze   = hzBand.mul(mix(float(0.22), float(1.0), pow(azSun, 2.2))).mul(uAtmo).mul(uWarm.mul(0.75).add(0.25));
     col.assign(mix(col, uSunCol.mul(1.15), clamp(haze.mul(0.7), 0.0, 0.82)));
+
+    // ---- Van Gogh "Starry Night" sky (uVangogh, only when the sun is down): rolling cobalt impasto swirls,
+    //      cream stroke-ridges, big radiant chrome-yellow stars with haloes, and a glowing moon ----
+    const sp2 = vec2(vd.x.add(vd.y.mul(0.30)), vd.z.add(vd.y.mul(0.20))).mul(2.6);    // a 2D sky param (avoids the zenith atan singularity)
+    const dr  = vec2(time.mul(0.022), time.mul(-0.016));
+    const warp = vec2(_nfbm2(sp2.mul(1.2).add(dr)).sub(0.5), _nfbm2(sp2.mul(1.2).add(vec2(4.3,1.7)).add(dr)).sub(0.5)).mul(2.7);
+    const swirl = _nfbm2(sp2.mul(2.0).add(warp).add(dr));                              // domain-warped fbm → the iconic spirals
+    const ridge = smoothstep(0.12, 0.0, abs(swirl.sub(0.5)));                          // bright impasto stroke edges
+    const skyVG = mix(vec3(0.018,0.045,0.150), vec3(0.055,0.150,0.380), smoothstep(0.34,0.74,swirl)).toVar();   // DEEP indigo → cobalt body (dark, so stars pop)
+    skyVG.addAssign(vec3(0.85,0.74,0.36).mul(ridge.mul(0.22)));                        // chrome-yellow cream ridges (subtler)
+    const stars = vec3(0).toVar();
+    for (const s of VG_STARS){                                                        // big radiant stars: tight core + broad halo
+      const dd = max(dot(vd, vec3(s[0], s[1], s[2])), 0.0);
+      stars.addAssign(vec3(1.0,0.88,0.42).mul(pow(dd, s[3]).mul(4.6*s[5]).add(pow(dd, s[4]).mul(0.7*s[5]))));
+    }
+    skyVG.addAssign(stars);
+    skyVG.addAssign(vec3(1.0,0.78,0.34).mul(pow(md,560.0).mul(0.85).add(pow(md,40.0).mul(0.22))));   // defined warm-orange moon orb + soft halo (no white blow-out)
+    col.assign(mix(col, skyVG, vgNight));
     return col;
   })();
   skyMesh = new THREE.Mesh(geo, skyMat); skyMesh.renderOrder = -10;
