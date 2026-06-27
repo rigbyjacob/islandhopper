@@ -43,16 +43,12 @@ FAILED Add a volcano to some of the unused underwater mountains that comes close
 FAILED Somehow we are back to gaseous fire and not molten lava. Also the lava fades in at almost full height instead of erupting from the
 base.
 
-Add sea creatures, that have a rigged animation system to simulate realistic swimming patterns. These creatures can locally applicable fish, dolphins, and whales, which will add life to the underwater environment, but ideally we add in a few fun entities like a Kraken or other sea monsters. The sea creatures can be programmed to interact with the ships and submarines, creating a dynamic ecosystem.
 
-Add in fleets of ships, from pirate times with warring European factions to create a dynamic and immersive maritime environment. These fleets can be programmed to follow realistic shipping routes, engage in naval battles, or simply sail around the islands, adding life to the scene.
 
 DONE Can we do this entire thing to a another region of the world, say Hawaii, the South Pacific, Thailand/Indonesia/Singapore, Japan and the Mediterranean? We can create a separate map and set of islands for each region, complete with unique weather patterns and colorations.
 If this requires more sophisticated rendering techniques, we can consider implementing level-of-detail (LOD) models for the islands and underwater features to optimize performance while maintaining visual fidelity.This may require some form of hierarchical A* pathfinding (open to suggestions!). The area should have an art style consistent with the history of the region.
 
 DONE Put these locations onto a world map flying between them allows loading new geometry, make them all look like they are on the same small planet.
-
-Let's explore optimization through travelling salesman, plot the fastest route that visits each island and returns to the starting point. Wall clock time, not only distinance on open water. Have the optimization problem also tune the speed, PID and Kalman hyperparameters. If necessary compute this task offline with appropriate libraries, hook into the justfile if it makes sense and use the uv env we have already.
 
 DONE The show hide vehicle buttons should not change the camera or target, they just show and hide the vehicles.
 
@@ -65,6 +61,53 @@ REVERTED - Is it possible to make world map spin like a real physical globe one 
 DONE-ish I want a button to trigger a depth sounding, it would move the current marker to the current ship position and recalculate the ranges. Since some places are very deep and some shallow the markers need to be dynamic, but rounded to nice whole numbers and not too many to avoid clutter.
 
 
-Let's add sea life, that have a rigged animation system to simulate realistic swimming motion. Choose locally applicable fish, especially schools of fish using Boid flocking algorithm.
+DONE We also need to tidy of the naming, no longer just Leeward islands and the Small Planet title is not helpful or interesting.
 
-The next thing I need is a good way to demo this, give people the file but not expose all of the complexity of the UI to them. I'm thinking a mode with buttons that switch between scenarios, built up from a combination of UI settings, region choices, paths etc. I'd like to build these configurations up, save them as scenarios and then have a mode where users can click through them. We also need to tidy of the naming, no longer just Leeward islands and the Small Planet title is not helpful or interesting.
+
+DONE Let's add sea life, that have a rigged animation system to simulate realistic swimming motion. Choose locally applicable fish, especially schools of fish using Boid flocking algorithm.
+
+DONE-ish Add sea creatures, that have a rigged animation system to simulate realistic swimming patterns. These creatures can locally applicable fish, dolphins, and whales, which will add life to the underwater environment, but ideally we add in a few fun entities like a Kraken or other sea monsters. The sea creatures can be programmed to interact with the ships and submarines, creating a dynamic ecosystem.
+
+Add in fleets of ships, from pirate times with warring European factions to create a dynamic and immersive maritime environment. These fleets can be programmed to follow realistic shipping routes, engage in naval battles, or simply sail around the islands, adding life to the scene.
+
+The next thing I need is a good way to demo this, give people the file but not expose all of the complexity of the UI to them. I'm thinking a mode with buttons that switch between scenarios, built up from a combination of UI settings, region choices, paths etc. I'd like to build these configurations up, save them as scenarios and then have a mode where users can click through them.
+
+Let's explore optimization through travelling salesman, plot the fastest route that visits each island and returns to the starting point. Wall clock time, not only distinance on open water. Have the optimization problem also tune the speed, PID and Kalman hyperparameters. If necessary compute this task offline with appropriate libraries, hook into the justfile if it makes sense and use the uv env we have already.
+
+Can the Ship global wedge path be turned on and off independently of the debug path view.
+
+The constellations seem to be really close to me, can they render further out in the distance so feels less claustrophobic.
+
+I also notice those white lines are back, especially when switching between regions. I still think related to the path, perhaps leftovers from the other region?
+
+
+When choosing and island, the globe immediately snaps to it before diving (to ensure orientation is correct when reverse diving), it should SLERP to the island.
+
+Also hovering over a region should set it as the new target, this includes clicking. Right now the target island can be almost off screen wouldn't even realize it's still the target.
+
+
+I add four m4a intro music tracks in the music/ folder that I want to embed in the app (so it remains one file) and have one of them play randomly on once the ship follow camera has stabilized, they should fade out with a few seconds before the end. There should be a setting to mute the music, defaults to on, but remembers the selection for next time (and respects the scenario setting).
+
+
+For the UI panel update, let's reorganize the sections to improve usability and clarity.
+
+The preferred order is:
+
+Display
+View -> remove this section, move the actions into the Fleet section, they actually need some work because they don't make sense now, but do later.
+Fleet (Mult-Vehicle) -> rename to just Fleet, default closed
+Demo/ Scenarios -> rename to Scenarios
+Cinematic Tour
+Mode -> remove this section as the actions no longer work besides island tour, which should be the default mode.
+Sky & Time
+Weather & Sea
+Speed -> remove this section and move the Speed control to Cinematic Tour, it should still be auto set by the Tour Pace to duration/tour direction sliders
+Capture
+Heading PID
+Speed PID
+Navigation & Estimates
+
+
+Every panel should default to close, but remember that choice between refreshes.
+
+Instead of the pirate skull and crossbones when closing, let's use a ship steering wheel badge.

@@ -39,7 +39,7 @@
 
   .hud { position: fixed; pointer-events: none; color: #eaf6ff;
     text-shadow: 0 1px 3px rgba(0,0,0,.6); }
-  #title { top: 14px; left: 16px; }
+  #title { top: 17px; left: 120px; }
   #title h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: .2px; }
   #title p  { margin: 3px 0 0; font-size: 11.5px; opacity: .72; max-width: 330px; line-height: 1.35; }
 
@@ -55,8 +55,8 @@
     box-shadow: 0 10px 40px rgba(0,0,0,.45); font-size: 12px; }
   #panel::-webkit-scrollbar { width: 8px; }
   #panel::-webkit-scrollbar-thumb { background: rgba(140,200,255,.22); border-radius: 4px; }
-  #skullBtn { position: fixed; top: 12px; right: 12px; z-index: 11; display: none; cursor: pointer;
-    width: 44px; height: 44px; line-height: 44px; text-align: center; font-size: 26px; color: #e9f4ff;
+  #skullBtn { position: fixed; top: 12px; right: 12px; z-index: 11; display: none; align-items: center; justify-content: center; cursor: pointer;
+    width: 44px; height: 44px; color: #e9f4ff;
     background: rgba(8,20,33,.82); backdrop-filter: blur(9px); border: 1px solid rgba(140,200,255,.22);
     border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.45); user-select: none; pointer-events: auto; }
   #skullBtn:hover { background: rgba(30,60,90,.9); }
@@ -155,7 +155,6 @@
 
 <div class="hud" id="title">
   <h1>⚓ Island Hopper</h1>
-  <p>Autonomous helm over the Leeward Islands. Tune the loops, throw weather at it, and watch P, I and D fight the sea.</p>
 </div>
 
 <div class="hud" id="hint">
@@ -163,7 +162,7 @@
 </div>
 
 <div id="panel"></div>
-<div id="skullBtn" title="Open helm console">☠</div>
+<div id="skullBtn" title="Open helm console"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"><circle cx="12" cy="12" r="6"/><line x1="3.4" y1="12" x2="20.6" y2="12"/><line x1="12" y1="3.4" x2="12" y2="20.6"/><line x1="5.9" y1="5.9" x2="18.1" y2="18.1"/><line x1="18.1" y1="5.9" x2="5.9" y2="18.1"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><g fill="currentColor" stroke="none"><circle cx="20.6" cy="12" r="1.15"/><circle cx="3.4" cy="12" r="1.15"/><circle cx="12" cy="20.6" r="1.15"/><circle cx="12" cy="3.4" r="1.15"/><circle cx="18.1" cy="18.1" r="1.15"/><circle cx="5.9" cy="5.9" r="1.15"/><circle cx="18.1" cy="5.9" r="1.15"/><circle cx="5.9" cy="18.1" r="1.15"/></g></svg></div>
 <canvas id="telemetry" width="320" height="190"></canvas>
 <canvas id="compass" width="138" height="138"></canvas>
 
@@ -5371,13 +5370,13 @@ function applyHud(){
 }
 function setPanelOpen(open){
   document.getElementById('panel').style.display = open?'':'none';
-  document.getElementById('skullBtn').style.display = open?'none':'block';   // 'block' (not '') — '' falls back to the CSS display:none and the skull never reappears
+  document.getElementById('skullBtn').style.display = open?'none':'flex';   // 'flex' (not '') — '' falls back to the CSS display:none and the badge never reappears
 }
 function buildPanel() {
   const panel = document.getElementById('panel');
   const head = el('div','',panel);
   const ttlrow = el('div','ttlrow',head);
-  const ttl = el('div','ttl',ttlrow); ttl.textContent = '☠ Helm Console';
+  const ttl = el('div','ttl',ttlrow); ttl.textContent = 'Helm Console';
   const collapse = el('div','collapse',ttlrow); collapse.textContent = '✕'; collapse.title = 'Collapse';
   collapse.onclick = () => setPanelOpen(false);
   document.getElementById('skullBtn').onclick = () => setPanelOpen(true);
@@ -5410,8 +5409,8 @@ function buildPanel() {
   addToggle(s, 'Intro music', P, 'music', setMusic);
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
-  // View
-  s = section(panel, 'View');
+  // Fleet — view actions (moved from the old View section) + independent vehicles + Brady-Bunch grid
+  s = section(panel, 'Fleet');
   ui.viewBtn = el('div','btn', el('div','btns',s)); ui.viewBtn.textContent = 'View: Orbit 🗺';
   ui.viewBtn.onclick = () => setView(!fpsMode);
   const vhint = el('div','read',s); vhint.innerHTML = 'press <b>V</b> to toggle · drag to look';
@@ -5421,9 +5420,6 @@ function buildPanel() {
   ui.soundBtn = el('div','btn', el('div','btns',s)); ui.soundBtn.textContent = '⤓ Depth sounding here';
   ui.soundBtn.onclick = () => triggerSounding();
   const sndhint = el('div','read',s); sndhint.innerHTML = 'drops the sounder at the ship &amp; re-scales the rings to the depth';
-
-  // Fleet — independent vehicles + Brady-Bunch grid
-  s = section(panel, 'Fleet (multi-vehicle)');
   ui.fleetBtns = {};
   const fleetRow = el('div','btns',s);
   for (const [k,lbl] of [['off','Normal'],['ship','Ship'],['sub','Sub'],['plane','Plane'],['ufo','UFO'],...(VOLC_ENABLED?[['volcano','🌋 Volcano']]:[]),['grid','◳ 4-up grid']]){
@@ -5461,6 +5457,7 @@ function buildPanel() {
   addSlider(s, 'Composition: Adams→Bresson', P, 'cineStyle', 0, 1, 0.05, v=>v.toFixed(2));
   addToggle(s, 'Pace to duration', P, 'tourPace', ()=>applyTourPacing());
   addSlider(s, 'Tour duration', P, 'tourMinutes', 1, 30, 0.5, v=>v.toFixed(1)+' min', ()=>applyTourPacing());
+  addSlider(s, 'Target speed (auto-set by pacing)', P, 'desiredSpeed', 0, 30, 0.5, v=>v.toFixed(1)+' kn');   // moved from the old Speed section; Pace-to-duration / Tour duration drive it
   // route editor: comma-separated island names
   el('div','read',s).innerHTML = 'Route (island names, in order):';
   ui.routeInput = el('textarea','routebox',s);
@@ -5521,24 +5518,7 @@ function buildPanel() {
   addSlider(cap, 'Fade-in',   P, 'transFadeIn',  0.05, 2.5, 0.05, v=>v.toFixed(2)+'s');
   addSlider(cap, 'Ease (lin→smooth)', P, 'transEase', 0, 1, 0.05, v=>v.toFixed(2));
 
-  // Modes
-  s = section(panel, 'Mode');
-  const modeRow = el('div','btns',s);
-  ui.modeBtns = {};
-  for (const [m,label] of [['tour','Island tour'],['hold','Hold heading'],['goto','Go-to (dbl-click)']]) {
-    const b = el('div','btn',modeRow); b.textContent = label; b.onclick = () => setMode(m); ui.modeBtns[m] = b;
-  }
-  ui.holdWrap = el('div','',s);
-  addSlider(ui.holdWrap, 'Target heading', P, 'desiredHeadingDeg', 0, 359, 1, v=>v.toFixed(0)+'°');
-  const stepRow = el('div','btns',ui.holdWrap);
-  for (const [lbl,dd] of [['Step −45°',-45],['Step +45°',45]]) {
-    const b=el('div','btn',stepRow); b.textContent=lbl;
-    b.onclick=()=>{ P.desiredHeadingDeg=((P.desiredHeadingDeg+dd)%360+360)%360; syncSlider('desiredHeadingDeg'); };
-  }
-
-  // Speed
-  s = section(panel, 'Speed');
-  addSlider(s, 'Target speed', P, 'desiredSpeed', 0, 30, 0.5, v=>v.toFixed(1)+' kn');
+  // (Mode section removed — Island tour is the only working mode and is the default; Speed section removed — Target speed now lives in Cinematic tour, driven by pacing)
 
   // Heading PID
   s = section(panel, 'Heading PID → rudder');
@@ -5596,8 +5576,8 @@ function buildPanel() {
 
   buildDemoSection(panel);   // Demo / Scenarios — capture, list, enter demo mode, export
 
-  // Actions
-  s = section(panel, '');
+  // Misc
+  s = section(panel, 'Misc');
   const acts = el('div','btns',s);
   const pauseBtn = el('div','btn',acts); pauseBtn.textContent='Pause';
   pauseBtn.onclick=()=>{ P.paused=!P.paused; pauseBtn.textContent=P.paused?'Resume':'Pause'; pauseBtn.classList.toggle('active',P.paused); };
@@ -5638,13 +5618,13 @@ function buildPanel() {
     setTimeout(()=>{ exportBtn.textContent = old; exportBtn.classList.remove('active'); }, 1600);
   };
 
-  setMode(P.mode);
+  setMode('tour');                    // Island tour is the only working mode → force it (the old Mode buttons are gone)
   applyPanelLayout();                 // restore saved section order + collapsed state
 }
 
 function setMode(m) {
   P.mode = m;
-  for (const k in ui.modeBtns) ui.modeBtns[k].classList.toggle('active', k===m);
+  if (ui.modeBtns) for (const k in ui.modeBtns) ui.modeBtns[k].classList.toggle('active', k===m);
   if (ui.holdWrap) ui.holdWrap.style.display = (m==='hold') ? '' : 'none';
   headingPID.reset(); saveSettings();
 }
@@ -6000,7 +5980,7 @@ function closeWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) o
   if(controls) controls.enabled=_prevCtrlEnabled;
   const _ob=document.getElementById('wm-open'); if(_ob) _ob.style.display='';
   const _pn=document.getElementById('panel'); if(_pn) _pn.style.display=_wmPrevPanel;
-  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display=(_pn && _pn.style.display==='none')?'block':'none'; }   // re-show the skull only if the panel was left collapsed
+  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display=(_pn && _pn.style.display==='none')?'flex':'none'; }   // re-show the badge only if the panel was left collapsed
 // World button = a live snapshot of the globe as it looked right before the dive.
 let _thumbCanvas=null, _globeThumb=null, _thumbTick=0;
 function _grabGlobeFrame(){ if(_diveZoom) return; if((_thumbTick++ & 3)!==0) return;   // cheap GPU blit into a small canvas every 4th steady frame (no readback here)
@@ -6173,7 +6153,7 @@ function _buildDemoBar(){
 function _updateDemoBar(){ const nm=document.getElementById('demo-name'); if(nm&&demoScenarios[_demoIdx]) nm.textContent=demoScenarios[_demoIdx].name;
   const bs=document.getElementById('demo-btns'); if(bs) [...bs.children].forEach((b,i)=>b.classList.toggle('active', i===_demoIdx)); }
 function buildDemoSection(panel){
-  const s=section(panel,'Demo / Scenarios');
+  const s=section(panel,'Scenarios');
   ui.scnName=el('input','scn-input',s); ui.scnName.type='text'; ui.scnName.placeholder='Scenario name…';
   const saveB=el('div','btn',s); saveB.textContent='➕ Save current as scenario';
   saveB.onclick=()=>{ demoScenarios.push(captureScenario((ui.scnName.value||'').trim())); _saveScenarios(); ui.scnName.value=''; _refreshScenarioList(); };
@@ -6219,11 +6199,15 @@ function _panelSecs(){ const p=document.getElementById('panel'); return p ? Arra
 function savePanelLayout(){ P.panelOrder=_panelSecs().map(s=>s.dataset.sec);
   P.panelCollapsed={}; _panelSecs().forEach(s=>{ if(s.classList.contains('collapsed')) P.panelCollapsed[s.dataset.sec]=1; });
   saveSettings(); }
+const DEFAULT_PANEL_ORDER = ['Display','Fleet','Scenarios','Cinematic tour','Sky & time','Weather & sea','Capture','Heading PID → rudder','Speed PID → throttle','Navigation & estimation','Misc'];
 function applyPanelLayout(){ const p=document.getElementById('panel'); if(!p) return;
-  const secs={}; _panelSecs().forEach(s=>secs[s.dataset.sec]=s);
-  if(Array.isArray(P.panelOrder)) for(const name of P.panelOrder){ if(secs[name]) p.appendChild(secs[name]); }   // reorder per saved order
-  p.querySelectorAll(':scope > .sec:not([data-sec])').forEach(s=>p.appendChild(s));                              // keep Actions pinned at the bottom
-  if(P.panelCollapsed) Object.values(secs).forEach(s=>s.classList.toggle('collapsed', !!P.panelCollapsed[s.dataset.sec])); }
+  if(!Array.isArray(P.panelOrder) || !P.panelOrder.includes('Fleet') || !P.panelOrder.includes('Scenarios') || !P.panelOrder.includes('Misc')){ P.panelOrder=DEFAULT_PANEL_ORDER.slice(); P.panelCollapsed=null; }   // fresh / pre-reorg save → adopt the new default order + closed-by-default
+  const all=_panelSecs(); const secs={}; all.forEach(s=>secs[s.dataset.sec]=s); const placed={};
+  for(const name of P.panelOrder){ if(secs[name]){ p.appendChild(secs[name]); placed[name]=1; } }   // reorder per saved order
+  all.forEach(s=>{ if(!placed[s.dataset.sec]) p.appendChild(s); });                              // any new/unlisted titled section → after the ordered ones
+  p.querySelectorAll(':scope > .sec:not([data-sec])').forEach(s=>p.appendChild(s));               // Actions pinned last
+  if(P.panelCollapsed==null) all.forEach(s=>s.classList.add('collapsed'));                        // default: every section closed (remembered once the viewer opens any)
+  else all.forEach(s=>s.classList.toggle('collapsed', !!P.panelCollapsed[s.dataset.sec])); }
 const sliderRefs = {};
 function addSlider(parent, label, obj, key, min, max, step, fmt, onChange){
   const row=el('div','row',parent);
