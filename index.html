@@ -5305,9 +5305,9 @@ function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   return new THREE.Vector3(r*Math.cos(a)*Math.cos(o), r*Math.sin(a), -r*Math.cos(a)*Math.sin(o)); }
 function _placeOnSphere(obj, lat, lon, r){ const n=latLonToVec(lat,lon,1);
   obj.position.copy(n.clone().multiplyScalar(r)); obj.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n); }
-function makeRegionMarker(id, cur){      // a glowing outline ring on the surface + a beacon, tagged for picking
+function makeRegionMarker(id, cur, artCol){      // a glowing outline ring on the surface, tagged for picking
   const g=new THREE.Group();
-  const col = cur ? 0x66e8aa : 0x86d8ff;
+  const col = new THREE.Color(artCol||0x86d8ff).lerp(new THREE.Color(0xffffff), cur?0.45:0.18).getHex();   // the region's art colour, brightened (more for the current region)
   const ring=new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.009, 8, 30),
     new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false }));
   ring.rotation.x=Math.PI/2; g.add(ring);                                   // lie flat in the surface tangent plane
@@ -5326,6 +5326,15 @@ function _globeLabel(text, color){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthTest:false, depthWrite:false }));
   const s=0.085; sp.scale.set(s*w/h, s, 1); sp.renderOrder=40; return sp;
 }
+// A "fun" per-region colour drawn from each place's art history — used for the relief patch, ring & label.
+const REGION_ART_COL = {
+  caribbean: 0x1fb6b0,   // Caribbean sea & Haitian naïve art — vivid turquoise
+  aegean:    0xe07a3c,   // Greek red-figure pottery — terracotta
+  japan:     0x3a57b0,   // Hokusai ukiyo-e — Prussian "Berlin" blue
+  thailand:  0xe8a82a,   // Thai temple gilding — leaf gold
+  sweden:    0xb83f2e,   // Swedish folk art (Dalarna / Carl Larsson) — Falu red
+  hawaii:    0xdd4f8c,   // Hawaiian lei & kapa — hibiscus pink
+};
 // PHASE 4b (first pass): the REAL island outlines of every region, placed as small relief patches on the
 // globe at their lat/lon, so spinning the planet shows actual archipelago geometry (not just markers/texture).
 // Each region is normalised to ~PATCH globe-units (exaggerated so small clusters stay visible — a "small planet").
@@ -5338,8 +5347,8 @@ function buildRegionPatch(r){
   const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, ext=Math.max(mxx-mnx, mxz-mnz)||1;
   const PATCH=0.26, scale=PATCH/ext;
   const grp=new THREE.Group();
-  const landCol=(r.palette&&r.palette.land&&r.palette.land.grass)||0x8fae5a;   // each region wears its own character colour
-  const landMat=new THREE.MeshStandardMaterial({ color:landCol, emissive:new THREE.Color(landCol).multiplyScalar(0.10), roughness:0.78, metalness:0.0 });
+  const landCol=REGION_ART_COL[r.id]||0x8fae5a;                                 // art-history colour for this region
+  const landMat=new THREE.MeshStandardMaterial({ color:landCol, emissive:new THREE.Color(landCol).multiplyScalar(0.30), roughness:0.7, metalness:0.0 });   // emissive so the colours stay vivid against the dramatic grayscale Earth
   for (const p of polys){ const ring=p.r||p.ring; if(!ring||ring.length<4) continue;
     const sh=new THREE.Shape();
     ring.forEach((v,i)=>{ const x=(v[0]-cx)*scale, y=(v[1]-cz)*scale; i?sh.lineTo(x,y):sh.moveTo(x,y); });
@@ -5355,8 +5364,8 @@ function buildRegionPatch(r){
 function buildGlobe(){
   globeScene=new THREE.Scene();
   globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,4.0);
-  globeScene.add(new THREE.HemisphereLight(0xdcefff, 0x2a3a4e, 1.15));
-  const dir=new THREE.DirectionalLight(0xfff4e2,1.45); dir.position.set(2.5,2,3.5); globeScene.add(dir);
+  globeScene.add(new THREE.HemisphereLight(0xeaf2ff, 0x1c2430, 0.78));   // lower ambient floor → deeper shadows (Ansel Adams chiaroscuro on the relief)
+  const dir=new THREE.DirectionalLight(0xffffff,1.85); dir.position.set(2.5,2,3.5); globeScene.add(dir);   // strong neutral key light
   const sg=new THREE.BufferGeometry(), N=700, sp=new Float32Array(N*3);
   for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(40+Math.random()*25); sp.set([v.x,v.y,v.z], i*3); }
   sg.setAttribute('position', new THREE.BufferAttribute(sp,3));
@@ -5368,16 +5377,18 @@ function buildGlobe(){
   globeSpin.add(ocean);
   if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map via canvas → grayscale planet
       const cv=document.createElement('canvas'); cv.width=img.width; cv.height=img.height;
-      const c2=cv.getContext('2d'); c2.filter='grayscale(1) brightness(0.96) contrast(0.9)'; c2.drawImage(img,0,0);
+      const c2=cv.getContext('2d'); c2.filter='grayscale(1) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0);   // Ansel Adams: full tonal range, deep blacks → brilliant whites
       const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; ocean.material.map=t; ocean.material.color.setScalar(1); ocean.material.needsUpdate=true; };
     img.src=window.WORLDMAP; }
   _globePicks=[];
   for (const r of Object.values(REGIONS)){
     const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
     if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R+0.008); globeSpin.add(patch); _globePicks.push(patch); }
-    const c=makeRegionMarker(r.id, r.id===REGION.id); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
+    const artCol=REGION_ART_COL[r.id]||0x86d8ff;
+    const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
-    const lab=_globeLabel(m.tag, r.id===REGION.id?0x66e8aa:0xffe6ad);
+    const labCol=new THREE.Color(artCol).lerp(new THREE.Color(0xffffff), r.id===REGION.id?0.55:0.4).getHex();   // art colour, lightened for legibility
+    const lab=_globeLabel(m.tag, labCol);
     lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R*1.18)); globeSpin.add(lab);
   }
   faceRegion(REGION.id);
