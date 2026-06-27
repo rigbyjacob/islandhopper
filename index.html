@@ -5349,29 +5349,58 @@ const REGION_ART_COL = {
   sweden:    0xb83f2e,   // Swedish folk art (Dalarna / Carl Larsson) — Falu red
   hawaii:    0xdd4f8c,   // Hawaiian lei & kapa — hibiscus pink
 };
-// PHASE 4b (first pass): the REAL island outlines of every region, placed as small relief patches on the
-// globe at their lat/lon, so spinning the planet shows actual archipelago geometry (not just markers/texture).
-// Each region is normalised to ~PATCH globe-units (exaggerated so small clusters stay visible — a "small planet").
+// A little tabletop DIORAMA of each region on the globe: the REAL island outlines, sculpted into hills (coast→green→
+// rock) sitting in a tinted sea — so spinning the planet gives a believable sense of each archipelago before you dive.
+const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', aegean:'med', japan:'temp', sweden:'nord' };
+const _PAL = {   // per-biome natural palette: sea, beach, vegetated lowland, rocky peak
+  trop:{ sea:0x1f86ab, beach:0xe7d8aa, low:0x4ea049, peak:0x6f8a4e },
+  med: { sea:0x2a7ea2, beach:0xdac99a, low:0x9aa05c, peak:0xb89a62 },
+  temp:{ sea:0x2676a0, beach:0xccbf98, low:0x53853f, peak:0x9a8f72 },
+  nord:{ sea:0x357488, beach:0xb7b189, low:0x46673b, peak:0x6c705c },
+};
 function buildRegionPatch(r){
-  const polys = r.islandPolys || [];
+  let polys = (r.islandPolys||[]).filter(p=>{ const ring=p.r||p.ring; return ring && ring.length>=4; });
   if (!polys.length) return null;
+  polys = polys.slice().sort((a,b)=>((b.r||b.ring).length)-((a.r||a.ring).length)).slice(0,60);   // biggest 60 carry the archipelago's shape
   let mnx=Infinity,mxx=-Infinity,mnz=Infinity,mxz=-Infinity, maxH=1;
-  for (const p of polys){ const ring=p.r||p.ring; if(!ring) continue; maxH=Math.max(maxH, p.h||1); for (const v of ring){ mnx=Math.min(mnx,v[0]); mxx=Math.max(mxx,v[0]); mnz=Math.min(mnz,v[1]); mxz=Math.max(mxz,v[1]); } }
+  for (const p of polys){ const ring=p.r||p.ring; maxH=Math.max(maxH,p.h||1); for (const v of ring){ mnx=Math.min(mnx,v[0]); mxx=Math.max(mxx,v[0]); mnz=Math.min(mnz,v[1]); mxz=Math.max(mxz,v[1]); } }
   if (!isFinite(mnx)) return null;
   const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, ext=Math.max(mxx-mnx, mxz-mnz)||1;
-  const PATCH=0.26, scale=PATCH/ext;
+  const PATCH=0.24, scale=PATCH/ext, R=PATCH*0.62;
   const grp=new THREE.Group();
-  const landCol=REGION_ART_COL[r.id]||0x8fae5a;                                 // art-history colour for this region
-  const landMat=new THREE.MeshStandardMaterial({ color:landCol, emissive:new THREE.Color(landCol).multiplyScalar(0.30), roughness:0.7, metalness:0.0 });   // emissive so the colours stay vivid against the dramatic grayscale Earth
-  for (const p of polys){ const ring=p.r||p.ring; if(!ring||ring.length<4) continue;
-    const sh=new THREE.Shape();
-    ring.forEach((v,i)=>{ const x=(v[0]-cx)*scale, y=(v[1]-cz)*scale; i?sh.lineTo(x,y):sh.moveTo(x,y); });
-    const depth=clampJS((p.h||1)/maxH, 0.14, 1.0)*0.045;   // taller islands rise more from the planet (globe units)
-    let geo; try { geo=new THREE.ExtrudeGeometry(sh, {depth, bevelEnabled:false, steps:1}); } catch(_){ try{ geo=new THREE.ShapeGeometry(sh);}catch(__){continue;} }
-    geo.rotateX(-Math.PI/2);                              // footprint in the tangent plane, real height rises along +Y (the surface normal)
+  const pal=_PAL[_BIOME[r.id]||'temp'];
+  const cBeach=new THREE.Color(pal.beach), cLow=new THREE.Color(pal.low), cPeak=new THREE.Color(pal.peak);
+
+  // plinth (a tile seated on the globe) + a tinted sea the islands sit IN
+  const base=new THREE.Mesh(new THREE.CylinderGeometry(R*1.05, R*0.93, 0.05, 56),
+    new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
+  base.position.y=0.025; grp.add(base);
+  const sea=new THREE.Mesh(new THREE.CircleGeometry(R, 56),
+    new THREE.MeshStandardMaterial({ color:pal.sea, roughness:0.38, metalness:0.0 }));
+  sea.rotation.x=-Math.PI/2; sea.position.y=0.052; grp.add(sea);
+
+  // sculpted island hills — a coast→mid→peak fan per real outline, vertex-shaded beach→green→rock
+  const landMat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.86, metalness:0.0, side:THREE.DoubleSide });
+  const seaY=0.05, PEAK=0.062;
+  for (const p of polys){ let ring=(p.r||p.ring).map(v=>[(v[0]-cx)*scale,(v[1]-cz)*scale]);
+    if (ring.length>1 && ring[0][0]===ring[ring.length-1][0] && ring[0][1]===ring[ring.length-1][1]) ring=ring.slice(0,-1);
+    const N=ring.length; if (N<3) continue;
+    let ax=0,az=0; for (const q of ring){ ax+=q[0]; az+=q[1]; } ax/=N; az/=N;
+    const ih=clampJS((p.h||1)/maxH,0.25,1), h=ih*PEAK;
+    const peakCol=cLow.clone().lerp(cPeak, clampJS((ih-0.5)*2,0,1));     // tall island → rocky peak, short → green
+    const V=[], C=[], idx=[];
+    V.push(ax, seaY+h, az); C.push(peakCol.r,peakCol.g,peakCol.b);        // 0: summit
+    for (let i=0;i<N;i++){ const mx=ring[i][0]+(ax-ring[i][0])*0.5, mz=ring[i][1]+(az-ring[i][1])*0.5;   // 1..N: mid slope
+      V.push(mx, seaY+h*0.5, mz); C.push(cLow.r,cLow.g,cLow.b); }
+    for (let i=0;i<N;i++){ V.push(ring[i][0], seaY-0.003, ring[i][1]); C.push(cBeach.r,cBeach.g,cBeach.b); }   // N+1..2N: coast
+    for (let i=0;i<N;i++){ idx.push(0, 1+i, 1+(i+1)%N); }                 // summit → mid fan
+    for (let i=0;i<N;i++){ const mi=1+i, mj=1+(i+1)%N, bi=1+N+i, bj=1+N+(i+1)%N; idx.push(mi,bi,bj, mi,bj,mj); }   // mid → coast skirt
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(V,3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(C,3));
+    geo.setIndex(idx); geo.computeVertexNormals();
     grp.add(new THREE.Mesh(geo, landMat));
   }
-  if (!grp.children.length) return null;
   grp.traverse(o=>{ if(o.isMesh) o.userData.regionId=r.id; }); grp.userData.regionId=r.id;
   return grp;
 }
@@ -5397,7 +5426,7 @@ function buildGlobe(){
   _globePicks=[];
   for (const r of Object.values(REGIONS)){
     const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
-    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R+0.008); globeSpin.add(patch); _globePicks.push(patch); }
+    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R-0.012); globeSpin.add(patch); _globePicks.push(patch); }   // sink the plinth slightly so it seats flush on the sphere
     const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
