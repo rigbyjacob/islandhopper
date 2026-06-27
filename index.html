@@ -3099,7 +3099,7 @@ function buildDipStick(px, pz){
         const depth=-gebcoMetres(tx,tz); if (depth<60 || terrainHeight(tx,tz)>0.5) continue;   // real open water only
         const score=depth - 0.03*Math.hypot(tx-MAP.cx, tz-MAP.cz); if (score>best){ best=score; X=tx; Z=tz; } } }
   }
-  if (dipStick){ scene.remove(dipStick); dipStick.traverse(o=>{ o.geometry&&o.geometry.dispose&&o.geometry.dispose(); o.material&&o.material.dispose&&o.material.dispose(); }); dipStick=null; }
+  if (dipStick){ scene.remove(dipStick); dipStick=null; }   // DETACH only — disposing materials/geometry mid-session corrupts the WebGPU node cache (crash). Small per-trigger leak is fine.
   dipX=X; dipZ=Z;
   const maxM = Math.max(1, -gebcoMetres(X,Z)), seabedY = -compressM(maxM);
   const g = new THREE.Group(); g.visible = false;
