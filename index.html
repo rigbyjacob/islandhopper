@@ -185,6 +185,7 @@
 <script src="data/japan.js"></script>     <!-- Japan · Sagami Bay region: window.JAPAN -->
 <script src="data/thailand.js"></script>  <!-- Thailand · Andaman region: window.THAILAND -->
 <script src="data/sweden.js"></script>    <!-- Sweden · Stockholm Archipelago region: window.SWEDEN (lonscale-corrected for 59°N) -->
+<script src="data/hawaii.js"></script>    <!-- Hawaiʻi · main island chain: window.HAWAII (volcanic, tropical) -->
 <script src="data/worldmap.js"></script>   <!-- shaded-relief Earth COLOR texture for the world-map globe (build/gen_worldmap.py) -->
 <script src="data/worldmap_disp.js"></script>   <!-- Earth DISPLACEMENT (height) texture for globe relief -->
 <script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
@@ -275,7 +276,8 @@ const P = {
   tourMinutes: 1,     // target duration for the full route (soft deadline; PID stays in control)
   cineStyle: 0.2,     // composition lean baseline 0 = Ansel-Adams wide … 1 = Cartier-Bresson tight (auto-modulated by events)
   cineView: 'follow', // director camera mode: 'follow' (slider) | 'side' | 'race'
-  bathy: true,        // bathymetric overlay — show underwater depth ramp
+  bathy: false,       // bathymetric overlay — translucent water revealing the seabed depth ramp. OFF by default so the
+                      //   sea reads as realistic opaque water; over broad shallow shelves the reveal looked milky/foamy. Toggle on to inspect depth.
   contours: false,    // iso-depth contour LINES — independent of the bathymetry ramp
   curveWorld: true,   // "tiny planet" — bend the sea + land down into the distance (no hard flat map edge)
   curveRadius: 9000,  // curvature radius R (world units); larger = gentler bend
@@ -439,7 +441,7 @@ if (window.AEGEANBIG) REGIONS.aegeanbig = Object.assign({}, window.AEGEANBIG, {
 if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
   relief: { escale:20, steep:0.17, ridge:0.28, lift:2.9 },   // broad, gentle volcanic cones — no jagged ridges
   seaTint: [1.08, 1.0, 0.86],                                // warm the cool Hokusai sea a touch
-  foam: 0.45,                                                // far fewer open-water whitecaps — sheltered bays read as water, not surf (the big swell still breaks at the coast)
+  foam: 0.22,                                                // far fewer open-water whitecaps — sheltered Izu channels read as water, not surf
   palette: {
     land: { seabed:0x14506b, wetsand:0x7c857c, sand:0xc2bfa8,
             grass:0x52844a, forest:0x356037, rock:0x655f58, cliff:0x47423c },   // forest greens + visible (not black) volcanic basalt
@@ -449,7 +451,7 @@ if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
   cities: [ [139.36,34.75,20], [139.10,34.97,16], [139.07,35.10,18], [139.27,34.37,8], [139.42,34.69,6] ],
   cityLabels: [ ['Motomachi',139.36,34.75],['Itō',139.10,34.97],['Atami',139.07,35.10],['Niijima',139.27,34.37] ],
   // moody Hokusai sea: bigger swell, fresh wind, slightly hazy morning
-  defaults: { timeOfDay:9.0, atmosphere:0.55, windDirDeg:300, windStrength:11, waveHeight:2.4, stormOn:false, stormIntensity:0.0 },
+  defaults: { timeOfDay:9.0, atmosphere:0.55, windDirDeg:300, windStrength:11, waveHeight:1.35, stormOn:false, stormIntensity:0.0 },
 });
 // ---- Thailand · Andaman (Phang Nga / Phuket — limestone karst & warm seas) ----
 if (window.THAILAND) REGIONS.thailand = Object.assign({}, window.THAILAND, {
@@ -493,6 +495,33 @@ if (window.SWEDEN) REGIONS.sweden = Object.assign({}, window.SWEDEN, {
   ],
   // bright Nordic summer afternoon (sun stays high at 59°N) so the pink granite reads — gentle sheltered water, fresh breeze
   defaults: { timeOfDay:15.5, atmosphere:0.38, windDirDeg:205, windStrength:7, waveHeight:0.55, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Hawaiʻi · the main island chain — broad volcanic shields, lush windward green & black basalt, deep Pacific blue ----
+if (window.HAWAII) REGIONS.hawaii = Object.assign({}, window.HAWAII, {
+  relief: { escale:32, steep:0.15, ridge:0.30, lift:2.5 },   // huge but BROAD shield volcanoes (Mauna Kea/Loa), not jagged spires
+  seaTint: [0.84, 1.0, 1.14],                                // deep oceanic Pacific blue (narrow shelves → less turquoise)
+  palette: {
+    land: { seabed:0x10688f, wetsand:0x8f7d5e, sand:0xe6d4a2,
+            grass:0x4f8f3e, forest:0x2c6028, rock:0x6b5e52, cliff:0x453c34 },   // lush windward green → dark volcanic basalt rock/cliffs
+    shrub: [0x3f9a3a, 0x2a7028],                             // tropical foliage
+  },
+  // palms ON (tropical) — leave flora default; dense lowland greenery
+  flora: { palms:true, density:2.2 },
+  // real Hawaiian town locations (lon,lat,weight)
+  cities: [
+    [-157.86,21.31,40],  // Honolulu (Oʻahu)
+    [-155.09,19.72,18],  // Hilo (Hawaiʻi)
+    [-155.99,19.64,16],  // Kailua-Kona (Hawaiʻi)
+    [-156.68,20.87,14],  // Lahaina (Maui)
+    [-156.47,20.89,12],  // Kahului (Maui)
+    [-159.37,21.98,10],  // Līhuʻe (Kauaʻi)
+  ],
+  cityLabels: [
+    ['Honolulu',-157.86,21.31],['Hilo',-155.09,19.72],['Kailua-Kona',-155.99,19.64],
+    ['Lahaina',-156.68,20.87],['Kahului',-156.47,20.89],['Līhuʻe',-159.37,21.98],
+  ],
+  // bright tropical day, fresh NE trade winds, a steady Pacific swell (Hawaii surfs — keep the foam)
+  defaults: { timeOfDay:13.0, atmosphere:0.5, windDirDeg:60, windStrength:12, waveHeight:1.8, stormOn:false, stormIntensity:0.0 },
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
