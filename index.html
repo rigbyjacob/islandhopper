@@ -1071,11 +1071,29 @@ function randn(){ if(gaussSpare!==null){ const v=gaussSpare; gaussSpare=null; re
 // ============================================================================
 // Boat dynamics (3-DOF: surge u, sway v, yaw r)
 // ============================================================================
-// start out in open water SE of Guadeloupe (N) (the SE end of the chain), clear of all islands
-const START_POS = { x: 1080, z: 300 };
-const _Gua = BYNAME['Guadeloupe (N)'] || { x: 908.5, z: 176.4 };
+// Start in open water just off the main island, INSIDE whichever region's cluster is loaded.
+// (Was a hard-coded Caribbean point, which left Greece/Thailand/Japan starting far outside their islands.)
+const _byR = ISLANDS.slice().sort((a,b)=>b.r-a.r);
+const START_POS = (function(){
+  if (!_byR.length) return { x: 0, z: 0 };
+  const big = _byR.slice(0, Math.min(8, _byR.length));
+  const cx = big.reduce((s,i)=>s+i.x,0)/big.length, cz = big.reduce((s,i)=>s+i.z,0)/big.length;   // heart of the archipelago
+  const main = _byR[0];
+  let dx = cx-main.x, dz = cz-main.z, dl = Math.hypot(dx,dz);
+  if (dl < 1){ dx = 1; dz = 0.5; dl = Math.hypot(dx,dz); }                                          // lone dominant island → arbitrary offshore heading
+  dx/=dl; dz/=dl;
+  let p = { x: main.x + dx*(main.r+170), z: main.z + dz*(main.r+170) };                             // just off the main island, on the side facing the rest of the chain
+  for (let it=0; it<16; it++){                                                                      // shove clear of any island it happens to land inside
+    let hit=null, worst=0;
+    for (const isl of _byR){ const d=Math.hypot(p.x-isl.x, p.z-isl.z), pen=(isl.r+90)-d; if (pen>worst){ worst=pen; hit=isl; } }
+    if (!hit) break;
+    const ox=p.x-hit.x, oz=p.z-hit.z, ol=Math.hypot(ox,oz)||1; p.x=hit.x+ox/ol*(hit.r+90); p.z=hit.z+oz/ol*(hit.r+90);
+  }
+  return p;
+})();
+const _faceTo = _byR[0] || { x: 0, z: 0 };
 const boat3 = { x: START_POS.x, z: START_POS.z,
-  psi: Math.atan2(_Gua.z - START_POS.z, _Gua.x - START_POS.x),   // face back toward the chain
+  psi: Math.atan2(_faceTo.z - START_POS.z, _faceTo.x - START_POS.x),   // face toward the main island / into the chain
   u: 8, v: 0, r: 0, thr: 0.4, delta: 0, speedWater: 8, speedGround: 8 };
 
 function stepDynamics(s, dt, t) {
