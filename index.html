@@ -1304,7 +1304,9 @@ async function init() {
   scene = new THREE.Scene();
   buildTerrainField();
   uSeaTint.value.fromArray(REGION.seaTint || [1,1,1]);   // per-region water tint
-  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers(); buildTerrain(); buildDipStick(); buildVolcano();
+  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers();
+  if (LOD_TERRAIN) buildClipmapTerrain(); else buildTerrain();
+  buildDipStick(); buildVolcano();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
   buildShrubs(); buildTownMotifs(); buildVehicles();
@@ -1381,6 +1383,7 @@ async function init() {
     updateVolcano(dt, t); // submarine volcano: caldera glow + eruption plume/ejecta
     updateSubNavDebug();  // sub's depth grid + plan in the nav-debug overlay (after the sub has planned this frame)
     controls.update();
+    if (LOD_TERRAIN) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
@@ -3899,6 +3902,80 @@ function buildTerrain() {
   // land+seabed mesh, so receiving would paint the sun shadow-camera's rectangular frustum footprint onto the
   // deep seabed (visible through the bathymetry water as a moving rectangle). Slope-shading gives island relief.
   mesh.castShadow = true; mesh.receiveShadow = false; scene.add(mesh); terrainMesh = mesh;
+}
+
+// ============================================================================
+// PHASE 4a — CLIPMAP terrain LOD (behind ?lod). A focus-centred stack of nested
+// ring grids: fine in the middle, doubling cell size outward. Each ring follows
+// the boat (snapped to its grid) and resamples heights/colours from seabedHeight,
+// so the world can be arbitrarily large at a fixed vertex budget. The tiny-planet
+// curvature already sinks the far rings below the horizon.
+// ============================================================================
+const LOD_TERRAIN = new URLSearchParams(location.search).has('lod');
+const CLIP_N = 96, CLIP_BASE = 2, CLIP_LEVELS = 7;   // 96×96 cells/level, 2u fine center; extents 192,384,…,12288u
+let clipLevels = [];
+// reuse the exact buildTerrain ramp so the look matches
+function _terrainColorAt(y, slope, c){
+  const LP=(REGION.palette&&REGION.palette.land)||{};
+  const seabed=_cl0??(_cl0=new THREE.Color()), wetsand=_cl1??(_cl1=new THREE.Color()), sand=_cl2??(_cl2=new THREE.Color()),
+        grass=_cl3??(_cl3=new THREE.Color()), forest=_cl4??(_cl4=new THREE.Color()), rock=_cl5??(_cl5=new THREE.Color()), cliff=_cl6??(_cl6=new THREE.Color());
+  seabed.set(LP.seabed??0x14506b); wetsand.set(LP.wetsand??0xa98c52); sand.set(LP.sand??0xe6d6a8);
+  grass.set(LP.grass??0x4f8a3c); forest.set(LP.forest??0x2f6630); rock.set(LP.rock??0x7d756a); cliff.set(LP.cliff??0x564f47);
+  let rgh=0.95;
+  if (y<0.2){ c.copy(seabed); }
+  else if (y<1.4){ c.copy(seabed).lerp(wetsand, smooth01(clampJS((y-0.2)/0.5,0,1))); c.lerp(sand, smooth01(clampJS((y-0.75)/0.65,0,1))); rgh=0.55+0.4*clampJS((y-0.2)/1.2,0,1); }
+  else {
+    if (y<5.0) c.copy(sand).lerp(grass, smooth01(clampJS((y-1.4)/3.6,0,1)));
+    else if (y<13) c.copy(grass).lerp(forest, smooth01(clampJS((y-5.0)/8,0,1)));
+    else c.copy(forest).lerp(rock, smooth01(clampJS((y-13)/6,0,1)));
+    const steep=smooth01(clampJS((slope-0.5)/0.6,0,1)); c.lerp(rock, steep*0.8);
+    const cliffy=smooth01(clampJS((slope-1.15)/0.7,0,1)); c.lerp(cliff, cliffy*0.9);
+    rgh=0.92-0.3*Math.max(steep,cliffy);
+  }
+  return rgh;
+}
+let _cl0,_cl1,_cl2,_cl3,_cl4,_cl5,_cl6, _clC=new THREE.Color();
+function buildClipmapTerrain(){
+  clipLevels=[];
+  const V=CLIP_N+1;
+  for (let l=0; l<CLIP_LEVELS; l++){
+    const cell=CLIP_BASE*(1<<l), half=CLIP_N*cell/2;
+    const geo=new THREE.BufferGeometry();
+    const pos=new Float32Array(V*V*3), col=new Float32Array(V*V*3), hgt=new Float32Array(V*V);
+    for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc; pos[i*3]=cc*cell-half; pos[i*3+1]=0; pos[i*3+2]=r*cell-half; }
+    // index: full grid for level 0; outer RING (central half hollow) for the rest, so finer level fills the centre
+    const idx=[]; const q0=CLIP_N/4, q1=CLIP_N*3/4;
+    for (let r=0;r<CLIP_N;r++) for (let cc=0;cc<CLIP_N;cc++){
+      if (l>0 && r>=q0 && r<q1 && cc>=q0 && cc<q1) continue;            // hole for the finer level
+      const a=r*V+cc, b=r*V+cc+1, d=(r+1)*V+cc, e=(r+1)*V+cc+1; idx.push(a,d,b, b,d,e);
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col,3));
+    geo.setIndex(idx);
+    const mat=new THREE.MeshStandardNodeMaterial({ metalness:0.0, roughness:0.92 });
+    mat.colorNode=attribute('color','vec3');
+    mat.positionNode=curveNode(positionLocal);
+    const mesh=new THREE.Mesh(geo, mat); mesh.frustumCulled=false; mesh.castShadow=(l<=1); mesh.receiveShadow=false; scene.add(mesh);
+    clipLevels.push({ l, cell, half, V, geo, mesh, hgt, sx:NaN, sz:NaN });
+  }
+  terrainMesh=clipLevels[0].mesh;   // so dev tools / volcano rebuild hooks have a handle
+}
+function updateClipmapTerrain(){
+  if (!clipLevels.length) return;
+  const fx=(controls&&controls.target)?controls.target.x:boat3.x, fz=(controls&&controls.target)?controls.target.z:boat3.z;
+  for (const L of clipLevels){
+    const snap=L.cell*2, sx=Math.round(fx/snap)*snap, sz=Math.round(fz/snap)*snap;   // snap to 2 cells → stable, no swimming
+    if (sx===L.sx && sz===L.sz) continue;                                            // this ring hasn't moved a cell → skip resample
+    L.sx=sx; L.sz=sz;
+    const V=L.V, cell=L.cell, half=L.half, pos=L.geo.attributes.position.array, col=L.geo.attributes.color.array, hgt=L.hgt;
+    for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc, wx=sx+cc*cell-half, wz=sz+r*cell-half;
+      const y=seabedHeight(wx,wz); pos[i*3]=wx; pos[i*3+1]=y; pos[i*3+2]=wz; hgt[i]=y; }
+    for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc;
+      const hL=hgt[cc>0?i-1:i], hR=hgt[cc<V-1?i+1:i], hD=hgt[r>0?i-V:i], hU=hgt[r<V-1?i+V:i];
+      const slope=Math.hypot((hR-hL)/(2*cell),(hU-hD)/(2*cell));
+      _terrainColorAt(hgt[i], slope, _clC); col[i*3]=_clC.r; col[i*3+1]=_clC.g; col[i*3+2]=_clC.b; }
+    L.geo.attributes.position.needsUpdate=true; L.geo.attributes.color.needsUpdate=true; L.geo.computeVertexNormals();
+  }
 }
 
 function buildBoat() {
