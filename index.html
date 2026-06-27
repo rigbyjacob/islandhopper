@@ -474,7 +474,8 @@ if (window.SWEDEN) REGIONS.sweden = Object.assign({}, window.SWEDEN, {
             grass:0x9c8e79, forest:0x66704c, rock:0xb89c87, cliff:0x8a6f5b },   // BARE pink-grey granite dominant; only muted moss in the mid-band; dark pine comes from the 3D bushes
     shrub: [0x2f5234, 0x24402a],                            // dark spruce/pine greens (the green now reads as scattered clumps, not a lush carpet)
   },
-  flora: { palms:false },                                   // northern conifers, no palms
+  flora: { palms:false, density:6, minH:0.8, maxH:16 },     // densely pine/spruce-forested skerries, trees right down to the shore
+  foam: 0.3,                                                // sheltered brackish Baltic — very little surf compared to open ocean
   // real archipelago settlements (lon,lat,weight) → cottages + harbour lights
   cities: [
     [18.695,59.285,18],  // Stavsnäs (Vinterhamn ferry port)
@@ -1403,6 +1404,7 @@ async function init() {
   scene = new THREE.Scene();
   buildTerrainField();
   uSeaTint.value.fromArray(REGION.seaTint || [1,1,1]);   // per-region water tint
+  uFoam.value = (REGION.foam != null) ? REGION.foam : 1.0;   // sheltered archipelagos foam far less than open ocean
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers();
   if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
   buildDipStick(); buildVolcano();
@@ -1560,6 +1562,7 @@ const uSunScreenUV = uniform(new THREE.Vector2(0.5, 0.5));   // sun position in 
 const uSunOnScreen = uniform(0.0); // 1 when the sun is in front of the camera & roughly on screen, else 0
 const _curveInsts = [];          // base transforms of instanced decorations (palms/shrubs) so they can re-curve each frame
 const uSeaTint = uniform(new THREE.Vector3(1,1,1));   // per-region water tint (warm Japan, turquoise Thailand, …)
+const uFoam = uniform(1.0);                           // per-region foam amount (sheltered Baltic ≈ 0.3, open ocean = 1)
 const uHokusai = uniform(0.0);   // Hokusai ukiyo-e water recolor + foam boost (1 when that style is active)
 const uVangogh = uniform(0.0);   // Van Gogh Starry-Night swirling impasto brushstrokes on the water (1 when active)
 // amplitude-weighted wave TRAVEL direction (xz) — lets the shader tell the BACK (rising) face from the
@@ -2550,15 +2553,18 @@ function makeBush(){
 function buildShrubs(){
   const g=makeBush(), mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.92 });
   registerStyledColors(g);                              // shrubs join the style re-grade
-  const CAP=640; const m=new THREE.InstancedMesh(g, mat, CAP); m.castShadow=true; m.receiveShadow=true; m.count=0; scene.add(m);
+  const fl=REGION.flora||{};
+  const DENS=fl.density||1;                             // per-region foliage multiplier (densely pine-forested Sweden ≈ 6)
+  const MINH=(fl.minH!=null)?fl.minH:2.2, MAXH=(fl.maxH!=null)?fl.maxH:12;   // height band trees grow in
+  const CAP=Math.round(640*DENS); const m=new THREE.InstancedMesh(g, mat, CAP); m.castShadow=true; m.receiveShadow=true; m.count=0; scene.add(m);
   const d=new THREE.Object3D(); let n=0;
   for (const isl of ISLANDS){ const big=isl.r>80;
-    const cap = big ? Math.min(Math.round(isl.r*1.8), 240) : Math.min(Math.round(isl.r*1.1), 28);
+    const cap = big ? Math.min(Math.round(isl.r*1.8*DENS), Math.round(240*DENS)) : Math.min(Math.round(isl.r*1.1*DENS), Math.round(28*DENS));
     let p=0, tr=0;
     while (p<cap && tr<cap*20 && n<CAP){ tr++;
       const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*isl.r*(big?0.74:0.95);
       const x=isl.x+Math.cos(a)*rr, z=isl.z+Math.sin(a)*rr, hh=terrainHeight(x,z);
-      if (hh<2.2 || hh>12) continue;                              // lowland cover, clear of the wave wash
+      if (hh<MINH || hh>MAXH) continue;                          // lowland cover, clear of the wave wash
       d.position.set(x, hh-0.1, z); d.rotation.set(0, Math.random()*Math.PI*2, 0);
       const s=0.7+Math.random()*0.9, syB=s*(0.7+Math.random()*0.5); d.scale.set(s, syB, s); d.updateMatrix();
       _curveInsts.push({ m, i:n, x, y:hh-0.1, z, ry:d.rotation.y, sx:s, sy:syB, sz:s });
@@ -3595,7 +3601,7 @@ function buildOcean() {
     const lap = sin(sp.mul(42.0).sub(time.mul(2.3))).mul(0.5).add(0.5);
     const shoreFoam = smoothstep(0.72,0.985,sp).mul(smoothstep(0.26,0.66, fnoise)).mul(float(0.5).add(lap.mul(0.7)));
     const foamCol = mix(vec3(0.95,0.98,1.0), vec3(0.965,0.940,0.860), uHokusai);   // warm cream foam for Hokusai, cold white otherwise
-    const foam = clamp(max(whitecap, shoreFoam), 0.0, 1.0);
+    const foam = clamp(max(whitecap, shoreFoam).mul(uFoam), 0.0, 1.0);   // uFoam dials the whole region down (sheltered Baltic)
     col.assign(mix(col, foamCol, foam));
     // ---- Hokusai froth as INK: render the frilly noise as DARK woodblock LINEWORK (not white). White-on-white was
     // invisible; dark ink on the pale crest masses reads like the print's keyblock froth lines. Warped fbm, thresholded. ----
