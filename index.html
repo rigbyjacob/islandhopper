@@ -1659,9 +1659,9 @@ function buildSky() {
     const f  = normalize(warp.add(vec2(0.0012, 0.0008)));                              // flow direction (curves with the swirls)
     const pf = vec2(f.y.negate(), f.x);
     const along = base.dot(f), across = base.dot(pf);
-    const strokeA = _nfbm2(vec2(along.mul(3.0), across.mul(13.0)));                    // stretched ALONG flow, finer ACROSS → chunky streaks
-    const strokeB = _nfbm2(vec2(along.mul(6.0), across.mul(26.0)).add(vec2(2.3,5.1)));
-    const strokes = strokeA.mul(0.66).add(strokeB.mul(0.34));
+    const strokeA = _nfbm2(vec2(along.mul(7.0), across.mul(12.0)));                    // shorter along-flow → discrete dabs (modest anisotropy, not windswept)
+    const strokeB = _nfbm2(vec2(along.mul(14.0), across.mul(24.0)).add(vec2(2.3,5.1)));
+    const strokes = strokeA.mul(0.62).add(strokeB.mul(0.38));
     const skyVG = mix(vec3(0.016,0.042,0.145), vec3(0.060,0.155,0.385), smoothstep(0.34,0.74,swirl)).toVar();   // DEEP indigo → cobalt body
     skyVG.assign(skyVG.mul(float(0.70).add(strokes.mul(0.62))));                       // stronger impasto light/dark stroke modulation
     skyVG.assign(mix(skyVG, vec3(0.42,0.56,0.80), smoothstep(0.66,0.90,strokes).mul(0.45)));   // lighter cobalt brush dabs woven in
