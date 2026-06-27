@@ -5674,9 +5674,16 @@ function buildGlobe(){
   if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.075; oceanMatOpts.displacementBias=-0.0375; }
   const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R,360,180), new THREE.MeshStandardMaterial(oceanMatOpts));
   globeSpin.add(ocean);
-  if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map via canvas → grayscale planet
+  if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map → grayscale planet
       const cv=document.createElement('canvas'); cv.width=img.width; cv.height=img.height;
-      const c2=cv.getContext('2d'); c2.filter='grayscale(1) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0);   // Ansel Adams: full tonal range, deep blacks → brilliant whites
+      const c2=cv.getContext('2d', { willReadFrequently:true }); c2.drawImage(img,0,0);
+      // Per-pixel luminance (Rec.601) + contrast 1.55 + brightness 1.06 — done manually because canvas ctx.filter
+      // is silently ignored by some engines (Safari/WebKit), which left the globe in colour on those browsers.
+      try { const id=c2.getImageData(0,0,cv.width,cv.height), d=id.data;
+        for(let i=0;i<d.length;i+=4){ let g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; g=(g-128)*1.55+128; g*=1.06;
+          d[i]=d[i+1]=d[i+2]= g<0?0:g>255?255:g; }
+        c2.putImageData(id,0,0);
+      } catch(_e){ c2.filter='grayscale(1) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0); }   // fallback if readback is ever blocked
       const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; ocean.material.map=t; ocean.material.color.setScalar(1); ocean.material.needsUpdate=true; };
     img.src=window.WORLDMAP; }
   _globePicks=[];
