@@ -1329,7 +1329,7 @@ async function init() {
   buildTerrainField();
   uSeaTint.value.fromArray(REGION.seaTint || [1,1,1]);   // per-region water tint
   buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers();
-  if (LOD_TERRAIN) buildClipmapTerrain(); else buildTerrain();
+  if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
   buildDipStick(); buildVolcano();
   boatMesh = buildBoat(); buildCamera();
   buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
@@ -1407,7 +1407,7 @@ async function init() {
     updateVolcano(dt, t); // submarine volcano: caldera glow + eruption plume/ejecta
     updateSubNavDebug();  // sub's depth grid + plan in the nav-debug overlay (after the sub has planned this frame)
     controls.update();
-    if (LOD_TERRAIN) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
+    if (P.lodTerrain) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
@@ -3936,7 +3936,15 @@ function buildTerrain() {
 // so the world can be arbitrarily large at a fixed vertex budget. The tiny-planet
 // curvature already sinks the far rings below the horizon.
 // ============================================================================
-const LOD_TERRAIN = new URLSearchParams(location.search).has('lod');
+P.lodTerrain = new URLSearchParams(location.search).has('lod');   // clipmap LOD active? (also a live Display toggle)
+// swap the terrain between the static full mesh and the focus-following clipmap, live
+function setTerrainLOD(on){
+  P.lodTerrain = !!on;
+  if (terrainMesh && !clipLevels.length){ scene.remove(terrainMesh); terrainMesh.geometry.dispose(); terrainMesh=null; }   // tear down static mesh
+  for (const L of clipLevels){ scene.remove(L.mesh); L.geo.dispose(); }                                                     // tear down clipmap
+  clipLevels=[];
+  if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
+}
 const CLIP_N = 320, CLIP_BASE = 3, CLIP_LEVELS = 6;   // big fine ring (±480u) so near islands are uniformly detailed; seams land far out (curvature hides them)
 let clipLevels = [];
 // reuse the exact buildTerrain ramp so the look matches
@@ -4833,6 +4841,7 @@ function buildPanel() {
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
   addToggle(s, 'Depth contour lines', P, 'contours');
   addToggle(s, 'Curved horizon (tiny planet)', P, 'curveWorld');
+  addToggle(s, 'Terrain LOD (clipmap)', P, 'lodTerrain', setTerrainLOD);   // ON = focus-following clipmap; OFF = static full mesh
   addToggle(s, 'Clouds', P, 'showClouds');
   addToggle(s, 'Soft clouds (off = cartoon)', P, 'cloudSoft', ()=>setCloudStyle());
   addToggle(s, 'Rain particles + splashes', P, 'showRainParticles');
