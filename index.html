@@ -216,6 +216,7 @@
 <script src="data/worldmap.js"></script>   <!-- shaded-relief Earth COLOR texture for the world-map globe (build/gen_worldmap.py) -->
 <script src="data/worldmap_disp.js"></script>   <!-- Earth DISPLACEMENT (height) texture for globe relief -->
 <script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
+<script src="data/music.js"></script>   <!-- window.MUSIC: 4 base64 m4a intro tracks (music/intro*.m4a), inlined by pack for a single-file build -->
 
 <script type="importmap">
 {
@@ -312,6 +313,7 @@ const P = {
   debugNav: false,    // navigation debug: show the A* grid, blocked cells, and the raw/simplified path
   panelOrder: null,   // control-panel section order (array of section titles) — set by drag-reorder, persisted
   panelCollapsed: null,   // control-panel collapsed sections ({title:1}) — set by clicking section headers, persisted
+  music: true,        // intro music: a random track plays once the follow cam settles, fades out before its end (persisted; scenarios respect it)
   showClouds: true,   // clouds (can hide them for a clean debug view)
   cloudSoft: true,    // cloud look: true = soft naturalistic, false = cartoon cel-shaded puffs
   rainLens: true,     // rain-on-lens droplets during storms (2D overlay)
@@ -1586,6 +1588,7 @@ async function init() {
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
+    _updateMusic(dt);   // intro music: play once the follow cam settles, fade out before the end
     uCurveK.value = P.curveWorld ? 1/(2*P.curveRadius) : 0;   // "tiny planet" curvature strength (1/2R), 0 = flat
     uHorizonDrop.value = P.curveWorld ? Math.min(0.16, 765/P.curveRadius) : 0;   // horizon dip scales with curve strength (0.085 @ R=9000)
     // ATMOSPHERE: project the sun to screen space for god rays, and master the drama with the slider
@@ -3060,6 +3063,39 @@ function updateBoatShadow(day){
   boatShadow.scale.set(len, 1, 8.5);                                     // long & narrow — a believable cast shadow, not a round disc
   boatShadow.material.opacity = clampJS(day,0,1)*(0.36 - low*0.14);      // crisp near noon, softer & longer toward dusk
 }
+
+// ============================================================================
+// Intro music — a random embedded track plays once the follow cam settles, then
+// fades out a few seconds before its end. Muteable (P.music), persisted, scenario-aware.
+// ============================================================================
+let _musicEl=null, _musicPlayed=false, _musicPending=false, _musicStableT=0;
+const _MUSIC_VOL=0.55, _MUSIC_FADE_IN=2.0, _MUSIC_FADE_OUT=3.5;
+function playIntroMusic(){
+  if (!P.music || !Array.isArray(window.MUSIC) || !window.MUSIC.length) return;
+  if (_musicEl){ try{ _musicEl.pause(); }catch(_){} _musicEl=null; }
+  const a=new Audio(window.MUSIC[(Math.random()*window.MUSIC.length)|0]); a.volume=0; _musicEl=a;
+  const pr=a.play();
+  if (pr && pr.then){ pr.then(()=>{ _musicPlayed=true; _musicPending=false; }).catch(()=>{ _musicPending=true; _musicEl=null; }); }   // autoplay blocked → retry on first interaction
+  else { _musicPlayed=true; }
+}
+function stopIntroMusic(){ _musicPending=false; if(_musicEl){ try{ _musicEl.pause(); }catch(_){} _musicEl=null; } }
+function _updateMusic(dt){
+  // start it once the Director follow cam has been settled (not mid-dive / swap / world-map) for a beat
+  if (P.music && !_musicPlayed && !_musicPending && cineMode && !worldMapOpen && !_swapping && !_descent && !_diveZoom && !_globeRise){
+    _musicStableT += dt; if (_musicStableT > 2.0) playIntroMusic();
+  } else if (!_musicPlayed){ _musicStableT = 0; }
+  // volume envelope: fade in, hold, fade out before the end
+  const a=_musicEl; if(!a || a.paused) return;
+  const d=a.duration, t=a.currentTime;
+  if (!isFinite(d) || d<=0){ a.volume=Math.min(_MUSIC_VOL, a.volume+0.012); return; }
+  if (t < _MUSIC_FADE_IN) a.volume=_MUSIC_VOL*(t/_MUSIC_FADE_IN);
+  else if (t > d-_MUSIC_FADE_OUT) a.volume=Math.max(0, _MUSIC_VOL*(d-t)/_MUSIC_FADE_OUT);
+  else a.volume=_MUSIC_VOL;
+  if (t >= d-0.05){ try{ a.pause(); }catch(_){} _musicEl=null; }   // done — plays only once
+}
+function setMusic(on){ P.music=!!on; if(!on) stopIntroMusic(); else { _musicPlayed=false; _musicStableT=0; playIntroMusic(); } saveSettings(); }   // toggle: off → silence; on → start now (the click itself satisfies autoplay)
+// if autoplay was blocked, kick the track off on the first user gesture
+['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev, ()=>{ if(_musicPending && P.music && !_musicPlayed) playIntroMusic(); }));
 
 // ============================================================================
 // Estimator step + navigation visuals (path, GPS pings, estimated position)
@@ -5371,6 +5407,7 @@ function buildPanel() {
   ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
   addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
   addToggle(s, 'Route path (wedge markers)', P, 'showPath');   // the ship/sub wedge route — independent of the debug view below
+  addToggle(s, 'Intro music', P, 'music', setMusic);
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
   // View
@@ -6075,6 +6112,7 @@ async function _applyScenarioCore(sc){
   try{ setCloudStyle(); }catch(_){}
   try{ applyHud(); }catch(_){}
   try{ if(P.bloom) enableBloom(); else disableBloom(); }catch(_){}
+  try{ if(!P.music) stopIntroMusic(); }catch(_){}                       // a scenario can mute the music
   if (sc.route && sc.route.length){ try{ if(setRoute(sc.route)) applyTourPacing(); }catch(_){} }
   try{ setFleetView(sc.fleet||'off'); }catch(_){}
   try{ setFly(false); setView(false); setCine(false);
