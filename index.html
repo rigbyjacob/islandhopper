@@ -3511,10 +3511,15 @@ function buildOcean() {
   // FIXED-width offshore shelf (world units), NOT proportional to island size — otherwise a big landmass
   // (mainland, Phuket) paints a giant shallow/foam halo that floods whole bays. Now every coast gets the
   // same ~shelf band, so open water and bay centres stay deep blue.
-  const SHELF_W = 90;
-  const shore = Fn(([p]) => { const s = float(0).toVar();
-    for (const isl of SHORE_ISLANDS) s.assign(max(s, smoothstep(isl.r+SHELF_W, isl.r, length(p.sub(vec2(isl.x, isl.z))))));
-    return clamp(s, 0, 1); });
+  // SHELF / shallows keyed to REAL seabed DEPTH (the bathymetry texture), NOT island-radius fringes — so deep
+  // channels between close islands stay deep blue instead of their bands overlapping into one milky pale wash.
+  const shore = Fn(() => {
+    const uv = vec2( positionWorld.x.sub(BATHY_RGN.x0).div(BATHY_RGN.x1-BATHY_RGN.x0),
+                     positionWorld.z.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0) );
+    const depthN = texture(bathyTex, clamp(uv, vec2(0.0), vec2(1.0))).r;          // 0 = surface/coast → 1 = deep (~80u)
+    const rad = oneMinus(smoothstep(float(BR0), float(BR1), vec2(positionWorld.x.sub(BCX), positionWorld.z.sub(BCZ)).length()));
+    return clamp(smoothstep(0.45, 0.88, oneMinus(depthN)).mul(rad), 0.0, 1.0);    // genuinely shallow water → 1, deep → 0
+  });
   // genuine hash value-noise (APERIODIC, not sines) — to break the regular sine interference
   const hash21 = Fn(([q]) => fract(sin(dot(q, vec2(127.1,311.7))).mul(43758.5453)));
   const vnoise = Fn(([p]) => { const i = floor(p), f = fract(p);
@@ -3527,7 +3532,7 @@ function buildOcean() {
     .add(vnoise(p.mul(8.11).add(vec2(8.3,2.8))).mul(0.1)));
 
   const xz = positionLocal.xz;
-  const n = waveN(xz), sp = shore(xz), wh = waveH(xz);
+  const n = waveN(xz), sp = shore(), wh = waveH(xz);
   const viewDir = normalize(cameraPosition.sub(positionWorld));
   const sunDir = normalize(uSunDir);
 
@@ -3536,7 +3541,7 @@ function buildOcean() {
   // gradient. That single bug is why the sea was a flat gradient and the sun glint / sparkle / foam /
   // dapple never rendered. Wrapping the graph in a Fn gives the assignments their stack.
   const oceanColor = Fn(() => {
-    const deep = vec3(0.012,0.09,0.22), midC = vec3(0.03,0.30,0.48), shallow = vec3(0.16,0.62,0.66);
+    const deep = vec3(0.012,0.09,0.22), midC = vec3(0.035,0.23,0.41), shallow = vec3(0.09,0.45,0.53);   // deeper, more saturated shelf — not a milky pale turquoise
     const col = mix(deep, midC, smoothstep(0.0,0.5,sp)).toVar();
     col.assign(mix(col, shallow, smoothstep(0.55,1.0,sp)));
     col.assign(col.mul(uSeaTint));                          // per-region water tint
