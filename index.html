@@ -2422,7 +2422,7 @@ function updateEnvironment(dt) {
   uChop.value = Math.min(seaChop, 0.92 / Math.max(WAVE_KSUM * seaAmp, 1e-3));
   uBathy.value += ((P.bathy?1:0) - uBathy.value) * Math.min(1, dt*4);   // smooth bathymetry fade
   uContour.value += ((P.contours?1:0) - uContour.value) * Math.min(1, dt*4);   // smooth contour-line fade (independent toggle)
-  if (dipStick){ dipStick.visible = (uBathy.value > 0.04) || _soundingShown;   // shows with bathymetry OR after a manual sounding
+  if (dipStick){ dipStick.visible = _soundingShown;   // hidden by default — only shows after the Depth-sounding button or Spacebar drops it at the ship
     dipStick.position.y = -curveDropJS(dipX, dipZ); }                  // sink the sounder onto the curved sea (its X,Z)
   uRain.value = localStorm;                                             // rain-on-lens follows the FELT (proximity) storm, not the global switch
 
