@@ -1,0 +1,70 @@
+"DONE The dashed map path should make each segment more of a wedge shape so the perspective can affect them. The ship should eat segments as it comes near to them (or segment becomes disconnected from the next segments), right now the whole line stays around until repathed, but that's not realistic.
+
+DONE and DONE Can we add a toggle to show the underwater topography using the bathymetric data? This would allow users to visualize the depth and contours of the ocean floor in relation to the islands. We can implement a toggle button that overlays the bathymetric map on top of the existing map, providing a clear view of both the islands and the underwater features.
+
+DONE I'll reintroduce a sea-of-diamonds sparkle properly later — anti-aliased (a mip-filtered texture or a derivative-based specular-AA that widens the highlight where the surface is under-resolved), so it twinkles up close without strobing at range.
+
+DONE Make the wave levels a distinct setting from Storm, I want to control these two indpendently.
+
+DONE The current implementation of rain is interesting, it seems to be cones of line strips or particles. Let's work on making it more realistic by implementing a particle system that simulates the behavior of raindrops, including their interaction with the water surface and the environment. This could include splashes, ripples, and varying drop sizes to create a more immersive rain effect.
+
+DONE Use a few of the iso contours each island as the ""target island glowing perimeter"", now we have generic circles around the targets and it doesn't look as cool as it could. The glowing perimeter should follow the actual shape of the island, providing a more visually appealing and accurate representation of the target area.
+
+DONE PARTIALLY Make the rain on lens effect only take effect when within a reasomable distance of the storm cloud, so that it doesn't affect the entire scene when the storm is far away.
+
+DONE ish Make a submarine and plane version of the ship with similar PID driven controls, allow them to operate indepenedntly and swap views between them with an option split screen brady bunch style view. To complete the views, add in a UFO flying saucer too (basically the current fly mode with near instant acceleration and instant stopping, though making it a little more sauciery could be fun too), so we can have a 4 up grid of views, they all share the same world state but have independent controls and perspectives.
+
+DONE As part of our cloud upgrade, can they participant in the Storm setting, being the actual source of rain and lightning, at least darkening as the storm happens. Their storming effect should be visually represented in the environment, with dynamic weather effects that change based on the intensity of the storm. This could include darkening skies, increased wave activity, and lightning strikes that illuminate the scene. Ideally isolated to the area under the cloud.
+
+
+DONE Hokusai colors don't seem very accurate, they look basically like tropical or photorealistic, not like the Great Wave of Kanagawa. We barely have wave crests even. The hex codes for each major color in the Hokusai palette are as follows:
+- Deep Blue: #1B3A4B
+- Sky Blue: #A7C7E7
+- Seafoam Green: #A3D2CA
+
+DONE Move Japanese next to Hokusai in the style menu to better group them thematically.
+
+DONE Make the surface level ISO contour lines and option to turn on off indepent of the bathymetry selection.
+
+DONE Can the very edges of the map curve off into the distance, like a tiny planet effect, I think it still looks really weird to see a hard flat rectangular edge, especially with the plane or UFO mode. This may require changing the skybox and sun/moon lighting to match the curvature of the horizon, as well as adjusting the camera perspective to create a more immersive experience.
+
+DONE Let's review the overall water style and sun/moon lighting, I still think it looks a bit plasticky and could use some more naturalistic shading and reflections. Consider implementing a more physically-based rendering approach for the water surface, including fresnel effects, subsurface scattering, and dynamic reflections based on the environment.
+
+DONE While the sunrise and moonrise look quite good, I would like to make it even more impressive with god rays, fog layers, and volumetric lighting effects, sparkle, bloom, things that make sunrise and sunset so magical. Willing to spend the time to make this look as good as possible.
+
+DONE Not every cloud should storm at once, the can have independent weather probabilities, the storm effect for viewer only happens when in proximity to one or more clouds storming. Make the overall lighting seem more storm like when under the effect. When outside the storm proximity it can go back to nromal lighting.
+
+DONE Can we make the flying god mode have more fine grained control, right now a single tap of a key moves really fast and far, while I want to be able to move around quickly I also want fine grained control when looking at details during debugging. So an easy way to nudge, but then crank up the velocity once it's clear I'm moving somewhere further away.
+
+DONE-ish Oh before I forget, add a Van Gogh style theme under Monet in the style selector. at least color, but if can do anything like his brush strokes that would be super cool
+
+FAILED Add a volcano to some of the unused underwater mountains that comes close to the surface. Make the magma PBR and lighting look realistic, with glowing lava flows and smoke plumes. The volcano should have an eruption effect that can be triggered by the user, creating a dynamic and visually stunning event in the environment.
+
+FAILED Somehow we are back to gaseous fire and not molten lava. Also the lava fades in at almost full height instead of erupting from the
+base.
+
+Add sea creatures, that have a rigged animation system to simulate realistic swimming patterns. These creatures can locally applicable fish, dolphins, and whales, which will add life to the underwater environment, but ideally we add in a few fun entities like a Kraken or other sea monsters. The sea creatures can be programmed to interact with the ships and submarines, creating a dynamic ecosystem.
+
+Add in fleets of ships, from pirate times with warring European factions to create a dynamic and immersive maritime environment. These fleets can be programmed to follow realistic shipping routes, engage in naval battles, or simply sail around the islands, adding life to the scene.
+
+DONE Can we do this entire thing to a another region of the world, say Hawaii, the South Pacific, Thailand/Indonesia/Singapore, Japan and the Mediterranean? We can create a separate map and set of islands for each region, complete with unique weather patterns and colorations.
+If this requires more sophisticated rendering techniques, we can consider implementing level-of-detail (LOD) models for the islands and underwater features to optimize performance while maintaining visual fidelity.This may require some form of hierarchical A* pathfinding (open to suggestions!). The area should have an art style consistent with the history of the region.
+
+DONE Put these locations onto a world map flying between them allows loading new geometry, make them all look like they are on the same small planet.
+
+Let's explore optimization through travelling salesman, plot the fastest route that visits each island and returns to the starting point. Wall clock time, not only distinance on open water. Have the optimization problem also tune the speed, PID and Kalman hyperparameters. If necessary compute this task offline with appropriate libraries, hook into the justfile if it makes sense and use the uv env we have already.
+
+DONE The show hide vehicle buttons should not change the camera or target, they just show and hide the vehicles.
+
+DONE Also the Sub is still stuck in Greek region, I think maybe it's inside such a large island that it has room to move and thus the teleport fix isn't activating?
+
+REVERTED Maybe instead of an arcball it should just be a regular globe that spins on the real earth axis and can rotate it around (and slightly up and down to see the poles.
+
+REVERTED - Is it possible to make world map spin like a real physical globe one might have at home. I think this arcball approach is neat but disorienting. Also I thought we got rid of the ring and cone, I still see the ring.
+
+DONE-ish I want a button to trigger a depth sounding, it would move the current marker to the current ship position and recalculate the ranges. Since some places are very deep and some shallow the markers need to be dynamic, but rounded to nice whole numbers and not too many to avoid clutter.
+
+
+Let's add sea life, that have a rigged animation system to simulate realistic swimming motion. Choose locally applicable fish, especially schools of fish using Boid flocking algorithm.
+
+The next thing I need is a good way to demo this, give people the file but not expose all of the complexity of the UI to them. I'm thinking a mode with buttons that switch between scenarios, built up from a combination of UI settings, region choices, paths etc. I'd like to build these configurations up, save them as scenarios and then have a mode where users can click through them. We also need to tidy of the naming, no longer just Leeward islands and the Small Planet title is not helpful or interesting.
