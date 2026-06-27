@@ -5082,8 +5082,8 @@ function initInput() {
   const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA');
   window.addEventListener('keydown', (e) => {
     if (typing(e)) return;
-    if (demoMode){ if(e.key==='Escape') exitDemoMode(); else if(e.key==='ArrowRight'||e.key===' ') demoGo(_demoIdx+1); else if(e.key==='ArrowLeft') demoGo(_demoIdx-1);
-      if(e.key===' '||e.key.indexOf('Arrow')===0) e.preventDefault(); return; }   // demo stepper owns the keys
+    if (demoMode){ if(e.key==='Escape') exitDemoMode(); else if(e.key===' '){ if(typeof triggerSounding==='function') triggerSounding(); } else if(e.key==='ArrowRight') demoGo(_demoIdx+1); else if(e.key==='ArrowLeft') demoGo(_demoIdx-1);   // Space = depth sounding (as in normal sailing); arrows step scenarios
+      if(e.key===' '||e.key.indexOf('Arrow')===0) e.preventDefault(); return; }
     if (worldMapOpen) return;                       // globe view has its own keys (arrows/space/enter/esc)
     if (e.key === ' '){ if(typeof triggerSounding==='function') triggerSounding(); e.preventDefault(); return; }   // Space = depth sounding (camera-up is on E)
     if (e.key === 'v' || e.key === 'V') setView(!fpsMode);
