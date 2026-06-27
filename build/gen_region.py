@@ -41,6 +41,12 @@ KNOWN = {
     'Ko Phi Phi': (98.77, 7.74), 'Ko Lanta': (99.05, 7.58), 'Ko Racha': (98.36, 7.61),
     'Ko Naka': (98.43, 8.03), 'James Bond I.': (98.50, 8.27),
   },
+  'sweden': {   # Stockholm archipelago (Värmdö): the Djurö–Djurhamn–Stavsnäs run + neighbours
+    'Djurö': (18.555, 59.300), 'Stavsnäs': (18.695, 59.285), 'Runmarö': (18.700, 59.300),
+    'Nämdö': (18.680, 59.180), 'Vindö': (18.500, 59.340), 'Möja': (18.900, 59.400),
+    'Sandön': (18.920, 59.290), 'Ingarö': (18.420, 59.270), 'Gällnö': (18.620, 59.370),
+    'Fågelbrolandet': (18.660, 59.300),
+  },
 }
 
 def read_asc(path):
@@ -83,6 +89,8 @@ def main():
     ap.add_argument('--K', type=float, required=True)
     ap.add_argument('--lon0', type=float, required=True)
     ap.add_argument('--lat0', type=float, required=True)
+    ap.add_argument('--lonscale', type=float, default=None,
+                    help='east-west scale for longitude (default cos(lat0)). Corrects the 2x E-W stretch at high latitudes; pass 1.0 for the old uncompensated behaviour')
     ap.add_argument('--min-cells', type=int, default=4, help='drop land blobs smaller than this')
     ap.add_argument('--simplify', type=float, default=1.2, help='coastline simplify tolerance (px)')
     ap.add_argument('--out', default=None)
@@ -98,6 +106,7 @@ def main():
     nrows, ncols = int(hdr['nrows']), int(hdr['ncols'])
     cs, x0c, y0c = hdr['cellsize'], hdr['xllcorner'], hdr['yllcorner']
     K, lon0, lat0 = a.K, a.lon0, a.lat0
+    lonscale = a.lonscale if a.lonscale is not None else float(np.cos(np.radians(lat0)))  # cos(lat0): keep E-W:N-S isometric
 
     # index (row r from north, col c) -> lon/lat of the CELL CENTRE -> world (x,z)
     def lonlat(r, c):
@@ -106,7 +115,7 @@ def main():
         return lon, lat
     def world(r, c):
         lon, lat = lonlat(r, c)
-        return (lon - lon0) * K, -(lat - lat0) * K
+        return (lon - lon0) * K * lonscale, -(lat - lat0) * K
 
     # ---- BATHY grid: Int16 metres, row0=north, row-major (matches decodeElev) ----
     Zi = np.clip(np.nan_to_num(Z, nan=-9999), -32767, 32767).astype('<i2')
@@ -156,7 +165,7 @@ def main():
 
     polys.sort(key=lambda p: -len(p['r']))
     region = {
-        'id': a.id, 'name': a.name, 'K': K, 'lon0': lon0, 'lat0': lat0,
+        'id': a.id, 'name': a.name, 'K': K, 'lon0': lon0, 'lat0': lat0, 'lonscale': round(lonscale, 5),
         'bathyMeta': bathy_meta, 'islandPolys': polys, 'bathyB64': bathy_b64,
     }
     out = a.out or f'data/{a.id}.js'

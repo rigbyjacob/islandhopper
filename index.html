@@ -184,6 +184,7 @@
 <script src="data/aegeanbig.js"></script>   <!-- Aegean (greater) — large map to exercise clipmap LOD -->
 <script src="data/japan.js"></script>     <!-- Japan · Sagami Bay region: window.JAPAN -->
 <script src="data/thailand.js"></script>  <!-- Thailand · Andaman region: window.THAILAND -->
+<script src="data/sweden.js"></script>    <!-- Sweden · Stockholm Archipelago region: window.SWEDEN (lonscale-corrected for 59°N) -->
 <script src="data/worldmap.js"></script>   <!-- shaded-relief Earth COLOR texture for the world-map globe (build/gen_worldmap.py) -->
 <script src="data/worldmap_disp.js"></script>   <!-- Earth DISPLACEMENT (height) texture for globe relief -->
 <script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
@@ -464,6 +465,32 @@ if (window.THAILAND) REGIONS.thailand = Object.assign({}, window.THAILAND, {
   // warm hazy tropical calm
   defaults: { timeOfDay:13.5, atmosphere:0.6, windDirDeg:225, windStrength:4, waveHeight:0.9, stormOn:false, stormIntensity:0.0 },
 });
+// ---- Sweden · Stockholm Archipelago (Värmdö — Djurö, Djurhamn, Stavsnäs) — low granite skerries & pine ----
+if (window.SWEDEN) REGIONS.sweden = Object.assign({}, window.SWEDEN, {
+  relief: { escale:6, steep:0.12, ridge:0.25, lift:1.6 },   // low, rounded, glacier-smoothed granite — NOT spiky
+  seaTint: [0.80, 0.95, 1.04],                              // cool, slightly green brackish Baltic (less turquoise than the Med)
+  palette: {
+    land: { seabed:0x18414c, wetsand:0x6b6a5c, sand:0x9a9384,
+            grass:0x55733f, forest:0x2c4a30, rock:0x8f8276, cliff:0x6d6258 },   // pink-grey granite + dark pine, lichen-grey shores (no golden sand)
+    shrub: [0x305434, 0x24402a],                            // dark spruce/pine greens
+  },
+  flora: { palms:false },                                   // northern conifers, no palms
+  // real archipelago settlements (lon,lat,weight) → cottages + harbour lights
+  cities: [
+    [18.695,59.285,18],  // Stavsnäs (Vinterhamn ferry port)
+    [18.918,59.288,14],  // Sandhamn
+    [18.545,59.318,12],  // Djurhamn
+    [18.555,59.298,10],  // Djurö
+    [18.700,59.300,8],   // Runmarö (Styrsvik)
+    [18.680,59.180,6],   // Nämdö
+  ],
+  cityLabels: [
+    ['Stavsnäs',18.695,59.285],['Sandhamn',18.918,59.288],['Djurhamn',18.545,59.318],
+    ['Djurö',18.555,59.298],['Runmarö',18.700,59.300],['Nämdö',18.680,59.180],
+  ],
+  // luminous low Nordic summer-evening light, gentle sheltered water, fresh breeze
+  defaults: { timeOfDay:18.2, atmosphere:0.4, windDirDeg:205, windStrength:7, waveHeight:0.55, stormOn:false, stormIntensity:0.0 },
+});
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
   if (!r.map && r.islandPolys){ let a=1e9,b=-1e9,c=1e9,d=-1e9;
@@ -474,7 +501,7 @@ const REGION_ID = new URLSearchParams(location.search).get('region') || 'caribbe
 let REGION = REGIONS[REGION_ID] || REGIONS.caribbean;
 if (REGION.defaults) Object.assign(P, REGION.defaults);   // region weather/light defaults (e.g. Aegean midday + meltemi)
 const K = REGION.K;
-const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K, z: -(lat - REGION.lat0) * REGION.K });
+const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K * (REGION.lonscale ?? 1), z: -(lat - REGION.lat0) * REGION.K });   // lonscale (cos lat0) keeps E-W:N-S isometric at high latitudes
 const ISLAND_POLYS = REGION.islandPolys;
 const ELEV_B64 = REGION.elevB64;
 const BATHY_B64 = REGION.bathyB64;
@@ -5164,6 +5191,7 @@ const REGION_META = {
   aegean:    { tag:'Aegean · Cyclades', blurb:'Whitewashed isles · meltemi winds' },
   japan:     { tag:'Japan · Sagami',    blurb:'The Great Wave & Mt. Fuji' },
   thailand:  { tag:'Thailand · Andaman', blurb:'Limestone karst & warm seas' },
+  sweden:    { tag:'Sweden · Stockholm', blurb:'Granite skerries & pine · Djurö→Stavsnäs' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
 let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false;
