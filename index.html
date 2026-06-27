@@ -5332,7 +5332,7 @@ async function enableGodrays(){
   try {
     godrayScenePass = pass(scene, camera);
     const col = godrayScenePass.getTextureNode();
-    const N = 52;                                         // more taps → smoother, longer shafts (max fidelity)
+    const N = 30;                                         // radial taps (was 52): ~40% cheaper god-ray pass; decay retuned below so the shaft length/look is preserved (exposure already normalizes by N)
     const step = uSunScreenUV.sub(screenUV).mul(0.92/N);  // march ~92% of the way to the sun
     const illum = float(0).toVar();
     const coord = screenUV.toVar();
@@ -5341,7 +5341,7 @@ async function enableGodrays(){
       coord.addAssign(step);
       const s = col.sample(clamp(coord, vec2(0.0,0.0), vec2(1.0,1.0))).xyz;
       illum.addAssign(max(dot(s, vec3(0.299,0.587,0.114)).sub(0.40), 0.0).mul(w));   // bright-pass (sky/sun/lit cloud) × decay
-      w *= 0.967;                                         // slower decay → shafts reach further through cloud gaps
+      w *= 0.943;                                         // decay retuned for N=30 so cumulative reach ≈ old 0.967^52 (shafts look the same)
     }
     illum.assign(illum.mul(4.4/N));                       // exposure
     const rays = uSunCol.mul(illum).mul(uAtmo).mul(uSunOnScreen);
