@@ -523,25 +523,22 @@ for (const r of Object.values(REGIONS)){
 }
 const REGION_ID = new URLSearchParams(location.search).get('region') || 'caribbean';
 let REGION = REGIONS[REGION_ID] || REGIONS.caribbean;
-if (REGION.defaults) Object.assign(P, REGION.defaults);   // region weather/light defaults (e.g. Aegean midday + meltemi)
-const K = REGION.K;
-const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K * (REGION.lonscale ?? 1), z: -(lat - REGION.lat0) * REGION.K });   // lonscale (cos lat0) keeps E-W:N-S isometric at high latitudes
-const ISLAND_POLYS = REGION.islandPolys;
-const ELEV_B64 = REGION.elevB64;
-const BATHY_B64 = REGION.bathyB64;
-const BATHY_META = REGION.bathyMeta;
-const ISLANDS = (() => { const best={}, islets=[];
-  // named islands: keep the biggest polygon per name. islets: keep each as its own (distinct) island,
-  // so regions with no name table (every blob 'islet') still get a populated ISLANDS list.
-  for (const p of ISLAND_POLYS){ if(p.n==='islet'){ islets.push(p); continue; } if(!best[p.n] || p.r.length>best[p.n].r.length) best[p.n]=p; }
-  return Object.values(best).concat(islets).map(p => { let rr=0; for(const v of p.r) rr=Math.max(rr, Math.hypot(v[0]-p.c[0], v[1]-p.c[1]));
-    return { name:p.n, x:p.c[0], z:p.c[1], r:rr, h:p.h, ring:p.r }; }); })();
-const BYNAME = Object.fromEntries(ISLANDS.map(i => [i.name, i]));
-// the ocean shore/shelf mask unrolls islands per-pixel — cap to the largest so big regions (100s of isles) stay fast
-const SHORE_ISLANDS = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0, 48);
-
-const MAP = REGION.map;
-MAP.cx = (MAP.minX + MAP.maxX) / 2; MAP.cz = (MAP.minZ + MAP.maxZ) / 2;
+const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K * (REGION.lonscale ?? 1), z: -(lat - REGION.lat0) * REGION.K });   // lonscale (cos lat0) keeps E-W:N-S isometric at high latitudes (reads REGION live)
+// ---- region-derived data — mutable so we can SWAP regions live (Path A: stream a new region in place, no reload) ----
+let K, ISLAND_POLYS, ELEV_B64, BATHY_B64, BATHY_META, ISLANDS, BYNAME, SHORE_ISLANDS, MAP;
+function recomputeRegionData(){
+  if (REGION.defaults) Object.assign(P, REGION.defaults);   // region weather/light defaults (e.g. Aegean midday + meltemi)
+  K = REGION.K; ISLAND_POLYS = REGION.islandPolys; ELEV_B64 = REGION.elevB64; BATHY_B64 = REGION.bathyB64; BATHY_META = REGION.bathyMeta;
+  ISLANDS = (() => { const best={}, islets=[];
+    // named islands: keep the biggest polygon per name. islets: keep each as its own (distinct) island.
+    for (const p of ISLAND_POLYS){ if(p.n==='islet'){ islets.push(p); continue; } if(!best[p.n] || p.r.length>best[p.n].r.length) best[p.n]=p; }
+    return Object.values(best).concat(islets).map(p => { let rr=0; for(const v of p.r) rr=Math.max(rr, Math.hypot(v[0]-p.c[0], v[1]-p.c[1]));
+      return { name:p.n, x:p.c[0], z:p.c[1], r:rr, h:p.h, ring:p.r }; }); })();
+  BYNAME = Object.fromEntries(ISLANDS.map(i => [i.name, i]));
+  SHORE_ISLANDS = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0, 48);   // ocean shore/shelf cap (kept fast on big regions)
+  MAP = REGION.map; MAP.cx = (MAP.minX + MAP.maxX) / 2; MAP.cz = (MAP.minZ + MAP.maxZ) / 2;
+}
+recomputeRegionData();
 
 function hash(ix, iz) { let n = ix*374761393 + iz*668265263; n = (n ^ (n>>13))*1274126177;
   return ((n ^ (n>>16)) >>> 0) / 4294967295; }
@@ -559,7 +556,7 @@ let TF = null;
 function decodeElev(b64){ const bin=atob(b64), n=bin.length>>1, a=new Int16Array(n);
   for(let i=0;i<n;i++){ let v=bin.charCodeAt(i*2)|(bin.charCodeAt(i*2+1)<<8); if(v>32767)v-=65536; a[i]=v; } return a; }
 // ---- real GEBCO 2024 bathymetry, raw metres, row0 = NORTH. Single grid over the whole 17x tile. ----
-const BATHY = decodeElev(BATHY_B64);
+let BATHY; function _cBATHY(){ BATHY = BATHY_B64 ? decodeElev(BATHY_B64) : new Int16Array(1); } _cBATHY();
 function gebcoMetres(x,z){ const M=BATHY_META;
   const fx=(x-M.x0)/(M.x1-M.x0)*(M.w-1), fz=(z-M.zN)/(M.zS-M.zN)*(M.h-1);   // row0=zN(north) → row h-1=zS(south)
   if(fx<0||fx>M.w-1||fz<0||fz>M.h-1) return -4000;                          // beyond the tile → open abyss
@@ -710,20 +707,22 @@ function sampleDisturb(x, z, t) {
 // ---- HEX navigation grid (pointy-top, odd-r offset), ~4x finer than the old 12u squares ----
 // Grid bounds FOLLOW the loaded region's islands (+ margin) so the planner covers the whole map — not a
 // fixed Caribbean rectangle (which left islands in the expanded regions outside the grid → knotted paths).
-const GRID = (() => {
+let GRID;
+function _cGRID(){
   let mnX=Infinity, mxX=-Infinity, mnZ=Infinity, mxZ=-Infinity;
   for (const isl of ISLANDS){ mnX=Math.min(mnX,isl.x-isl.r); mxX=Math.max(mxX,isl.x+isl.r); mnZ=Math.min(mnZ,isl.z-isl.r); mxZ=Math.max(mxZ,isl.z+isl.r); }
   if (!isFinite(mnX)){ mnX=-420; mxX=1240; mnZ=-540; mxZ=400; }    // no islands → Caribbean fallback
   const pad=240;                                                   // open-water margin (also covers the boat start, which sits just off the main island)
   mnX-=pad; mxX+=pad; mnZ-=pad; mxZ+=pad;
   const extent=Math.max(mxX-mnX, mxZ-mnZ);
-  const size=Math.max(2.0, extent/950);                           // ~2.0 for Caribbean; scales up on the big expanded maps to keep the cell count bounded
-  return { minX:mnX, maxX:mxX, minZ:mnZ, maxZ:mxZ, size };
-})();
+  const size=Math.max(2.0, extent/950);                           // ~2.0 for Caribbean; scales up on big maps to keep the cell count bounded
+  GRID = { minX:mnX, maxX:mxX, minZ:mnZ, maxZ:mxZ, size };
+  GRID.dx = Math.sqrt(3)*GRID.size; GRID.dz = 1.5*GRID.size;       // column / row spacing
+  GRID.cols = Math.ceil((GRID.maxX-GRID.minX)/GRID.dx)+2;
+  GRID.rows = Math.ceil((GRID.maxZ-GRID.minZ)/GRID.dz)+2;
+}
+_cGRID();
 const NAV_BLOCK_H = -1.6;   // only block water shallower than this (near-land); deeper than draft so channels stay open
-GRID.dx = Math.sqrt(3)*GRID.size; GRID.dz = 1.5*GRID.size;              // column / row spacing
-GRID.cols = Math.ceil((GRID.maxX-GRID.minX)/GRID.dx)+2;
-GRID.rows = Math.ceil((GRID.maxZ-GRID.minZ)/GRID.dz)+2;
 const gIdx = (c,r)=> r*GRID.cols + c;
 const cellCenter = (c,r)=> ({ x: GRID.minX+GRID.dx*(c+0.5*(r&1)), z: GRID.minZ+GRID.dz*r });
 const worldToCell = (x,z)=>{ const px=x-GRID.minX, pz=z-GRID.minZ;
@@ -1141,27 +1140,31 @@ function randn(){ if(gaussSpare!==null){ const v=gaussSpare; gaussSpare=null; re
 // ============================================================================
 // Start in open water just off the main island, INSIDE whichever region's cluster is loaded.
 // (Was a hard-coded Caribbean point, which left Greece/Thailand/Japan starting far outside their islands.)
-const _byR = ISLANDS.slice().sort((a,b)=>b.r-a.r);
-const START_POS = (function(){
-  if (!_byR.length) return { x: 0, z: 0 };
-  const big = _byR.slice(0, Math.min(8, _byR.length));
-  const cx = big.reduce((s,i)=>s+i.x,0)/big.length, cz = big.reduce((s,i)=>s+i.z,0)/big.length;   // heart of the archipelago
-  const main = _byR[0];
-  let dx = cx-main.x, dz = cz-main.z, dl = Math.hypot(dx,dz);
-  if (dl < 1){ dx = 1; dz = 0.5; dl = Math.hypot(dx,dz); }                                          // lone dominant island → arbitrary offshore heading
-  dx/=dl; dz/=dl;
-  let p = { x: main.x + dx*(main.r+170), z: main.z + dz*(main.r+170) };                             // just off the main island, on the side facing the rest of the chain
-  for (let it=0; it<16; it++){                                                                      // shove clear of any island it happens to land inside
-    let hit=null, worst=0;
-    for (const isl of _byR){ const d=Math.hypot(p.x-isl.x, p.z-isl.z), pen=(isl.r+90)-d; if (pen>worst){ worst=pen; hit=isl; } }
-    if (!hit) break;
-    const ox=p.x-hit.x, oz=p.z-hit.z, ol=Math.hypot(ox,oz)||1; p.x=hit.x+ox/ol*(hit.r+90); p.z=hit.z+oz/ol*(hit.r+90);
-  }
-  return p;
-})();
-const _faceTo = _byR[0] || { x: 0, z: 0 };
-const boat3 = { x: START_POS.x, z: START_POS.z,
-  psi: Math.atan2(_faceTo.z - START_POS.z, _faceTo.x - START_POS.x),   // face toward the main island / into the chain
+let START_POS, _startPsi=0;
+function _cSTART(){
+  const _byR = ISLANDS.slice().sort((a,b)=>b.r-a.r);
+  START_POS = (function(){
+    if (!_byR.length) return { x: 0, z: 0 };
+    const big = _byR.slice(0, Math.min(8, _byR.length));
+    const cx = big.reduce((s,i)=>s+i.x,0)/big.length, cz = big.reduce((s,i)=>s+i.z,0)/big.length;   // heart of the archipelago
+    const main = _byR[0];
+    let dx = cx-main.x, dz = cz-main.z, dl = Math.hypot(dx,dz);
+    if (dl < 1){ dx = 1; dz = 0.5; dl = Math.hypot(dx,dz); }                                          // lone dominant island → arbitrary offshore heading
+    dx/=dl; dz/=dl;
+    let p = { x: main.x + dx*(main.r+170), z: main.z + dz*(main.r+170) };                             // just off the main island, facing the rest of the chain
+    for (let it=0; it<16; it++){                                                                      // shove clear of any island it lands inside
+      let hit=null, worst=0;
+      for (const isl of _byR){ const d=Math.hypot(p.x-isl.x, p.z-isl.z), pen=(isl.r+90)-d; if (pen>worst){ worst=pen; hit=isl; } }
+      if (!hit) break;
+      const ox=p.x-hit.x, oz=p.z-hit.z, ol=Math.hypot(ox,oz)||1; p.x=hit.x+ox/ol*(hit.r+90); p.z=hit.z+oz/ol*(hit.r+90);
+    }
+    return p;
+  })();
+  const _faceTo = _byR[0] || { x: 0, z: 0 };
+  _startPsi = Math.atan2(_faceTo.z - START_POS.z, _faceTo.x - START_POS.x);   // face toward the main island / into the chain
+}
+_cSTART();
+const boat3 = { x: START_POS.x, z: START_POS.z, psi: _startPsi,
   u: 8, v: 0, r: 0, thr: 0.4, delta: 0, speedWater: 8, speedGround: 8 };
 
 function stepDynamics(s, dt, t) {
@@ -1203,14 +1206,18 @@ function stepDynamics(s, dt, t) {
 // ============================================================================
 // Guidance — A* path + pure-pursuit, producing desired heading + speed
 // ============================================================================
-const tourNames = REGION.tour || ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
-                   'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
-let route = tourNames.map(n => BYNAME[n]).filter(Boolean);
-if (route.length < 2) {                                  // unknown region → auto-tour the biggest islands, ordered into a loop
-  route = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0, 11);
-  const cx=route.reduce((s,i)=>s+i.x,0)/route.length, cz=route.reduce((s,i)=>s+i.z,0)/route.length;
-  route.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));   // angular order → smooth circuit
+let route = [];
+function _cROUTE(){
+  const tourNames = REGION.tour || ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
+                     'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
+  route = tourNames.map(n => BYNAME[n]).filter(Boolean);
+  if (route.length < 2) {                                  // unknown region → auto-tour the biggest islands, ordered into a loop
+    route = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0, 11);
+    const cx=route.reduce((s,i)=>s+i.x,0)/route.length, cz=route.reduce((s,i)=>s+i.z,0)/route.length;
+    route.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));   // angular order → smooth circuit
+  }
 }
+_cROUTE();
 let wpIdx = 0;
 
 // ---- saved routes (localStorage) + apply a named island sequence as the live tour ----
@@ -1442,19 +1449,13 @@ async function init() {
   loadSettings();   // restore saved panel settings before building the scene
   P.lodTerrain = !new URLSearchParams(location.search).has('nolod');   // GPU clipmap is default; ?nolod opts out to the static mesh (authoritative over saved)
   scene = new THREE.Scene();
-  buildTerrainField();
-  uSeaTint.value.fromArray(REGION.seaTint || [1,1,1]);   // per-region water tint
-  uFoam.value = (REGION.foam != null) ? REGION.foam : 1.0;   // sheltered archipelagos foam far less than open ocean
-  buildSky(); buildSeaSkirt(); buildLights(); buildOcean(); buildFoamClaws(); buildBreakers();
-  if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
-  buildDipStick(); buildVolcano();
+  { const _oadd = scene.add.bind(scene); scene.add = function(...o){ if(_tagRegion) for(const x of o) _regionObjs.push(x); return _oadd(...o); }; }   // tag region-specific objects so a region SWAP can tear them down + rebuild live (no reload)
+  // region-INDEPENDENT scaffolding (built once, survives a region swap)
+  buildSky(); buildSeaSkirt(); buildLights(); buildFoamClaws(); buildBreakers(); buildVolcano();
   boatMesh = buildBoat(); buildCamera();
-  buildClouds(); buildRain(); buildBoatShadow(); buildIslandLights(); buildFireworks(); buildPalms();
-  buildShrubs(); buildTownMotifs(); buildVehicles();
-  applySceneStyle();   // grade terrain + vegetation + towns to the active art style
-  buildNavVisuals();
-  buildWake();
-  buildLabels();
+  buildClouds(); buildRain(); buildBoatShadow(); buildFireworks();
+  buildNavVisuals(); buildWake();
+  buildRegionWorld();   // <-- ALL region-specific geometry/data (tagged) — re-run on a live region swap
   buildStarMap();   // real night sky (constellations + labels), gated to night via uNight
   buildPanel();
   buildWorldMap();   // 🌍 region picker (small planet + pins → fly between regions)
@@ -1462,10 +1463,6 @@ async function init() {
   onResize();        // apply any restored aspect-ratio lock + composition grid
   initInput();
   if (P.cine) setCine(true);   // Director camera is the default view
-
-  BLOCKED = buildBlocked();
-  buildDistLand();
-  buildCoarseNav();   // hierarchical-A* coarse abstraction (heuristic for the fine search)
   kf = new KalmanFilter(boat3.x, boat3.z);
 
   // heading the boat at the first waypoint to start
@@ -2515,14 +2512,18 @@ function makeFireballTexture(){
   ctx.putImageData(img,0,0); return new THREE.CanvasTexture(c);
 }
 // real city locations (lon,lat,population-weight) → light clusters + town motifs. Region-driven.
-const CITY_LL = REGION.cities || [
-  [-66.06,18.46,100],[-66.04,18.23,28],[-66.61,18.01,30],[-66.72,18.45,18],[-65.83,18.15,12],[-65.65,18.33,10], // Puerto Rico
-  [-65.44,18.15,4],[-65.30,18.30,3],                                                                            // Vieques, Culebra
-  [-64.93,18.34,16],[-64.73,18.33,4],[-64.62,18.42,9],[-64.43,18.45,3],                                         // USVI/BVI
-  [-63.07,18.06,15],[-63.05,18.22,5],[-62.85,17.90,5],[-62.98,17.49,3],[-63.24,17.63,3],                        // St Martin..Saba
-  [-62.72,17.30,12],[-62.62,17.14,5],[-61.85,17.12,15],[-61.83,17.63,3],[-62.21,16.75,4],[-61.73,16.24,12],     // Kitts..Guadeloupe
-];
-const CITIES = CITY_LL.map(([lon,lat,w]) => { const p = proj(lon,lat); return { x:p.x, z:p.z, w }; });
+let CITIES;
+function _cCITIES(){
+  const CITY_LL = REGION.cities || [
+    [-66.06,18.46,100],[-66.04,18.23,28],[-66.61,18.01,30],[-66.72,18.45,18],[-65.83,18.15,12],[-65.65,18.33,10], // Puerto Rico
+    [-65.44,18.15,4],[-65.30,18.30,3],                                                                            // Vieques, Culebra
+    [-64.93,18.34,16],[-64.73,18.33,4],[-64.62,18.42,9],[-64.43,18.45,3],                                         // USVI/BVI
+    [-63.07,18.06,15],[-63.05,18.22,5],[-62.85,17.90,5],[-62.98,17.49,3],[-63.24,17.63,3],                        // St Martin..Saba
+    [-62.72,17.30,12],[-62.62,17.14,5],[-61.85,17.12,15],[-61.83,17.63,3],[-62.21,16.75,4],[-61.73,16.24,12],     // Kitts..Guadeloupe
+  ];
+  CITIES = CITY_LL.map(([lon,lat,w]) => { const p = proj(lon,lat); return { x:p.x, z:p.z, w }; });
+}
+_cCITIES();
 
 function buildIslandLights(){
   const tex = makeDotTexture();
@@ -2974,14 +2975,16 @@ function updateWake(s, t) {
 
 // ---- island name labels (HTML, projected from world space) ----
 // named towns: Puerto Rico's top 5 + the main town(s) of the other islands (shown when zoomed in)
-const CITY_LABELS = (REGION.cityLabels || [
+let CITY_LABELS;
+function _cCITYLABELS(){ CITY_LABELS = (REGION.cityLabels || [
   ['San Juan',-66.12,18.47],['Bayamón',-66.16,18.40],['Carolina',-65.98,18.38],['Caguas',-66.04,18.23],['Ponce',-66.61,18.01],
   ['Charlotte Amalie',-64.93,18.34],['Road Town',-64.62,18.42],['Cruz Bay',-64.79,18.33],['Spanish Town',-64.43,18.45],
   ['Philipsburg',-63.05,18.02],['Marigot',-63.08,18.07],['The Valley',-63.05,18.22],['Gustavia',-62.85,17.90],
   ['Basseterre',-62.72,17.30],['Charlestown',-62.62,17.13],["St John's",-61.85,17.12],['Oranjestad',-62.98,17.49],
   ['The Bottom',-63.24,17.63],['Codrington',-61.83,17.63],['Brades',-62.21,16.75],['Pointe-à-Pitre',-61.53,16.23],
   ['Isabel Segunda',-65.44,18.15],
-]).map(([name,lon,lat]) => { const p = proj(lon,lat); return { name, x:p.x, z:p.z }; });
+]).map(([name,lon,lat]) => { const p = proj(lon,lat); return { name, x:p.x, z:p.z }; }); }
+_cCITYLABELS();
 
 let labelEls = [], cityLabelEls = [];
 // In-scene sprite labels (constant screen size via sizeAttenuation:false) so the VIDEO RECORDER
@@ -3199,6 +3202,8 @@ function updateLabels(){
 // the bathymetry overlay covers the whole WIDE GEBCO tile (17x area) so the depth tint extends far out
 const BATHY_RGN = { x0: MAP.cx-1800, x1: MAP.cx+1800, z0: MAP.cz-1600, z1: MAP.cz+1600 };   // visible seabed region (inset inside the mesh)
 function buildBathyTexture(){
+  // refresh the seabed window from the LIVE region map (a region swap moves MAP.cx/cz) — runs before the ocean shader graph reads BATHY_RGN
+  BATHY_RGN.x0 = MAP.cx-1800; BATHY_RGN.x1 = MAP.cx+1800; BATHY_RGN.z0 = MAP.cz-1600; BATHY_RGN.z1 = MAP.cz+1600;
   // sample the REAL GEBCO seabed depth across the visible region into a texture for the ocean shader
   const W=900, H=800, data=new Uint8Array(W*H*4);
   for (let j=0;j<H;j++) for (let i=0;i<W;i++){
@@ -5484,8 +5489,9 @@ function travelToRegion(id){ if(!REGIONS[id]||_diveZoom) return;
   _diveZoom={ t:0, dur:1.15, id, same:(id===REGION.id) };
 }
 function _diveLand(d){
-  if (d.same){ closeWorldMap(); startDescent(); }                         // current region: fully seamless, no reload
-  else { const u=new URL(location.href); u.searchParams.set('region', d.id); u.searchParams.set('dive','1'); location.assign(u.toString()); }   // other region: reload (masked by the full-screen colour), then descend on arrival
+  closeWorldMap();
+  if (!d.same) swapRegion(d.id);   // OTHER region: stream it in live under the dive fade — no reload, no load screen
+  startDescent();                  // fly the camera down onto the (now-current) region's boat
 }
 // fly the sailing camera down from high orbit to the normal view, reusing the free-fly cam (hands back to orbit cleanly)
 function startDescent(){
@@ -5495,6 +5501,43 @@ function startDescent(){
   _descent={ t:0, dur:2.6, fromPos:flyState.pos.clone(), fromYaw:flyState.yaw, fromPitch:flyState.pitch };
   _diveFade(1, REGION.id);
 }
+// ============================================================================
+// LIVE region swap (Path A): rebuild the world for a new region in place — no reload, no load screen.
+// ============================================================================
+let _regionObjs = [], _tagRegion = false;   // every scene.add during a region build is tagged here for teardown
+function recomputeRegion(){ recomputeRegionData(); _cBATHY(); _cGRID(); _cSTART(); _cCITIES(); _cCITYLABELS(); _cROUTE(); }
+function buildRegionWorld(){
+  _tagRegion = true;
+  buildTerrainField();
+  uSeaTint.value.fromArray(REGION.seaTint || [1,1,1]); uFoam.value = (REGION.foam != null) ? REGION.foam : 1.0;
+  buildOcean();
+  if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
+  buildDipStick();
+  buildIslandLights(); buildPalms(); buildShrubs(); buildTownMotifs(); buildVehicles();
+  buildLabels();
+  BLOCKED = buildBlocked(); buildDistLand(); buildCoarseNav();
+  applySceneStyle();
+  _tagRegion = false;
+}
+function teardownRegionWorld(){
+  for (const o of _regionObjs){ scene.remove(o);
+    o.traverse && o.traverse(c=>{ if(c.geometry&&c.geometry.dispose) c.geometry.dispose();
+      const m=c.material; if(m){ (Array.isArray(m)?m:[m]).forEach(mm=>{ if(mm&&mm.map&&mm.map.dispose) mm.map.dispose(); if(mm&&mm.dispose) mm.dispose(); }); } }); }
+  _regionObjs.length = 0;
+  FLEET.length = 0; labelEls.length = 0; cityLabelEls.length = 0; _curveInsts.length = 0; clipLevels.length = 0;
+  if (typeof islandLightsGroup!=='undefined' && islandLightsGroup){ while(islandLightsGroup.children.length){ const c=islandLightsGroup.children.pop(); c.material&&c.material.dispose&&c.material.dispose(); } }
+  _heightTex = null; terrainMesh = null;
+}
+function swapRegion(id){
+  if (!REGIONS[id] || REGION.id===id) return;
+  REGION = REGIONS[id];
+  recomputeRegion();
+  teardownRegionWorld();
+  buildRegionWorld();
+  Object.assign(boat3, { x:START_POS.x, z:START_POS.z, psi:_startPsi, u:8, v:0, r:0, thr:0.4, delta:0, grounded:false, assist:false });
+  wpIdx = 0; path = null; planKey=''; targetRingKey=''; kf = new KalmanFilter(boat3.x, boat3.z); replan(boat3); applyTourPacing();
+}
+window.swapRegion = swapRegion;   // console helper: stream a region in live, e.g. swapRegion('japan')
 
 // --- small UI factory ---
 function el(tag, cls, parent){ const e=document.createElement(tag); if(cls)e.className=cls; if(parent)parent.appendChild(e); return e; }
