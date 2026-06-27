@@ -5312,22 +5312,29 @@ const REGION_META = {
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
 let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false;
+// desk-globe orientation: spin around the globe's own vertical axis (longitude) + a clamped viewing tilt (latitude),
+// composed so it never rolls/tumbles like the old arcball.
+let _globeLon=0, _globeLat=0;
+const _GY=new THREE.Vector3(0,1,0), _GX=new THREE.Vector3(1,0,0), _qLon=new THREE.Quaternion(), _qLat=new THREE.Quaternion();
+function _applyGlobeOrient(){ if(!globeSpin) return;
+  _globeLat = clampJS(_globeLat, -1.25, 1.25);
+  _qLon.setFromAxisAngle(_GY, _globeLon); _qLat.setFromAxisAngle(_GX, _globeLat);
+  globeSpin.quaternion.copy(_qLat).multiply(_qLon); }   // tilt ∘ spin: longitude spins in globe space, latitude tilts the whole globe in view
+function _setGlobeFacing(id, alpha){ const r=REGIONS[id]; if(!r) return;   // bring a region to front; alpha lifts it slightly above centre for a nicer 3/4 view
+  _globeLon = -Math.PI/2 - (r.lon0||0)*Math.PI/180;
+  _globeLat = (r.lat0||0)*Math.PI/180 - alpha;
+  _globeVel.x=_globeVel.y=0; _applyGlobeOrient(); }
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
   return new THREE.Vector3(r*Math.cos(a)*Math.cos(o), r*Math.sin(a), -r*Math.cos(a)*Math.sin(o)); }
 function _placeOnSphere(obj, lat, lon, r){ const n=latLonToVec(lat,lon,1);
   obj.position.copy(n.clone().multiplyScalar(r)); obj.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n); }
-function makeRegionMarker(id, cur, artCol){      // a glowing outline ring on the surface, tagged for picking
+function makeRegionMarker(id, cur, artCol){      // INVISIBLE pick target only — the diorama relief marks the spot now (no ring/cone)
   const g=new THREE.Group();
-  const col = new THREE.Color(artCol||0x86d8ff).lerp(new THREE.Color(0xffffff), cur?0.45:0.18).getHex();   // the region's art colour, brightened (more for the current region)
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.009, 8, 30),
-    new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false }));
-  ring.rotation.x=Math.PI/2; g.add(ring);                                   // lie flat in the surface tangent plane
-  const disc=new THREE.Mesh(new THREE.CircleGeometry(0.05, 28),
-    new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.22, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
-  disc.rotation.x=-Math.PI/2; disc.position.y=0.002; g.add(disc);
-  g.userData.ring=ring; g.userData.disc=disc; g.userData.pulse=Math.random()*6.2832;   // (beacon cone removed — the region geometry marks the spot now)
+  const disc=new THREE.Mesh(new THREE.CircleGeometry(0.085, 20),
+    new THREE.MeshBasicMaterial({ transparent:true, opacity:0, depthWrite:false }));   // opacity 0 → unseen but still raycastable, so regions with no relief stay clickable
+  disc.rotation.x=-Math.PI/2; disc.position.y=0.004; g.add(disc);
   g.traverse(o=>{ if(o.isMesh) o.userData.regionId=id; }); g.userData.regionId=id;
   return g;
 }
@@ -5351,26 +5358,55 @@ const REGION_ART_COL = {
 // PHASE 4b (first pass): the REAL island outlines of every region, placed as small relief patches on the
 // globe at their lat/lon, so spinning the planet shows actual archipelago geometry (not just markers/texture).
 // Each region is normalised to ~PATCH globe-units (exaggerated so small clusters stay visible — a "small planet").
+// A little tabletop DIORAMA of each region sitting on the globe: a matte stained plinth with an art-colour rim,
+// a recessed sea, and sculpted, height-shaded islands (painted-miniature look) — not a flat plastic extrusion.
 function buildRegionPatch(r){
-  const polys = r.islandPolys || [];
+  let polys = r.islandPolys || [];
   if (!polys.length) return null;
+  polys = polys.slice().sort((a,b)=>((b.r||b.ring||[]).length)-((a.r||a.ring||[]).length)).slice(0,40);   // biggest 40 islands — tiny islets vanish at globe scale & cost build time
   let mnx=Infinity,mxx=-Infinity,mnz=Infinity,mxz=-Infinity, maxH=1;
   for (const p of polys){ const ring=p.r||p.ring; if(!ring) continue; maxH=Math.max(maxH, p.h||1); for (const v of ring){ mnx=Math.min(mnx,v[0]); mxx=Math.max(mxx,v[0]); mnz=Math.min(mnz,v[1]); mxz=Math.max(mxz,v[1]); } }
   if (!isFinite(mnx)) return null;
   const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, ext=Math.max(mxx-mnx, mxz-mnz)||1;
-  const PATCH=0.26, scale=PATCH/ext;
+  const PATCH=0.24, scale=PATCH/ext;
   const grp=new THREE.Group();
-  const landCol=REGION_ART_COL[r.id]||0x8fae5a;                                 // art-history colour for this region
-  const landMat=new THREE.MeshStandardMaterial({ color:landCol, emissive:new THREE.Color(landCol).multiplyScalar(0.30), roughness:0.7, metalness:0.0 });   // emissive so the colours stay vivid against the dramatic grayscale Earth
+  const art=new THREE.Color(REGION_ART_COL[r.id]||0x8fae5a);
+  const R_sea=PATCH*0.62, R_base=R_sea*1.14, baseTop=0.045, seaY=baseTop+0.004;
+
+  // 1) plinth — matte dark stained disc, slight taper (a diorama base / board-game tile)
+  const baseCol=art.clone().multiplyScalar(0.26).lerp(new THREE.Color(0x241f1b),0.55);
+  const base=new THREE.Mesh(new THREE.CylinderGeometry(R_base, R_base*0.9, baseTop, 48),
+    new THREE.MeshStandardMaterial({ color:baseCol, roughness:0.96, metalness:0.0 }));
+  base.position.y=baseTop/2; grp.add(base);
+  // 2) painted art-colour rim band on the plinth's top edge — keeps each region's identity colour
+  const rim=new THREE.Mesh(new THREE.TorusGeometry(R_base*0.985, 0.006, 8, 56),
+    new THREE.MeshStandardMaterial({ color:art.clone().lerp(new THREE.Color(0xffffff),0.22), roughness:0.55, emissive:art.clone().multiplyScalar(0.22) }));
+  rim.rotation.x=Math.PI/2; rim.position.y=baseTop; grp.add(rim);
+  // 3) recessed sea — matte, region-tinted
+  const sea=new THREE.Mesh(new THREE.CircleGeometry(R_sea, 48),
+    new THREE.MeshStandardMaterial({ color:art.clone().lerp(new THREE.Color(0x123247),0.78), roughness:0.42, metalness:0.0 }));
+  sea.rotation.x=-Math.PI/2; sea.position.y=seaY; grp.add(sea);
+
+  // 4) sculpted islands — extruded + beveled, vertex-shaded coast→peak (painted miniature)
+  const landMat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.9, metalness:0.0, emissive:art.clone().multiplyScalar(0.05) });
+  const cLow=new THREE.Color(0xcdb188).lerp(art,0.30);   // beach/coast, lightly art-tinted
+  const cMid=new THREE.Color(0x8fa86a).lerp(art,0.45);   // vegetated mid-slope
+  const cHi =new THREE.Color(0xf2ead9).lerp(art,0.62);   // painted peak highlight (keeps regional colour)
+  const _c=new THREE.Color();
   for (const p of polys){ const ring=p.r||p.ring; if(!ring||ring.length<4) continue;
     const sh=new THREE.Shape();
     ring.forEach((v,i)=>{ const x=(v[0]-cx)*scale, y=(v[1]-cz)*scale; i?sh.lineTo(x,y):sh.moveTo(x,y); });
-    const depth=clampJS((p.h||1)/maxH, 0.14, 1.0)*0.045;   // taller islands rise more from the planet (globe units)
-    let geo; try { geo=new THREE.ExtrudeGeometry(sh, {depth, bevelEnabled:false, steps:1}); } catch(_){ try{ geo=new THREE.ShapeGeometry(sh);}catch(__){continue;} }
-    geo.rotateX(-Math.PI/2);                              // footprint in the tangent plane, real height rises along +Y (the surface normal)
-    grp.add(new THREE.Mesh(geo, landMat));
+    const h=clampJS((p.h||1)/maxH, 0.22, 1.0)*0.085;     // peak height (globe units), exaggerated so relief reads
+    let geo; try { geo=new THREE.ExtrudeGeometry(sh, {depth:h, bevelEnabled:true, bevelThickness:h*0.55, bevelSize:PATCH*0.012, bevelSegments:1, steps:1}); }
+    catch(_){ try{ geo=new THREE.ExtrudeGeometry(sh,{depth:h,bevelEnabled:false}); }catch(__){ continue; } }
+    geo.rotateX(-Math.PI/2);                              // height now rises along +Y (the surface normal)
+    const pos=geo.attributes.position, col=new Float32Array(pos.count*3);
+    for (let i=0;i<pos.count;i++){ const yy=clampJS(pos.getY(i)/h,0,1);
+      if (yy<0.5) _c.copy(cLow).lerp(cMid, yy*2); else _c.copy(cMid).lerp(cHi,(yy-0.5)*2);
+      col[i*3]=_c.r; col[i*3+1]=_c.g; col[i*3+2]=_c.b; }
+    geo.setAttribute('color', new THREE.BufferAttribute(col,3));
+    const m=new THREE.Mesh(geo, landMat); m.position.y=seaY+0.001; grp.add(m);
   }
-  if (!grp.children.length) return null;
   grp.traverse(o=>{ if(o.isMesh) o.userData.regionId=r.id; }); grp.userData.regionId=r.id;
   return grp;
 }
@@ -5396,7 +5432,7 @@ function buildGlobe(){
   _globePicks=[];
   for (const r of Object.values(REGIONS)){
     const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
-    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R+0.008); globeSpin.add(patch); _globePicks.push(patch); }
+    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R-0.012); globeSpin.add(patch); _globePicks.push(patch); }   // sink the plinth base slightly so it seats flush on the curved sphere
     const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
@@ -5406,9 +5442,7 @@ function buildGlobe(){
   }
   faceRegion(REGION.id);
 }
-function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
-  const n=latLonToVec(r.lat0||0, r.lon0||0, 1);
-  globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0.25,0.15,1).normalize()); }   // bring the region to the front, tilted nicely
+function faceRegion(id){ if(!globeSpin) return; _setGlobeFacing(id, 0.18); }   // open the map facing the current region, lifted for a nice 3/4 view
 // ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
 //      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
 let _diveZoom=null, _descent=null, _descentReturnView='cine';
@@ -5423,14 +5457,9 @@ function updateGlobe(dt){
     _diveFade(Math.max(0,(k-0.5)*2), _diveZoom.id);                                   // fade to the region colour over the last half of the dive
     if (k>=1){ const d=_diveZoom; _diveZoom=null; globeCam.position.set(0,0,4); _diveLand(d); }
     return; }
-  if (!_globeDrag){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // drag momentum only — NO auto-spin
-    globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
-    _globeVel.x*=0.9; _globeVel.y*=0.9; }
-  const t=performance.now()*0.001;
-  for (const g of _globePicks){ const p=0.6+0.4*Math.sin(t*2.2+(g.userData.pulse||0));   // gentle beacon pulse
-    if (g.userData.ring) g.userData.ring.material.opacity=0.55+0.45*p;
-    if (g.userData.disc) g.userData.disc.material.opacity=0.12+0.18*p;
-    if (g.userData.beam) g.userData.beam.material.opacity=0.18+0.22*p; }
+  if (!_globeDrag){ _globeLon += _globeVel.y; _globeLat += _globeVel.x;   // momentum glide (spin keeps going, tilt settles), then damp
+    _globeVel.y*=0.94; _globeVel.x*=0.85; }
+  _applyGlobeOrient();
 }
 let _globeMoved=0;
 function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; }
@@ -5438,10 +5467,17 @@ function _gPointerMove(e){ if(!worldMapOpen||!_globeDrag) return;
   const dx=e.clientX-_globeDrag.x, dy=e.clientY-_globeDrag.y; _globeDrag.x=e.clientX; _globeDrag.y=e.clientY;
   if (Math.abs(dx)>90 || Math.abs(dy)>90) return;                      // ignore cursor teleports (not a real drag)
   _globeMoved+=Math.abs(dx)+Math.abs(dy);
-  globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), dx*0.0045);
-  globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), dy*0.0045);
-  _globeVel.y=dx*0.0009; _globeVel.x=dy*0.0009; }
+  _globeLon += dx*0.006;                       // horizontal drag → spin the globe around its own vertical axis (longitude)
+  _globeLat += dy*0.006;                        // vertical drag → tilt the viewing angle (clamped in _applyGlobeOrient, no roll)
+  _applyGlobeOrient();
+  _globeVel.y=dx*0.0012; _globeVel.x=dy*0.0010; }   // carry momentum into the glide
 function _gPointerUp(){ _globeDrag=null; }
+window.__pick = (x,y)=>{ const rect=renderer.domElement.getBoundingClientRect();
+  const ndc=new THREE.Vector2(((x-rect.left)/rect.width)*2-1, -((y-rect.top)/rect.height)*2+1);
+  const rc=new THREE.Raycaster(); rc.setFromCamera(ndc, globeCam);
+  const hits=rc.intersectObjects(_globePicks, true);
+  let o=hits[0]&&hits[0].object; while(o && !o.userData.regionId) o=o.parent;
+  return { picks:_globePicks.length, hits:hits.length, region:(o&&o.userData.regionId)||null, moved:_globeMoved }; };
 function _gClick(e){ if(!worldMapOpen || _globeMoved>10) return;       // a real click (not the end of a spin) → pick a region
   const rect=renderer.domElement.getBoundingClientRect();
   const ndc=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
@@ -5489,8 +5525,7 @@ function openWorldMap(){ const ov=document.getElementById('worldmap'); if(!ov) r
 function closeWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) ov.classList.add('hidden');
   worldMapOpen=false; if(controls) controls.enabled=_prevCtrlEnabled; }
 function travelToRegion(id){ if(!REGIONS[id]||_diveZoom) return;
-  const r=REGIONS[id], n=latLonToVec(r.lat0||0, r.lon0||0, 1);
-  globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0,0,1));   // bring the patch dead-centre, then dive the camera straight into it
+  _setGlobeFacing(id, 0);   // bring the patch dead-centre (no lift), then dive the camera straight into it
   _diveZoom={ t:0, dur:1.15, id, same:(id===REGION.id) };
 }
 async function _diveLand(d){
