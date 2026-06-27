@@ -2046,7 +2046,7 @@ function updateVehicleFX(dt, t){
     _foamAcc += dt*(2 + ssp*1.6);
     while(_foamAcc>=1){ _foamAcc-=1;
       const sx=boat3.x-cp*5.5, sz=boat3.z-sp2*5.5;                       // stern churn, spread across the transom
-      _spawnFX(_foam, sx+(-sp2)*(Math.random()-0.5)*6, 0.5, sz+(cp)*(Math.random()-0.5)*6, (Math.random()-0.5)*1.8, 0, (Math.random()-0.5)*1.8, 0.75+Math.random()*0.7, 1.7+Math.random()*1.3);
+      _spawnFX(_foam, sx+(-sp2)*(Math.random()-0.5)*6, 0.5, sz+(cp)*(Math.random()-0.5)*6, (Math.random()-0.5)*1.8, 0, (Math.random()-0.5)*1.8, 0.75+Math.random()*0.7, 0.95+Math.random()*0.6);   // shorter life → shorter wake
       if(ssp>4 && Math.random()<0.4){ const bx=boat3.x+cp*5, bz=boat3.z+sp2*5;   // bow spray when making way
         _spawnFX(_foam, bx+(-sp2)*(Math.random()-0.5)*4, 0.6, bz+(cp)*(Math.random()-0.5)*4, (-sp2)*(Math.random()-0.5)*ssp*0.18, 0, (cp)*(Math.random()-0.5)*ssp*0.18, 0.45+Math.random()*0.5, 1.0+Math.random()*0.7); } }
   }
@@ -2057,11 +2057,11 @@ function updateVehicleFX(dt, t){
   shipFoamIM.instanceMatrix.needsUpdate=true;
   // submarine: rising bubble trail, denser the faster it goes
   if(sub && sub.shown!==false){ const sp=Math.abs(sub.speed||0); _bubAcc += dt*(1.2 + sp*0.7);
-    while(_bubAcc>=1){ _bubAcc-=1; const a=Math.random()*6.2832, r=Math.random()*2.6;
-      _spawnFX(_bub, sub.pos.x-Math.cos(sub.yaw)*4+Math.cos(a)*r, sub.pos.y-1+Math.random()*2, sub.pos.z-Math.sin(sub.yaw)*4+Math.sin(a)*r,
-        (Math.random()-0.5)*1.4, 3+Math.random()*2.5, (Math.random()-0.5)*1.4, 0.4+Math.random()*0.9, 3.5+Math.random()*2.5); } }
+    while(_bubAcc>=1){ _bubAcc-=1; const a=Math.random()*6.2832, r=Math.random()*1.3;
+      _spawnFX(_bub, sub.pos.x-Math.cos(sub.yaw)*5.5+Math.cos(a)*r, sub.pos.y+(Math.random()-0.3)*1.2, sub.pos.z-Math.sin(sub.yaw)*5.5+Math.sin(a)*r,   // tight cluster right at the propeller
+        (Math.random()-0.5)*0.7, 0.4+Math.random()*0.7, (Math.random()-0.5)*0.7, 0.4+Math.random()*0.75, 2+Math.random()*1.3); } }
   for(let i=0;i<SUB_BUB_N;i++){ const b=_bub[i]; if(b.life<=0){ subBubbleIM.setMatrixAt(i,_vfxM4.makeScale(0,0,0)); continue; }
-    b.life-=dt; b.vy+=4*dt; b.y+=b.vy*dt; b.x+=b.vx*dt; b.z+=b.vz*dt; if(b.y>-0.4) b.life=Math.min(b.life,0.12);   // pop at the surface
+    b.life-=dt; b.vy+=0.5*dt; b.y+=b.vy*dt; b.x+=b.vx*dt; b.z+=b.vz*dt; if(b.y>-0.4) b.life=Math.min(b.life,0.12);   // only a gentle rise — stays near the sub, never reaches the surface
     const age=1-clampJS(b.life/b.maxLife,0,1), fw=clampJS(Math.min(age/0.08,(1-age)/0.18),0,1), sc=b.size*(0.7+age*0.5)*fw;
     _vfxP.set(b.x, b.y - curveDropJS(b.x,b.z), b.z); _vfxM4.compose(_vfxP,_vfxQ,_vfxS.set(sc,sc,sc)); subBubbleIM.setMatrixAt(i,_vfxM4); }
   subBubbleIM.instanceMatrix.needsUpdate=true;
