@@ -5355,8 +5355,8 @@ const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', aegean:'med',
 const _PAL = {   // per-biome natural palette: sea, beach, vegetated lowland, rocky peak
   trop:{ sea:0x1f86ab, beach:0xe7d8aa, low:0x4ea049, peak:0x6f8a4e },
   med: { sea:0x2a7ea2, beach:0xdac99a, low:0x9aa05c, peak:0xb89a62 },
-  temp:{ sea:0x2676a0, beach:0xccbf98, low:0x53853f, peak:0x9a8f72 },
-  nord:{ sea:0x357488, beach:0xb7b189, low:0x46673b, peak:0x6c705c },
+  temp:{ sea:0x215f86, beach:0xccbf98, low:0x53853f, peak:0x9a8f72 },
+  nord:{ sea:0x1c4763, beach:0xa9a786, low:0x46673b, peak:0x6c705c },   // dark steel-blue Baltic, NOT turquoise
 };
 function buildRegionPatch(r){
   let polys = (r.islandPolys||[]).filter(p=>{ const ring=p.r||p.ring; return ring && ring.length>=4; });
