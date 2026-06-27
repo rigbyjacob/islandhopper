@@ -66,20 +66,23 @@
     box-shadow: 0 8px 30px rgba(0,0,0,.5); font: 13px ui-sans-serif, system-ui; color: #dfeefb; max-width: 92vw; }
   #demobar .demo-nav { font-size: 22px; line-height: 1; padding: 2px 9px; cursor: pointer; opacity: .7; border-radius: 8px; user-select: none; }
   #demobar .demo-nav:hover { opacity: 1; background: rgba(140,200,255,.14); }
-  #demobar .demo-mid { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+  #demobar .demo-mid { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
   #demobar .demo-name { font-weight: 650; font-size: 13.5px; letter-spacing: .2px; }
-  #demobar .demo-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: 70vw; }
-  #demobar .demo-pill { padding: 4px 11px; border-radius: 999px; cursor: pointer; background: rgba(140,200,255,.1); border: 1px solid rgba(140,200,255,.18); white-space: nowrap; font-size: 12px; opacity: .85; }
-  #demobar .demo-pill:hover { background: rgba(140,200,255,.2); opacity: 1; }
+  /* Pills stay on ONE row and grow to fit; when they exceed the available width the row scrolls
+     horizontally (the ‹ › buttons scroll the active pill into view). Edge fades mark hidden pills. */
+  #demobar .demo-scroll { position: relative; max-width: 78vw; min-width: 0; }
+  #demobar .demo-btns { display: flex; gap: 6px; flex-wrap: nowrap; overflow-x: auto; scroll-behavior: smooth; padding: 1px; scrollbar-width: none; -ms-overflow-style: none; }
+  #demobar .demo-btns::-webkit-scrollbar { display: none; }
+  #demobar .demo-scroll::before, #demobar .demo-scroll::after { content: ''; position: absolute; top: 0; bottom: 0; width: 30px; pointer-events: none; opacity: 0; transition: opacity .15s; z-index: 1; }
+  #demobar .demo-scroll::before { left: 0; background: linear-gradient(90deg, rgba(8,18,30,.96), rgba(8,18,30,0)); }
+  #demobar .demo-scroll::after  { right: 0; background: linear-gradient(270deg, rgba(8,18,30,.96), rgba(8,18,30,0)); }
+  #demobar .demo-scroll.l::before { opacity: 1; }   /* more pills to the left */
+  #demobar .demo-scroll.r::after  { opacity: 1; }   /* more pills to the right */
+  #demobar .demo-pill { width: 26px; height: 26px; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; background: rgba(140,200,255,.1); border: 1px solid rgba(140,200,255,.22); font-size: 12px; font-weight: 600; opacity: .8; flex: 0 0 auto; }
+  #demobar .demo-pill:hover { background: rgba(140,200,255,.22); opacity: 1; }
   #demobar .demo-pill.active { background: #2f7bd6; border-color: #5b9fe6; color: #fff; opacity: 1; }
   #demobar .demo-exit { font-size: 14px; padding: 4px 9px; cursor: pointer; opacity: .6; border-radius: 8px; user-select: none; }
   #demobar .demo-exit:hover { opacity: 1; background: rgba(255,120,120,.18); }
-  /* When the full pill list would wrap onto more than one row (small / mobile / foldable screens — a
-     fixed px breakpoint can't catch every device's CSS-px width, so this is driven by JS wrap-detection
-     via the .compact class), collapse to just the current scenario name + ‹ › arrows (already wired up). */
-  #demobar.compact .demo-btns { display: none; }
-  #demobar.compact .demo-name { font-size: 14px; }
-  @media (max-width: 640px){ #demobar .demo-btns { display: none; } #demobar .demo-name { font-size: 14px; } }
   .scn-input { width: 100%; box-sizing: border-box; background: rgba(0,0,0,.25); border: 1px solid rgba(140,200,255,.25); color: #dfeefb; border-radius: 7px; padding: 5px 8px; font: 12px ui-sans-serif; margin: 4px 0; }
   .scn-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 11.5px; }
   .scn-row .scn-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -6162,26 +6165,29 @@ function _buildDemoBar(){
   const prev=el('div','demo-nav',bar); prev.textContent='‹'; prev.title='Previous'; prev.onclick=()=>demoGo(_demoIdx-1);
   const mid=el('div','demo-mid',bar);
   const nm=el('div','demo-name',mid); nm.id='demo-name';
-  const btns=el('div','demo-btns',mid); btns.id='demo-btns';
-  demoScenarios.forEach((sc,i)=>{ const b=el('div','demo-pill',btns); b.textContent=sc.name; b.onclick=()=>demoGo(i); });
+  const scroll=el('div','demo-scroll',mid); scroll.id='demo-scroll';
+  const btns=el('div','demo-btns',scroll); btns.id='demo-btns';
+  demoScenarios.forEach((sc,i)=>{ const b=el('div','demo-pill',btns); b.textContent=String(i+1); b.title=sc.name; b.onclick=()=>demoGo(i); });   // numbered circles; the name shows above
+  btns.addEventListener('scroll', _updateDemoScroll, {passive:true});
   const next=el('div','demo-nav',bar); next.textContent='›'; next.title='Next'; next.onclick=()=>demoGo(_demoIdx+1);
   const exit=el('div','demo-exit',bar); exit.textContent='✕'; exit.title='Exit demo (Esc)'; exit.onclick=exitDemoMode;
   document.body.appendChild(bar); _demoBar=bar; _updateDemoBar();
-  if(!_demoFitBound){ const onResize=()=>setTimeout(_fitDemoBar,60); window.addEventListener('resize',onResize); window.addEventListener('orientationchange',onResize); _demoFitBound=true; }
-  requestAnimationFrame(_fitDemoBar);   // measure once laid out
+  if(!_demoFitBound){ const onResize=()=>setTimeout(_updateDemoScroll,60); window.addEventListener('resize',onResize); window.addEventListener('orientationchange',onResize); _demoFitBound=true; }
+  requestAnimationFrame(_updateDemoScroll);
 }
-// Collapse the pill list to "name + ‹ › arrows" whenever it would wrap onto more than one row.
-// Width-based detection works on ANY device/DPR (incl. foldables a fixed px breakpoint misses).
+// The pill row is a single horizontal scroller; show an edge fade on whichever side has hidden pills.
 let _demoFitBound=false;
-function _fitDemoBar(){
-  if(!_demoBar) return;
-  _demoBar.classList.remove('compact');                       // expand first so we can measure the true layout
-  const btns=document.getElementById('demo-btns'); if(!btns || !btns.children.length) return;
-  const first=btns.children[0], last=btns.children[btns.children.length-1];
-  if(last.offsetTop > first.offsetTop + 1) _demoBar.classList.add('compact');   // pills spilled to a 2nd row → collapse
+function _updateDemoScroll(){
+  const sc=document.getElementById('demo-scroll'), b=document.getElementById('demo-btns'); if(!sc||!b) return;
+  const max=b.scrollWidth-b.clientWidth;
+  sc.classList.toggle('l', b.scrollLeft>2);            // more pills to the LEFT
+  sc.classList.toggle('r', b.scrollLeft < max-2);      // more pills to the RIGHT
 }
 function _updateDemoBar(){ const nm=document.getElementById('demo-name'); if(nm&&demoScenarios[_demoIdx]) nm.textContent=demoScenarios[_demoIdx].name;
-  const bs=document.getElementById('demo-btns'); if(bs) [...bs.children].forEach((b,i)=>b.classList.toggle('active', i===_demoIdx)); }
+  const bs=document.getElementById('demo-btns'); if(!bs) return;
+  [...bs.children].forEach((b,i)=>b.classList.toggle('active', i===_demoIdx));
+  const active=bs.children[_demoIdx]; if(active&&active.scrollIntoView) active.scrollIntoView({inline:'center', block:'nearest', behavior:'smooth'});   // keep the current pill in view as ‹ › step
+  setTimeout(_updateDemoScroll, 0); }
 function buildDemoSection(panel){
   const s=section(panel,'Scenarios');
   ui.scnName=el('input','scn-input',s); ui.scnName.type='text'; ui.scnName.placeholder='Scenario name…';
