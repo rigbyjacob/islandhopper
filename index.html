@@ -1517,6 +1517,7 @@ async function init() {
     updateNavDebug();
     updateFireworks(dt);
     updateVehicles(dt);   // submarine / plane / UFO agents + their chase cameras
+    updateVehicleFX(dt, clock.elapsedTime);   // sub bubbles / plane contrail / UFO distortion (speed-driven)
     updateFoamClaws(t);   // Hokusai curl-claws ride the near-field crest tops (gated to that art style)
     updateBreakers(t);    // a few authored hero breakers (true overhang) on the biggest crests
     updateVolcano(dt, t); // submarine volcano: caldera glow + eruption plume/ejecta
@@ -2011,6 +2012,77 @@ function _vehCam(v, dt){
   const _vp=computeViewport(); v.cam.aspect=_vp.w/_vp.h; v.cam.updateProjectionMatrix();   // single-view aspect (grid overrides)
 }
 function updateVehicles(dt){ for (const v of FLEET){ if (!v.ship){ _agentStep(v, dt); updateVehPath(v); } _vehCam(v, dt); } updateCloak(dt); }
+// ============================================================================
+//  VEHICLE TRAIL FX — speed-driven marks: submarine bubble trail, plane vapour contrail,
+//  UFO air-distortion. (The ship's foam wake is the separate wakeMesh system.)
+// ============================================================================
+const SUB_BUB_N=90, CONTRAIL_N=150, SHIP_FOAM_N=110;
+let subBubbleIM=null, contrailIM=null, ufoRipple=null, ufoGlow=null, shipFoamIM=null, _bub=[], _con=[], _foam=[], _bubAcc=0, _conAcc=0, _foamAcc=0;
+const _vfxM4=new THREE.Matrix4(), _vfxQ=new THREE.Quaternion(), _vfxS=new THREE.Vector3(), _vfxP=new THREE.Vector3();
+function buildVehicleFX(){
+  _bub=[]; _con=[]; _bubAcc=0; _conAcc=0;
+  const sg=new THREE.SphereGeometry(1,7,6);
+  subBubbleIM=new THREE.InstancedMesh(sg, new THREE.MeshBasicMaterial({ color:0xbcd6ea, transparent:true, opacity:0.3, depthWrite:false }), SUB_BUB_N);
+  subBubbleIM.frustumCulled=false; subBubbleIM.renderOrder=4; scene.add(subBubbleIM);
+  contrailIM=new THREE.InstancedMesh(sg, new THREE.MeshBasicMaterial({ color:0xdde7ef, transparent:true, opacity:0.3, depthWrite:false }), CONTRAIL_N);
+  contrailIM.frustumCulled=false; contrailIM.renderOrder=4; scene.add(contrailIM);
+  shipFoamIM=new THREE.InstancedMesh(sg, new THREE.MeshBasicMaterial({ color:0xdfeaf2, transparent:true, opacity:0.34, depthWrite:false }), SHIP_FOAM_N);   // dim + low-opacity so it stays UNDER the bloom bright-pass (no glow)
+  shipFoamIM.frustumCulled=false; shipFoamIM.renderOrder=4; scene.add(shipFoamIM);
+  for(let i=0;i<SUB_BUB_N;i++){ _bub.push({life:0}); subBubbleIM.setMatrixAt(i,_vfxM4.makeScale(0,0,0)); }
+  for(let i=0;i<CONTRAIL_N;i++){ _con.push({life:0}); contrailIM.setMatrixAt(i,_vfxM4.makeScale(0,0,0)); }
+  for(let i=0;i<SHIP_FOAM_N;i++){ _foam.push({life:0}); shipFoamIM.setMatrixAt(i,_vfxM4.makeScale(0,0,0)); }
+  subBubbleIM.instanceMatrix.needsUpdate=true; contrailIM.instanceMatrix.needsUpdate=true; shipFoamIM.instanceMatrix.needsUpdate=true;
+  ufoRipple=new THREE.Mesh(new THREE.RingGeometry(2.4,6.5,30), new THREE.MeshBasicMaterial({ color:0x9fd6ff, transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide }));
+  ufoRipple.rotation.x=-Math.PI/2; ufoRipple.renderOrder=4; ufoRipple.frustumCulled=false; scene.add(ufoRipple);
+  ufoGlow=new THREE.Mesh(new THREE.SphereGeometry(7,16,12), new THREE.MeshBasicMaterial({ color:0x7fc0ff, transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending }));
+  ufoGlow.renderOrder=4; ufoGlow.frustumCulled=false; scene.add(ufoGlow);
+}
+function _spawnFX(arr, x,y,z, vx,vy,vz, size, maxLife){ for(let i=0;i<arr.length;i++){ const p=arr[i]; if(p.life<=0){ p.x=x;p.y=y;p.z=z;p.vx=vx;p.vy=vy;p.vz=vz;p.size=size;p.maxLife=maxLife;p.life=maxLife; return; } } }
+function updateVehicleFX(dt, t){
+  if(!subBubbleIM) return;
+  const R=(id)=>FLEET.find(v=>v.id===id), sub=R('sub'), plane=R('plane'), ufo=R('ufo');
+  // SHIP foam wake: turbulent white churn off the stern + bow spray, riding the wave surface, denser with speed
+  if(typeof boat3!=='undefined' && boat3){ const ssp=Math.abs(boat3.speedWater||0), cp=Math.cos(boat3.psi), sp2=Math.sin(boat3.psi);
+    _foamAcc += dt*(2 + ssp*1.6);
+    while(_foamAcc>=1){ _foamAcc-=1;
+      const sx=boat3.x-cp*5.5, sz=boat3.z-sp2*5.5;                       // stern churn, spread across the transom
+      _spawnFX(_foam, sx+(-sp2)*(Math.random()-0.5)*6, 0.5, sz+(cp)*(Math.random()-0.5)*6, (Math.random()-0.5)*1.8, 0, (Math.random()-0.5)*1.8, 0.75+Math.random()*0.7, 1.7+Math.random()*1.3);
+      if(ssp>4 && Math.random()<0.4){ const bx=boat3.x+cp*5, bz=boat3.z+sp2*5;   // bow spray when making way
+        _spawnFX(_foam, bx+(-sp2)*(Math.random()-0.5)*4, 0.6, bz+(cp)*(Math.random()-0.5)*4, (-sp2)*(Math.random()-0.5)*ssp*0.18, 0, (cp)*(Math.random()-0.5)*ssp*0.18, 0.45+Math.random()*0.5, 1.0+Math.random()*0.7); } }
+  }
+  for(let i=0;i<SHIP_FOAM_N;i++){ const f=_foam[i]; if(f.life<=0){ shipFoamIM.setMatrixAt(i,_vfxM4.makeScale(0,0,0)); continue; }
+    f.life-=dt; f.x+=f.vx*dt; f.z+=f.vz*dt; f.vx*=0.93; f.vz*=0.93;
+    const age=1-clampJS(f.life/f.maxLife,0,1), fw=clampJS(Math.min(age/0.12,(1-age)/0.45),0,1), sc=f.size*(0.7+age*1.4)*fw;
+    _vfxP.set(f.x, waveHeightJS(f.x,f.z,t)+0.35 - curveDropJS(f.x,f.z), f.z); _vfxM4.compose(_vfxP,_vfxQ,_vfxS.set(sc,sc*0.45,sc)); shipFoamIM.setMatrixAt(i,_vfxM4); }   // flattened so it lies ON the water
+  shipFoamIM.instanceMatrix.needsUpdate=true;
+  // submarine: rising bubble trail, denser the faster it goes
+  if(sub && sub.shown!==false){ const sp=Math.abs(sub.speed||0); _bubAcc += dt*(1.2 + sp*0.7);
+    while(_bubAcc>=1){ _bubAcc-=1; const a=Math.random()*6.2832, r=Math.random()*2.6;
+      _spawnFX(_bub, sub.pos.x-Math.cos(sub.yaw)*4+Math.cos(a)*r, sub.pos.y-1+Math.random()*2, sub.pos.z-Math.sin(sub.yaw)*4+Math.sin(a)*r,
+        (Math.random()-0.5)*1.4, 3+Math.random()*2.5, (Math.random()-0.5)*1.4, 0.4+Math.random()*0.9, 3.5+Math.random()*2.5); } }
+  for(let i=0;i<SUB_BUB_N;i++){ const b=_bub[i]; if(b.life<=0){ subBubbleIM.setMatrixAt(i,_vfxM4.makeScale(0,0,0)); continue; }
+    b.life-=dt; b.vy+=4*dt; b.y+=b.vy*dt; b.x+=b.vx*dt; b.z+=b.vz*dt; if(b.y>-0.4) b.life=Math.min(b.life,0.12);   // pop at the surface
+    const age=1-clampJS(b.life/b.maxLife,0,1), fw=clampJS(Math.min(age/0.08,(1-age)/0.18),0,1), sc=b.size*(0.7+age*0.5)*fw;
+    _vfxP.set(b.x, b.y - curveDropJS(b.x,b.z), b.z); _vfxM4.compose(_vfxP,_vfxQ,_vfxS.set(sc,sc,sc)); subBubbleIM.setMatrixAt(i,_vfxM4); }
+  subBubbleIM.instanceMatrix.needsUpdate=true;
+  // plane: twin wingtip vapour contrail, expands & dissipates behind
+  if(plane && plane.shown!==false){ const sp=Math.abs(plane.speed||0); _conAcc += dt*(3 + sp*0.22);
+    while(_conAcc>=1){ _conAcc-=1; for(const side of [-1,1]){ const ox=Math.cos(plane.yaw+1.5708)*side*4.5, oz=Math.sin(plane.yaw+1.5708)*side*4.5;
+      _spawnFX(_con, plane.pos.x-Math.cos(plane.yaw)*7+ox, plane.pos.y-1, plane.pos.z-Math.sin(plane.yaw)*7+oz,
+        (Math.random()-0.5)*0.5, (Math.random()-0.15)*0.5, (Math.random()-0.5)*0.5, 0.8+Math.random()*0.5, 4.5+Math.random()*3.5); } } }
+  for(let i=0;i<CONTRAIL_N;i++){ const c=_con[i]; if(c.life<=0){ contrailIM.setMatrixAt(i,_vfxM4.makeScale(0,0,0)); continue; }
+    c.life-=dt; c.x+=c.vx*dt; c.y+=c.vy*dt; c.z+=c.vz*dt;
+    const age=1-clampJS(c.life/c.maxLife,0,1), fw=clampJS(Math.min(age/0.05,(1-age)/0.16),0,1), sc=c.size*(0.6+age*2.2)*fw;
+    _vfxP.set(c.x, c.y - curveDropJS(c.x,c.z), c.z); _vfxM4.compose(_vfxP,_vfxQ,_vfxS.set(sc,sc,sc)); contrailIM.setMatrixAt(i,_vfxM4); }
+  contrailIM.instanceMatrix.needsUpdate=true;
+  // UFO: a humming air-distortion — pulsing energy glow + a fast expanding ground ripple (faster when it darts)
+  if(ufo && ufo.shown!==false){ const sp=Math.abs(ufo.speed||0), yb=ufo.pos.y - curveDropJS(ufo.pos.x,ufo.pos.z), pulse=0.5+0.5*Math.sin(t*7);
+    ufoGlow.visible=true; ufoGlow.position.set(ufo.pos.x,yb,ufo.pos.z); ufoGlow.material.opacity=0.05+0.07*pulse+sp*0.0005;
+    const gs=0.85+0.18*pulse; ufoGlow.scale.set(gs,gs*0.55,gs);
+    ufo._rip=(ufo._rip||0)+dt*(0.5+sp*0.012); if(ufo._rip>1) ufo._rip-=1;
+    ufoRipple.visible=true; ufoRipple.position.set(ufo.pos.x,yb-3,ufo.pos.z); const rs=0.4+ufo._rip*2.6; ufoRipple.scale.set(rs,rs,rs); ufoRipple.material.opacity=(1-ufo._rip)*0.20;
+  } else { if(ufoGlow)ufoGlow.visible=false; if(ufoRipple)ufoRipple.visible=false; }
+}
 function fleetCam(id){ const v=FLEET.find(x=>x.id===id); return v ? v.cam : null; }
 const _gsz=new THREE.Vector2();
 function renderFleetGrid(){   // Brady-Bunch 2×2: ship / sub / plane / UFO
@@ -2935,7 +3007,7 @@ function updateNavVisuals(dt) {
 // ---- trailing wake ribbon: a tapered strip sampled from the boat's recent track,
 //      laid on the wave surface so it never clips like the old fixed planes ----
 let wakeMesh = null, wakeTrail = [];
-const WAKE_N = 56;
+const WAKE_N = 84;
 function buildWake() {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(WAKE_N*2*3), 3));
@@ -3039,13 +3111,13 @@ function buildDipStick(){
     const rg = new THREE.TorusGeometry(rad, 0.32, 6, 22); rg.rotateX(Math.PI/2);
     const ring=new THREE.Mesh(rg, ringMat); ring.position.set(X,y,Z); ring.renderOrder=19; g.add(ring);
     if (txt && (force || Math.abs(y-lastLabelY) > 7)){                    // skip labels that would collide
-      const lab=makeLabelSprite(txt, 0xffffff, 6.5, ['#ffffff','#ff8a1e']); lab.material.depthTest=false;   // white→orange so it reads against the white rings
+      const lab=makeLabelSprite(txt, 0xffffff, 6.5, ['#dfe6ea','#cf7a2a']); lab.material.depthTest=false; lab.material.color.setScalar(0.62);   // dimmed below the bloom threshold so it doesn't glow
       lab.position.set(X+8+rad*0.5, y, Z); g.add(lab); lastLabelY=y; }   // offset further out as rings widen
   };
   tick(0, null);                                               // surface ring, no label
   for (let m=500; m<maxM-250; m+=500) tick(m, (m===500||m===1000) ? (m+' m') : null);   // label only 500 & 1000
   tick(maxM, '≈'+(Math.round(maxM/10)*10)+' m', true);         // label the max depth at the seabed
-  const title=makeLabelSprite('▼  depth sounding', 0xffffff, 8); title.material.depthTest=false;
+  const title=makeLabelSprite('▼  depth sounding', 0xffffff, 8); title.material.depthTest=false; title.material.color.setScalar(0.5);   // matte, below the bloom bright-pass so it doesn't glow
   title.position.set(X, 10, Z); g.add(title);
   scene.add(g); dipStick=g;
 }
@@ -5549,7 +5621,7 @@ function buildRegionWorld(){
   buildOcean();
   if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
   buildDipStick();
-  buildIslandLights(); buildPalms(); buildShrubs(); buildTownMotifs(); buildVehicles();
+  buildIslandLights(); buildPalms(); buildShrubs(); buildTownMotifs(); buildVehicles(); buildVehicleFX();
   buildLabels();
   BLOCKED = buildBlocked(); buildDistLand(); buildCoarseNav();
   applySceneStyle();
