@@ -1503,6 +1503,7 @@ async function init() {
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;   // we drive shadow refresh manually (every other frame) — see _shadowTick in the animate loop
   document.getElementById('app').appendChild(renderer.domElement);
   await renderer.init();
 
@@ -1539,7 +1540,7 @@ async function init() {
   const START_AT_VOLCANO = false;   // volcano feature disabled (VOLC_ENABLED=false) → start at the normal boat tour
   if (START_AT_VOLCANO && VOLC_ENABLED) setFleetView('volcano');
 
-  let firstFrame = true, fpsT = 0, fpsN = 0;
+  let firstFrame = true, fpsT = 0, fpsN = 0, _shadowTick = 0;
 
   renderer.setAnimationLoop(() => {
     const dt = Math.min(clock.getDelta(), 0.04);
@@ -1610,6 +1611,7 @@ async function init() {
     const useRain = rainActive && rainPost && localStormG > 0.01;   // rain-on-lens only when the VIEWER is in a storm cell's reach
     const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
     const useGodray = !useRain && !useOutline && godrayActive && godrayPost && P.atmosphere > 0.01;   // atmosphere pass: god rays (sun-gated inside) + bloom + haze
+    if ((_shadowTick++ & 1) === 0) renderer.shadowMap.needsUpdate = true;   // refresh the shadow map every OTHER frame; the frustum follows the boat so a 1-frame lag is imperceptible, but it halves shadow-pass cost
     try {
       if (_swapping){ /* hold the present while a region's pipelines compile — the dive colour-fade covers the screen */ }
       else if (worldMapOpen && globeScene){ updateGlobe(dt); renderer.render(globeScene, globeCam); _grabGlobeFrame(); }
@@ -1787,7 +1789,7 @@ function buildLights() {
   sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
   sunLight.position.set(420, 620, 360);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(4096, 4096);   // higher res so thin palm fronds don't shimmer
+  sunLight.shadow.mapSize.set(2048, 2048);   // 2048 (was 4096): ~4x less shadow fragment/bandwidth, near-identical for this stylized look (slightly softer frond shadows)
   const sc = sunLight.shadow.camera;
   // tighter frustum (follows the boat) → smaller texels → steadier, sharper frond shadows.
   sc.left=-340; sc.right=340; sc.top=340; sc.bottom=-340; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();
