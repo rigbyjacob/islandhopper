@@ -2815,7 +2815,9 @@ function setTargetRing(ring, cx, cz, fallbackR){
   let pts=ring;
   if(!pts||pts.length<6){ pts=[]; const Rr=Math.max(fallbackR||26,18); for(let a=0;a<72;a++){ const th=a/72*Math.PI*2; pts.push([cx+Math.cos(th)*Rr, cz+Math.sin(th)*Rr]); } }
   const g=_ringGeom(pts, 8, 4.5);
-  if(g){ if(targetRing.geometry) targetRing.geometry.dispose(); targetRing.geometry=g; targetRing.visible=true; } else targetRing.visible=false;
+  if(g){ if(targetRing.geometry) targetRing.geometry.dispose(); targetRing.geometry=g; targetRing.visible=true;
+    const pa=g.attributes.position, n=pa.count, by=new Float32Array(n); for(let i=0;i<n;i++) by[i]=pa.array[i*3+1]; targetRing.userData.baseY=by;   // remember each vert's base height (0/H) so the band can re-curve per-vertex each frame
+  } else targetRing.visible=false;
 }
 // a ribbon of forward-tapering "wedge" dashes lying on the water; the vehicle EATS dashes as it passes
 function makeRibbonMesh(color){
@@ -2909,7 +2911,9 @@ function updateNavVisuals(dt) {
       else { const tg = activeTarget(); tx=tg.x; tz=tg.z; rad=26; key='g:'+Math.round(tx)+','+Math.round(tz); }
       if (key !== targetRingKey){ targetRingKey=key; setTargetRing(ring, tx, tz, rad); }   // rebuild only on target change
       const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7), yw = waveHeightJS(tx, tz, tt);
-      targetRing.position.y = yw + 0.2 - curveDropJS(tx, tz);        // ride the (curved) wave surface; band rises above it
+      const _by=targetRing.userData.baseY, _pa=targetRing.geometry.attributes.position, _ar=_pa.array;   // CURVE the band per-vertex so it follows the tiny-planet curvature (was a flat band dropped by the centre only)
+      if (_by){ for(let i=0;i<_by.length;i++){ _ar[i*3+1]=_by[i] + yw + 0.2 - curveDropJS(_ar[i*3], _ar[i*3+2]); } _pa.needsUpdate=true; }
+      targetRing.position.y = 0;
       _glowCol.setHSL(0.045 + 0.03*Math.sin(tt*0.5), 0.95, 0.6);     // warm red↔amber drift
       targetRing.material.color.copy(_glowCol);
       targetRing.material.opacity = 0.34 + 0.22*pulse;               // subtle, pulsing
@@ -5325,6 +5329,30 @@ function _globeLabel(text, color){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthTest:false, depthWrite:false }));
   const s=0.085; sp.scale.set(s*w/h, s, 1); sp.renderOrder=40; return sp;
 }
+// PHASE 4b (first pass): the REAL island outlines of every region, placed as small relief patches on the
+// globe at their lat/lon, so spinning the planet shows actual archipelago geometry (not just markers/texture).
+// Each region is normalised to ~PATCH globe-units (exaggerated so small clusters stay visible — a "small planet").
+function buildRegionPatch(r){
+  const polys = r.islandPolys || [];
+  if (!polys.length) return null;
+  let mnx=Infinity,mxx=-Infinity,mnz=Infinity,mxz=-Infinity;
+  for (const p of polys){ const ring=p.r||p.ring; if(!ring) continue; for (const v of ring){ mnx=Math.min(mnx,v[0]); mxx=Math.max(mxx,v[0]); mnz=Math.min(mnz,v[1]); mxz=Math.max(mxz,v[1]); } }
+  if (!isFinite(mnx)) return null;
+  const cx=(mnx+mxx)/2, cz=(mnz+mxz)/2, ext=Math.max(mxx-mnx, mxz-mnz)||1;
+  const PATCH=0.26, scale=PATCH/ext;
+  const grp=new THREE.Group();
+  const landMat=new THREE.MeshStandardMaterial({ color:0xa6c766, emissive:0x1a2a10, roughness:0.8, metalness:0.0, side:THREE.DoubleSide });
+  for (const p of polys){ const ring=p.r||p.ring; if(!ring||ring.length<4) continue;
+    const sh=new THREE.Shape();
+    ring.forEach((v,i)=>{ const x=(v[0]-cx)*scale, y=(v[1]-cz)*scale; i?sh.lineTo(x,y):sh.moveTo(x,y); });
+    let geo; try { geo=new THREE.ShapeGeometry(sh); } catch(_){ continue; }
+    geo.rotateX(-Math.PI/2);                              // lie flat in the tangent (XZ) plane
+    grp.add(new THREE.Mesh(geo, landMat));
+  }
+  if (!grp.children.length) return null;
+  grp.traverse(o=>{ if(o.isMesh) o.userData.regionId=r.id; }); grp.userData.regionId=r.id;
+  return grp;
+}
 function buildGlobe(){
   globeScene=new THREE.Scene();
   globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,4.0);
@@ -5343,6 +5371,8 @@ function buildGlobe(){
   globeSpin.add(ocean);
   _globePicks=[];
   for (const r of Object.values(REGIONS)){
+    const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
+    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R+0.008); globeSpin.add(patch); _globePicks.push(patch); }
     const c=makeRegionMarker(r.id, r.id===REGION.id); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
     const lab=_globeLabel(m.tag, r.id===REGION.id?0x66e8aa:0xffe6ad);
