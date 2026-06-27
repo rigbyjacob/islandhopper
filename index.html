@@ -181,6 +181,7 @@
 <script src="data/elev_b64.js"></script>
 <script src="data/bathy_b64.js"></script>
 <script src="data/aegean.js"></script>   <!-- Aegean (Cyclades) region: window.AEGEAN, built by build/gen_region.py -->
+<script src="data/aegeanbig.js"></script>   <!-- Aegean (greater) — large map to exercise clipmap LOD -->
 <script src="data/japan.js"></script>     <!-- Japan · Sagami Bay region: window.JAPAN -->
 <script src="data/thailand.js"></script>  <!-- Thailand · Andaman region: window.THAILAND -->
 <script src="data/worldmap.js"></script>   <!-- shaded-relief Earth COLOR texture for the world-map globe (build/gen_worldmap.py) -->
@@ -425,6 +426,14 @@ if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
   // bright clear midday Mediterranean light + a dry meltemi north wind, calmer seas, clearer air
   defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:115, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
 });
+// ---- Aegean (greater) — most of the Greek archipelago; a big map to exercise the clipmap LOD ----
+if (window.AEGEANBIG) REGIONS.aegeanbig = Object.assign({}, window.AEGEANBIG, {
+  relief: { escale:22, steep:0.2, ridge:0.5, lift:2.2 },
+  palette: { land: { seabed:0x1d6c84, wetsand:0xc2a266, sand:0xeaddb4, grass:0xb6a85f, forest:0x8f8a4e, rock:0xc3b6a0, cliff:0x9c917b },
+             shrub: [0x97914e, 0x7c7a44] },
+  flora: { palms:false },
+  defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:115, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
+});
 // ---- Japan · Sagami Bay (Izu volcanic islands — the Great Wave coast) ----
 if (window.JAPAN) REGIONS.japan = Object.assign({}, window.JAPAN, {
   relief: { escale:20, steep:0.17, ridge:0.28, lift:2.9 },   // broad, gentle volcanic cones — no jagged ridges
@@ -470,9 +479,11 @@ const ISLAND_POLYS = REGION.islandPolys;
 const ELEV_B64 = REGION.elevB64;
 const BATHY_B64 = REGION.bathyB64;
 const BATHY_META = REGION.bathyMeta;
-const ISLANDS = (() => { const best={};
-  for (const p of ISLAND_POLYS){ if(p.n==='islet') continue; if(!best[p.n] || p.r.length>best[p.n].r.length) best[p.n]=p; }
-  return Object.values(best).map(p => { let rr=0; for(const v of p.r) rr=Math.max(rr, Math.hypot(v[0]-p.c[0], v[1]-p.c[1]));
+const ISLANDS = (() => { const best={}, islets=[];
+  // named islands: keep the biggest polygon per name. islets: keep each as its own (distinct) island,
+  // so regions with no name table (every blob 'islet') still get a populated ISLANDS list.
+  for (const p of ISLAND_POLYS){ if(p.n==='islet'){ islets.push(p); continue; } if(!best[p.n] || p.r.length>best[p.n].r.length) best[p.n]=p; }
+  return Object.values(best).concat(islets).map(p => { let rr=0; for(const v of p.r) rr=Math.max(rr, Math.hypot(v[0]-p.c[0], v[1]-p.c[1]));
     return { name:p.n, x:p.c[0], z:p.c[1], r:rr, h:p.h, ring:p.r }; }); })();
 const BYNAME = Object.fromEntries(ISLANDS.map(i => [i.name, i]));
 
@@ -2969,7 +2980,8 @@ function updateStarMap(){
 }
 
 function buildLabels(){
-  for (const isl of ISLANDS){ const sp=makeLabelSprite(isl.name, 0xffffff, 14);   // ~14 world units tall
+  for (const isl of ISLANDS){ if (isl.name==='islet') continue;                   // don't label tiny unnamed islets
+    const sp=makeLabelSprite(isl.name, 0xffffff, 14);   // ~14 world units tall
     const peakY = Math.max(isl.h, terrainHeight(isl.x,isl.z), 6);                 // real centre height (tall Aegean isles)
     sp.position.set(isl.x, peakY+14, isl.z);
     sp.material.depthTest=false; sp.renderOrder=20;                              // show THROUGH the island so it never hides its own label
