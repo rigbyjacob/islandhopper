@@ -1518,6 +1518,7 @@ async function init() {
     updateFireworks(dt);
     updateVehicles(dt);   // submarine / plane / UFO agents + their chase cameras
     updateVehicleFX(dt, clock.elapsedTime);   // sub bubbles / plane contrail / UFO distortion (speed-driven)
+    updateSeaLife(dt);                         // schooling fish (Boid flocking + swim animation)
     updateFoamClaws(t);   // Hokusai curl-claws ride the near-field crest tops (gated to that art style)
     updateBreakers(t);    // a few authored hero breakers (true overhang) on the biggest crests
     updateVolcano(dt, t); // submarine volcano: caldera glow + eruption plume/ejecta
@@ -2082,6 +2083,79 @@ function updateVehicleFX(dt, t){
     ufo._rip=(ufo._rip||0)+dt*(0.5+sp*0.012); if(ufo._rip>1) ufo._rip-=1;
     ufoRipple.visible=true; ufoRipple.position.set(ufo.pos.x,yb-3,ufo.pos.z); const rs=0.4+ufo._rip*2.6; ufoRipple.scale.set(rs,rs,rs); ufoRipple.material.opacity=(1-ufo._rip)*0.20;
   } else { if(ufoGlow)ufoGlow.visible=false; if(ufoRipple)ufoRipple.visible=false; }
+}
+// ============================================================================
+//  SEA LIFE — schools of region-appropriate fish: Boid flocking + a procedural
+//  undulating swim (TSL tail-wave, per-fish phase). Built per region.
+// ============================================================================
+const _FISH = {
+  trop:{ col:0xf2c63c, em:0x281d00, schools:3, per:26, size:1.7, dmin:-3, dmax:-11, speed:18, swim:7 },   // bright tropical reef fish
+  med: { col:0xccd7df, em:0x0f141a, schools:2, per:30, size:1.5, dmin:-4, dmax:-14, speed:16, swim:6 },   // silver bream / sardine
+  temp:{ col:0xa6c0cf, em:0x0d1417, schools:3, per:28, size:1.9, dmin:-5, dmax:-16, speed:18, swim:6 },   // mackerel
+  nord:{ col:0xc4ccd2, em:0x121619, schools:2, per:32, size:1.5, dmin:-4, dmax:-13, speed:15, swim:6 },   // herring
+};
+let seaSchools = [];
+const _FISHX=new THREE.Vector3(1,0,0), _fdir=new THREE.Vector3(), _fq=new THREE.Quaternion(), _fm4=new THREE.Matrix4(), _fp=new THREE.Vector3(), _fsc=new THREE.Vector3();
+function _fishGeo(){
+  const V=new Float32Array([ 0.5,0,0, 0.0,0.16,0, 0.0,-0.14,0, 0.08,0,0.075, 0.08,0,-0.075, -0.45,0,0, -0.62,0.17,0, -0.62,-0.15,0 ]);
+  const I=[ 0,1,3, 0,3,2, 0,2,4, 0,4,1,  5,3,1, 5,2,3, 5,4,2, 5,1,4,  5,6,7 ];
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(V,3)); g.setIndex(I); g.computeVertexNormals(); return g;
+}
+function _fishMat(col, swim){
+  const m=new THREE.MeshBasicNodeMaterial({ side:THREE.DoubleSide, transparent:true, opacity:0.85, depthWrite:false });
+  m.depthTest=false;                                                  // draw THROUGH the opaque sea so the school is visible underwater
+  const back=new THREE.Color(col).multiplyScalar(0.72), belly=new THREE.Color(col).lerp(new THREE.Color(0xffffff),0.55);
+  const bellyAmt=smoothstep(0.14, -0.14, positionLocal.y);            // countershading: dark dorsal back → light silvery belly
+  m.colorNode=mix(vec3(back.r,back.g,back.b), vec3(belly.r,belly.g,belly.b), bellyAmt);
+  const bx=positionLocal.x;                                            // body axis: +0.5 nose → -0.62 tail
+  const tail=clamp(float(0.4).sub(bx).mul(1.0), 0.0, 1.0);             // ~0 at nose → ~1 at tail
+  m.positionNode=positionLocal.add(vec3(0,0, sin( bx.mul(7.0).add(time.mul(swim)).add(attribute('aSeed','float')) ).mul(0.13).mul(tail) ));   // swim: sway sideways, strongest at the tail
+  return m;
+}
+function _openWater(){ for(let i=0;i<50;i++){ const x=MAP.minX+Math.random()*(MAP.maxX-MAP.minX), z=MAP.minZ+Math.random()*(MAP.maxZ-MAP.minZ); if(terrainHeight(x,z)<-8) return {x,z}; } return {x:MAP.cx,z:MAP.cz}; }
+function buildSeaLife(){
+  seaSchools=[];
+  try {
+    const sp=_FISH[_BIOME[REGION.id]||'temp'], base=_fishGeo(), mat=_fishMat(sp.col, sp.swim);
+    for(let s=0;s<sp.schools;s++){
+      const g=base.clone(); const seeds=new Float32Array(sp.per); for(let i=0;i<sp.per;i++) seeds[i]=Math.random()*6.2832;
+      g.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds,1));
+      const im=new THREE.InstancedMesh(g, mat, sp.per); im.frustumCulled=false; im.renderOrder=3; scene.add(im);
+      const c=_openWater(), cy=sp.dmax+Math.random()*(sp.dmin-sp.dmax);
+      const sc={ im, boids:[], center:new THREE.Vector3(c.x,cy,c.z), target:new THREE.Vector3(c.x,cy,c.z),
+        size:sp.size*(0.85+Math.random()*0.3), speed:sp.speed, dmin:sp.dmin, dmax:sp.dmax, neigh2:324, sep2:36, cy };
+      for(let i=0;i<sp.per;i++){ const a=Math.random()*6.2832;
+        sc.boids.push({ p:new THREE.Vector3(c.x+(Math.random()-0.5)*30, cy+(Math.random()-0.5)*6, c.z+(Math.random()-0.5)*30), v:new THREE.Vector3(Math.cos(a)*sp.speed,0,Math.sin(a)*sp.speed) }); }
+      seaSchools.push(sc);
+    }
+  } catch(e){ console.warn('sea life build failed', e); seaSchools=[]; }
+}
+function updateSeaLife(dt){
+  if(!seaSchools.length) return; if(dt>0.05) dt=0.05;
+  for(const sc of seaSchools){
+    if(sc.center.distanceTo(sc.target)<45){ const p=_openWater(); sc.target.set(p.x, clampJS(sc.cy+(Math.random()-0.5)*4, sc.dmax, sc.dmin), p.z); }
+    sc.center.lerp(sc.target, dt*0.06);
+    const B=sc.boids, n=B.length;
+    for(let i=0;i<n;i++){ const b=B[i];
+      let sx=0,sy=0,sz=0, vx=0,vy=0,vz=0, cx=0,cy=0,cz=0, cnt=0;
+      for(let j=0;j<n;j++){ if(i===j) continue; const o=B[j]; const dx=b.p.x-o.p.x, dy=b.p.y-o.p.y, dz=b.p.z-o.p.z, d2=dx*dx+dy*dy+dz*dz;
+        if(d2<sc.neigh2){ cnt++; vx+=o.v.x;vy+=o.v.y;vz+=o.v.z; cx+=o.p.x;cy+=o.p.y;cz+=o.p.z;
+          if(d2<sc.sep2 && d2>1e-3){ const inv=1/Math.sqrt(d2); sx+=dx*inv;sy+=dy*inv;sz+=dz*inv; } } }
+      let fx=0,fy=0,fz=0;
+      if(cnt){ vx/=cnt;vy/=cnt;vz/=cnt; cx/=cnt;cy/=cnt;cz/=cnt;
+        fx+=(vx-b.v.x)*0.7+(cx-b.p.x)*0.025; fy+=(vy-b.v.y)*0.7+(cy-b.p.y)*0.025; fz+=(vz-b.v.z)*0.7+(cz-b.p.z)*0.025; }   // alignment + cohesion
+      fx+=sx*4; fy+=sy*4; fz+=sz*4;                                                                                       // separation
+      fx+=(sc.center.x-b.p.x)*0.05; fz+=(sc.center.z-b.p.z)*0.05; fy+=(sc.center.y-b.p.y)*0.18;                            // hold the school together / depth
+      const th=terrainHeight(b.p.x,b.p.z); if(th>-5){ fx+=(sc.center.x-b.p.x)*0.5; fz+=(sc.center.z-b.p.z)*0.5; fy-=2.5; }  // veer off shallows/land
+      b.v.x+=fx*dt; b.v.y+=fy*dt; b.v.z+=fz*dt;
+      const s2=Math.hypot(b.v.x,b.v.y,b.v.z)||1, SP=sc.speed, lo=SP*0.55, k=s2>SP?SP/s2:(s2<lo?lo/s2:1); b.v.x*=k;b.v.y*=k;b.v.z*=k;
+      b.p.x+=b.v.x*dt; b.p.y+=b.v.y*dt; b.p.z+=b.v.z*dt;
+      b.p.y=clampJS(b.p.y, sc.dmax, sc.dmin); b.p.x=clampJS(b.p.x, MAP.minX+5, MAP.maxX-5); b.p.z=clampJS(b.p.z, MAP.minZ+5, MAP.maxZ-5);
+      _fdir.set(b.v.x,b.v.y,b.v.z); if(_fdir.lengthSq()<1e-4) _fdir.set(1,0,0); _fdir.normalize(); _fq.setFromUnitVectors(_FISHX,_fdir);
+      _fp.set(b.p.x, b.p.y - curveDropJS(b.p.x,b.p.z), b.p.z); _fm4.compose(_fp,_fq,_fsc.setScalar(sc.size)); sc.im.setMatrixAt(i,_fm4);
+    }
+    sc.im.instanceMatrix.needsUpdate=true;
+  }
 }
 function fleetCam(id){ const v=FLEET.find(x=>x.id===id); return v ? v.cam : null; }
 const _gsz=new THREE.Vector2();
@@ -5631,7 +5705,7 @@ function buildRegionWorld(){
   buildOcean();
   if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
   buildDipStick();
-  buildIslandLights(); buildPalms(); buildShrubs(); buildTownMotifs(); buildVehicles(); buildVehicleFX();
+  buildIslandLights(); buildPalms(); buildShrubs(); buildTownMotifs(); buildVehicles(); buildVehicleFX(); buildSeaLife();
   buildLabels();
   BLOCKED = buildBlocked(); buildDistLand(); buildCoarseNav();
   applySceneStyle();
