@@ -495,6 +495,7 @@ if (window.THAILAND) REGIONS.thailand = Object.assign({}, window.THAILAND, {
 // ---- Sweden · Stockholm Archipelago (Värmdö — Djurö, Djurhamn, Stavsnäs) — low granite skerries & pine ----
 if (window.SWEDEN) REGIONS.sweden = Object.assign({}, window.SWEDEN, {
   relief: { escale:6, steep:0.12, ridge:0.25, lift:1.6 },   // low, rounded, glacier-smoothed granite — NOT spiky
+  tour: ['Ingarö','Runmarö','Gällnö','Möja','Sandön','Nämdö'],   // hand-picked simple loop (no back-tracking through the skerries)
   seaTint: [0.40, 0.44, 0.66],                              // dark STEEL-BLUE Baltic — knock the green right down so the shallow bank reads navy/slate, not turquoise
   palette: {
     land: { seabed:0x18414c, wetsand:0x6f6a5e, sand:0xa99d88,
