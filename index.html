@@ -5804,7 +5804,7 @@ function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0.25,0.15,1).normalize()); }   // bring the region to the front, tilted nicely
 // ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
 //      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
-let _diveZoom=null, _globeRise=null, _descent=null, _descentReturnView='cine';
+let _diveZoom=null, _globeRise=null, _diveAfterSlerp=null, _descent=null, _descentReturnView='cine';
 function _diveFade(a, id){ let f=document.getElementById('dive-fade');
   if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;'; document.body.appendChild(f); }
   const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018; f.style.background='#'+('000000'+(c>>>0).toString(16)).slice(-6); f.style.opacity=clampJS(a,0,1); }
@@ -5852,7 +5852,8 @@ function updateGlobe(dt){
   if (_globeLevel){ _globeLevel.t += (dt||0.016)/_globeLevel.dur;
     const k=Math.min(_globeLevel.t,1), e=k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2;   // ease in-out
     globeSpin.quaternion.copy(_globeLevel.from).slerp(_globeLevel.to, e);
-    if (k>=1){ _globeLevel=null; _globeIdle=0; } }
+    if (k>=1){ _globeLevel=null; _globeIdle=0;
+      if (_diveAfterSlerp){ _diveZoom={ t:0, dur:1.15, id:_diveAfterSlerp, same:(_diveAfterSlerp===REGION.id) }; _diveAfterSlerp=null; } } }   // island now centred → dive
   const t=performance.now()*0.001;
   for (const g of _globePicks){ const p=0.6+0.4*Math.sin(t*2.2+(g.userData.pulse||0));   // gentle beacon pulse
     if (g.userData.ring) g.userData.ring.material.opacity=0.55+0.45*p;
@@ -5863,7 +5864,19 @@ function updateGlobe(dt){
 }
 let _globeMoved=0;
 function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; }
-function _gPointerMove(e){ if(!worldMapOpen||!_globeDrag) return;
+const _gRC=new THREE.Raycaster(), _gNDC=new THREE.Vector2();
+function _globeRegionAt(e){ if(!renderer||!globeCam) return null;
+  const rect=renderer.domElement.getBoundingClientRect();
+  _gNDC.set(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
+  _gRC.setFromCamera(_gNDC, globeCam);
+  const hits=_gRC.intersectObjects(_globePicks, true);
+  if(!hits.length) return null; let o=hits[0].object; while(o && !o.userData.regionId) o=o.parent; return o ? o.userData.regionId : null;
+}
+function _gPointerMove(e){ if(!worldMapOpen) return;
+  if(!_globeDrag){                                                       // hovering (no drag) → set that region as the target (the glow follows the cursor)
+    if(_diveZoom||_globeRise||_diveAfterSlerp||demoMode) return;
+    const id=_globeRegionAt(e); if(id) _globeFocus=id; return;
+  }
   const dx=e.clientX-_globeDrag.x, dy=e.clientY-_globeDrag.y; _globeDrag.x=e.clientX; _globeDrag.y=e.clientY;
   if (Math.abs(dx)>90 || Math.abs(dy)>90) return;                      // ignore cursor teleports (not a real drag)
   _globeMoved+=Math.abs(dx)+Math.abs(dy);
@@ -5872,12 +5885,8 @@ function _gPointerMove(e){ if(!worldMapOpen||!_globeDrag) return;
   _globeVel.y=clampJS(_globeVel.y*0.35 + dx*0.0011*0.65, -0.05, 0.05);   // smoothed, speed-scaled flick velocity (capped)
   _globeVel.x=clampJS(_globeVel.x*0.35 + dy*0.0011*0.65, -0.05, 0.05); }
 function _gPointerUp(){ _globeDrag=null; }
-function _gClick(e){ if(!worldMapOpen || _globeMoved>10) return;       // a real click (not the end of a spin) → pick a region
-  const rect=renderer.domElement.getBoundingClientRect();
-  const ndc=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
-  const rc=new THREE.Raycaster(); rc.setFromCamera(ndc, globeCam);
-  const hits=rc.intersectObjects(_globePicks, true);
-  if (hits.length){ let o=hits[0].object; while(o && !o.userData.regionId) o=o.parent; if (o && o.userData.regionId) travelToRegion(o.userData.regionId); }
+function _gClick(e){ if(!worldMapOpen || _globeMoved>10) return;       // a real click (not the end of a spin) → set target + dive
+  const id=_globeRegionAt(e); if(id) travelToRegion(id);
 }
 function _gKey(e){ if(!worldMapOpen || demoMode) return;   // during a demo globe-dive the demo stepper owns the keys
   if (e.target && (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')) return;
@@ -5952,11 +5961,14 @@ function _grabGlobeFrame(){ if(_diveZoom) return; if((_thumbTick++ & 3)!==0) ret
 }
 function _captureGlobeThumb(){ try { if(_thumbCanvas){ _globeThumb=_thumbCanvas.toDataURL('image/png'); _applyWorldBtnThumb(); } } catch(_){}}   // readback once, at dive time
 function _applyWorldBtnThumb(){ const b=document.getElementById('wm-open'); if(b && _globeThumb){ b.classList.add('thumb'); b.textContent=''; b.style.backgroundImage='url('+_globeThumb+')'; } }
-function travelToRegion(id){ if(!REGIONS[id]||_diveZoom) return;
+function travelToRegion(id){ if(!REGIONS[id]||_diveZoom||_diveAfterSlerp) return;
   _captureGlobeThumb();                                                   // snapshot the globe (as last seen) → becomes the World button icon
+  _globeFocus=id; _globeVel.x=_globeVel.y=0;
   const r=REGIONS[id], n=latLonToVec(r.lat0||0, r.lon0||0, 1);
-  globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0,0,1));   // bring the patch dead-centre, then dive the camera straight into it
-  _diveZoom={ t:0, dur:1.15, id, same:(id===REGION.id) };
+  const front=new THREE.Vector3(0,0,1).applyQuaternion(globeSpin.quaternion.clone().invert());
+  if (front.angleTo(n) < 0.06){ _diveZoom={ t:0, dur:1.15, id, same:(id===REGION.id) }; return; }   // already centred (e.g. demo) → dive straight in
+  _globeLevel={ from:globeSpin.quaternion.clone(), to:_faceQuat(n), t:0, dur:0.7 };   // otherwise SLERP the island to dead-centre first, THEN dive (keeps the reverse-dive orientation right)
+  _diveAfterSlerp=id;
 }
 async function _diveLand(d){
   closeWorldMap();
