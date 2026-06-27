@@ -3982,11 +3982,29 @@ function updateClipmapTerrain(){
     const V=L.V, cell=L.cell, half=L.half, pos=L.geo.attributes.position.array, col=L.geo.attributes.color.array, hgt=L.hgt;
     for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc, wx=sx+cc*cell-half, wz=sz+r*cell-half;
       const y=seabedHeight(wx,wz); pos[i*3]=wx; pos[i*3+1]=y; pos[i*3+2]=wz; hgt[i]=y; }
-    for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc;
+    const detail = L.l<=2;                                               // micro-detail/AO only on the inner rings (you can't see it far out)
+    for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc, y=hgt[i];
       const hL=hgt[cc>0?i-1:i], hR=hgt[cc<V-1?i+1:i], hD=hgt[r>0?i-V:i], hU=hgt[r<V-1?i+V:i];
       const slope=Math.hypot((hR-hL)/(2*cell),(hU-hD)/(2*cell));
-      _terrainColorAt(hgt[i], slope, _clC); col[i*3]=_clC.r; col[i*3+1]=_clC.g; col[i*3+2]=_clC.b; }
+      _terrainColorAt(y, slope, _clC);
+      let aoF=1;
+      if (detail && y>0.3){ let horizon=0;                               // cheap 4-direction horizon AO → depth in coves/valleys
+        for (let dd=0; dd<4; dd++){ const dc=dd===0?1:dd===1?-1:0, dr=dd===2?1:dd===3?-1:0; let mt=0;
+          for (let s=1;s<=7;s++){ const c2=cc+dc*s, r2=r+dr*s; if(c2<0||c2>=V||r2<0||r2>=V) break; const dh=hgt[r2*V+c2]-y; if(dh<=0) continue; const t=dh/(s*cell); if(t>mt) mt=t; }
+          horizon+=mt; }
+        aoF=1-clampJS(horizon/4*0.7,0,0.5); }
+      const tn = detail ? (fbm(pos[i*3]*0.12, pos[i*3+2]*0.12)-0.5)*0.12 : 0;     // per-vertex colour grain
+      col[i*3]=clampJS((_clC.r+tn)*aoF,0,1); col[i*3+1]=clampJS((_clC.g+tn)*aoF,0,1); col[i*3+2]=clampJS((_clC.b+tn)*aoF,0,1); }
     L.geo.attributes.position.needsUpdate=true; L.geo.attributes.color.needsUpdate=true; L.geo.computeVertexNormals();
+    if (detail){                                                          // micro-normal shimmer: tilt land normals by a high-freq fbm gradient
+      const nrm=L.geo.attributes.normal, ND=0.8, ne=0.9, nf=0.55;
+      for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc; if(hgt[i]<0.3) continue;
+        const wx=pos[i*3], wz=pos[i*3+2];
+        const gx=(fbm((wx+ne)*nf,wz*nf)-fbm((wx-ne)*nf,wz*nf))/(2*ne), gz=(fbm(wx*nf,(wz+ne)*nf)-fbm(wx*nf,(wz-ne)*nf))/(2*ne);
+        let nX=nrm.getX(i)-gx*ND, nY=nrm.getY(i), nZ=nrm.getZ(i)-gz*ND, Ln=Math.hypot(nX,nY,nZ)||1;
+        nrm.setXYZ(i, nX/Ln, nY/Ln, nZ/Ln); }
+      nrm.needsUpdate=true;
+    }
   }
 }
 
