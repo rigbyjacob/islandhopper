@@ -1611,6 +1611,34 @@ const VG_STARS = [
   [308,42,0.95],[344,30,0.75],[ 48,26,0.8],[150,24,0.7],[238,66,1.05],[ 98,20,0.65],
 ].map(([az,el,sz]) => { const a=az*Math.PI/180, e=el*Math.PI/180, cy=Math.cos(e);
   return [Math.cos(a)*cy, Math.sin(e), Math.sin(a)*cy, 1500/sz, 60/sz, sz]; });   // x,y,z, coreExp, haloExp, bright
+const uVgReflect = uniform(1.0);   // Van Gogh SEA mode: 1 = the night sea mirrors the swirling Starry-Night sky (default); 0 = the old impasto-water surface (dev.vgSea toggles it)
+// The Van Gogh "Starry Night" sky for a given view direction — reused by the sky dome AND reflected on the sea.
+const _vgSkyNight = Fn(([dir]) => {
+  const moonV = normalize(vec3(uMoonDir.x, uMoonDir.y.sub(uHorizonDrop), uMoonDir.z));
+  const md = max(dot(dir, moonV), 0.0);
+  const sp2 = vec2(dir.x.add(dir.y.mul(0.30)), dir.z.add(dir.y.mul(0.20))).mul(2.6);   // 2D sky param (avoids the zenith atan singularity)
+  const dr  = vec2(time.mul(0.022), time.mul(-0.016));
+  const warp = vec2(_nfbm2(sp2.mul(1.2).add(dr)).sub(0.5), _nfbm2(sp2.mul(1.2).add(vec2(4.3,1.7)).add(dr)).sub(0.5)).mul(2.7);
+  const base = sp2.mul(2.0).add(warp).add(dr);
+  const swirl = _nfbm2(base);                                                          // domain-warped fbm → the iconic spirals
+  const ridge = smoothstep(0.10, 0.0, abs(swirl.sub(0.5)));
+  const f  = normalize(warp.add(vec2(0.0012, 0.0008)));
+  const pf = vec2(f.y.negate(), f.x);
+  const along = base.dot(f), across = base.dot(pf);
+  const strokeA = _nfbm2(vec2(along.mul(5.0), across.mul(6.5)));                       // WIDE loaded-brush dabs
+  const strokeB = _nfbm2(vec2(along.mul(10.0), across.mul(13.0)).add(vec2(2.3,5.1)));
+  const strokes = strokeA.mul(0.64).add(strokeB.mul(0.36));
+  const skyVG = mix(vec3(0.016,0.042,0.145), vec3(0.060,0.155,0.385), smoothstep(0.34,0.74,swirl)).toVar();   // deep indigo → cobalt body
+  skyVG.assign(skyVG.mul(float(0.70).add(strokes.mul(0.62))));                         // impasto light/dark stroke modulation
+  skyVG.assign(mix(skyVG, vec3(0.42,0.56,0.80), smoothstep(0.66,0.90,strokes).mul(0.45)));   // lighter cobalt brush dabs
+  skyVG.addAssign(vec3(0.86,0.76,0.40).mul(ridge.mul(0.14).add(smoothstep(0.80,0.97,strokes).mul(0.22))));   // cream crests + ridges
+  const stars = vec3(0).toVar();
+  for (const s of VG_STARS){ const dd = max(dot(dir, vec3(s[0], s[1], s[2])), 0.0);
+    stars.addAssign(vec3(1.0,0.88,0.42).mul(pow(dd, s[3]).mul(4.6*s[5]).add(pow(dd, s[4]).mul(0.7*s[5])))); }
+  skyVG.addAssign(stars);
+  skyVG.addAssign(vec3(1.0,0.78,0.34).mul(pow(md,560.0).mul(0.85).add(pow(md,40.0).mul(0.22))));   // warm-orange moon orb + halo
+  return skyVG;
+});
 // amplitude-weighted wave TRAVEL direction (xz) — lets the shader tell the BACK (rising) face from the
 // FRONT (breaking) face, so foam can sit on the back like the Great Wave while the front underbelly stays deep blue
 const uWaveDir = uniform((()=>{ let x=0,z=0; for(const w of WAVES){ x+=-w.nx*w.amp; z+=-w.ny*w.amp; } const l=Math.hypot(x,z)||1; return new THREE.Vector2(x/l, z/l); })());
@@ -1663,34 +1691,8 @@ function buildSky() {
     const haze   = hzBand.mul(mix(float(0.22), float(1.0), pow(azSun, 2.2))).mul(uAtmo).mul(uWarm.mul(0.75).add(0.25));
     col.assign(mix(col, uSunCol.mul(1.15), clamp(haze.mul(0.7), 0.0, 0.82)));
 
-    // ---- Van Gogh "Starry Night" sky (uVangogh, only when the sun is down): rolling cobalt impasto swirls,
-    //      cream stroke-ridges, big radiant chrome-yellow stars with haloes, and a glowing moon ----
-    const sp2 = vec2(vd.x.add(vd.y.mul(0.30)), vd.z.add(vd.y.mul(0.20))).mul(2.6);    // a 2D sky param (avoids the zenith atan singularity)
-    const dr  = vec2(time.mul(0.022), time.mul(-0.016));
-    const warp = vec2(_nfbm2(sp2.mul(1.2).add(dr)).sub(0.5), _nfbm2(sp2.mul(1.2).add(vec2(4.3,1.7)).add(dr)).sub(0.5)).mul(2.7);
-    const base = sp2.mul(2.0).add(warp).add(dr);
-    const swirl = _nfbm2(base);                                                        // domain-warped fbm → the iconic spirals
-    const ridge = smoothstep(0.10, 0.0, abs(swirl.sub(0.5)));                          // bright impasto swirl edges
-    // DIRECTIONAL brush strokes: anisotropic noise in a frame aligned to the swirl flow → short curved dabs that
-    // follow the spirals (two octaves), the visible impasto texture of the real painting.
-    const f  = normalize(warp.add(vec2(0.0012, 0.0008)));                              // flow direction (curves with the swirls)
-    const pf = vec2(f.y.negate(), f.x);
-    const along = base.dot(f), across = base.dot(pf);
-    const strokeA = _nfbm2(vec2(along.mul(5.0), across.mul(6.5)));                     // WIDER dabs: low across-freq → thick strokes (Van Gogh's loaded brush), modest anisotropy
-    const strokeB = _nfbm2(vec2(along.mul(10.0), across.mul(13.0)).add(vec2(2.3,5.1)));
-    const strokes = strokeA.mul(0.64).add(strokeB.mul(0.36));
-    const skyVG = mix(vec3(0.016,0.042,0.145), vec3(0.060,0.155,0.385), smoothstep(0.34,0.74,swirl)).toVar();   // DEEP indigo → cobalt body
-    skyVG.assign(skyVG.mul(float(0.70).add(strokes.mul(0.62))));                       // stronger impasto light/dark stroke modulation
-    skyVG.assign(mix(skyVG, vec3(0.42,0.56,0.80), smoothstep(0.66,0.90,strokes).mul(0.45)));   // lighter cobalt brush dabs woven in
-    skyVG.addAssign(vec3(0.86,0.76,0.40).mul(ridge.mul(0.14).add(smoothstep(0.80,0.97,strokes).mul(0.22))));   // cream stroke crests + swirl ridges
-    const stars = vec3(0).toVar();
-    for (const s of VG_STARS){                                                        // big radiant stars: tight core + broad halo
-      const dd = max(dot(vd, vec3(s[0], s[1], s[2])), 0.0);
-      stars.addAssign(vec3(1.0,0.88,0.42).mul(pow(dd, s[3]).mul(4.6*s[5]).add(pow(dd, s[4]).mul(0.7*s[5]))));
-    }
-    skyVG.addAssign(stars);
-    skyVG.addAssign(vec3(1.0,0.78,0.34).mul(pow(md,560.0).mul(0.85).add(pow(md,40.0).mul(0.22))));   // defined warm-orange moon orb + soft halo (no white blow-out)
-    col.assign(mix(col, skyVG, vgNight));
+    // ---- Van Gogh "Starry Night" sky (uVangogh, only when the sun is down) — swirls, stars & moon, shared with the sea reflection ----
+    col.assign(mix(col, _vgSkyNight(vd), vgNight));
     return col;
   })();
   skyMesh = new THREE.Mesh(geo, skyMat); skyMesh.renderOrder = -10;
@@ -3620,7 +3622,9 @@ function buildOcean() {
     vg.assign(mix(vg, vgLite, smoothstep(0.62,0.86,strokes)));
     vg.assign(mix(vg, vgCream, ridge.mul(0.55).add(smoothstep(0.90,1.0,strokes).mul(0.5))));   // cream ridges + crest sparkle
     vg.assign(vg.mul(float(0.74).add(flow.mul(0.5))).add(vgLite.mul(smoothstep(0.2,1.6,wh).mul(0.30))));
-    col.assign(mix(col, vg, uVangogh.mul(0.9)));
+    // Van Gogh NIGHT sea mode: 1 = mirror the swirling Starry-Night sky (default), suppressing the impasto surface.
+    const vgNightSea = uVangogh.mul(uVgReflect).mul(smoothstep(0.12, -0.10, uSunDir.y.sub(uHorizonDrop)));
+    col.assign(mix(col, vg, uVangogh.mul(0.9).mul(oneMinus(vgNightSea))));   // impasto stays by day / when reflect-mode off; off for the night mirror
 
     // ---- FRONT-vs-BACK split (the Great Wave's key move) — the normal's horizontal lean tells which face we're on:
     // pointing WITH wave travel = the front/underbelly (breaking face) → force the two dark Prussian blues & no foam;
@@ -3652,6 +3656,9 @@ function buildOcean() {
     const rsd = max(dot(refl, sunV), 0.0);
     rSky.addAssign(uSunCol.mul(pow(rsd, 12.0).mul(0.55).add(pow(rsd, 340.0).mul(7.0))).mul(uSunInt));   // reflected sun: soft glow + sharp glint
     col.assign(mix(col, rSky, clamp(fres, 0.0, 1.0).mul(hkFlat)));
+    // Van Gogh SEA: mirror the swirling Starry-Night sky along the RIPPLED reflection vector (refl carries the wave
+    // normal, so the swirls/stars/moon wobble on the water) — the painting's village pond. Default; dev.vgSea(0) → impasto.
+    col.assign(mix(col, _vgSkyNight(refl).mul(0.9), vgNightSea));
     // ---- sea-of-diamonds sparkle: shimmering glints riding the sun's reflection path (two noise scales for richness),
     // warm-tinted at sunset (uWarm) and amplified by the Atmosphere slider. The magical glitter leading to the sun. ----
     const spk1 = vnoise(xz.mul(0.45).add(vec2(time.mul(0.7),  time.mul(-0.5))));
@@ -3685,7 +3692,7 @@ function buildOcean() {
     const lap = sin(sp.mul(42.0).sub(time.mul(2.3))).mul(0.5).add(0.5);
     const shoreFoam = smoothstep(0.72,0.985,sp).mul(smoothstep(0.26,0.66, fnoise)).mul(float(0.5).add(lap.mul(0.7)));
     const foamCol = mix(vec3(0.95,0.98,1.0), vec3(0.965,0.940,0.860), uHokusai);   // warm cream foam for Hokusai, cold white otherwise
-    const foam = clamp(max(whitecap, shoreFoam).mul(uFoam), 0.0, 1.0);   // uFoam dials the whole region down (sheltered Baltic)
+    const foam = clamp(max(whitecap, shoreFoam).mul(uFoam).mul(oneMinus(vgNightSea)), 0.0, 1.0);   // uFoam dials the whole region down; the Van Gogh night sea (sky mirror) has NO white foam
     col.assign(mix(col, foamCol, foam));
     // ---- Hokusai froth as INK: render the frilly noise as DARK woodblock LINEWORK (not white). White-on-white was
     // invisible; dark ink on the pale crest masses reads like the print's keyblock froth lines. Warped fbm, thresholded. ----
@@ -4426,6 +4433,8 @@ function updateFlyCam(dt){
 // dev.lookAt(px,py,pz, tx,ty,tz) — stand at p, look at t.   dev.sun(distBack) — frame the sun over the boat.
 // dev.time(18.2) — set time of day (pauses auto-cycle).      dev.atmo(0.8) — set the Atmosphere slider.
 window.dev = {
+  // Van Gogh sea: 1 = the night sea mirrors the swirling Starry-Night sky (default), 0 = the old impasto-water surface
+  vgSea(on){ uVgReflect.value = (on===false||on===0)?0:1; return 'Van Gogh sea = '+(uVgReflect.value?'sky reflection':'impasto surface'); },
   // hierarchical-A* benchmark: time a long boat→far-island plan with the coarse heuristic on vs off
   navBench(){ if(!BLOCKED) return 'no grid'; const far=ISLANDS.slice().sort((a,b)=>Math.hypot(b.x-boat3.x,b.z-boat3.z)-Math.hypot(a.x-boat3.x,a.z-boat3.z))[0]||{x:GRID.maxX,z:GRID.maxZ};
     const run=(on)=>{ P.hierNav=on; _coarseKey=-1; const t0=performance.now(); let pts=0; for(let i=0;i<25;i++){ const r=planRaw(boat3.x,boat3.z,far.x,far.z); pts=r.pts.length; } return {ms:+( (performance.now()-t0)/25 ).toFixed(2), pts}; };
