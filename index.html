@@ -708,7 +708,18 @@ function sampleDisturb(x, z, t) {
 // A* planner (current-aware) — grid over the map, land inflated as obstacles
 // ============================================================================
 // ---- HEX navigation grid (pointy-top, odd-r offset), ~4x finer than the old 12u squares ----
-const GRID = { minX:-420, maxX:1240, minZ:-540, maxZ:400, size:2.0 };   // hex circumradius; covers all islands + the start
+// Grid bounds FOLLOW the loaded region's islands (+ margin) so the planner covers the whole map — not a
+// fixed Caribbean rectangle (which left islands in the expanded regions outside the grid → knotted paths).
+const GRID = (() => {
+  let mnX=Infinity, mxX=-Infinity, mnZ=Infinity, mxZ=-Infinity;
+  for (const isl of ISLANDS){ mnX=Math.min(mnX,isl.x-isl.r); mxX=Math.max(mxX,isl.x+isl.r); mnZ=Math.min(mnZ,isl.z-isl.r); mxZ=Math.max(mxZ,isl.z+isl.r); }
+  if (!isFinite(mnX)){ mnX=-420; mxX=1240; mnZ=-540; mxZ=400; }    // no islands → Caribbean fallback
+  const pad=240;                                                   // open-water margin (also covers the boat start, which sits just off the main island)
+  mnX-=pad; mxX+=pad; mnZ-=pad; mxZ+=pad;
+  const extent=Math.max(mxX-mnX, mxZ-mnZ);
+  const size=Math.max(2.0, extent/950);                           // ~2.0 for Caribbean; scales up on the big expanded maps to keep the cell count bounded
+  return { minX:mnX, maxX:mxX, minZ:mnZ, maxZ:mxZ, size };
+})();
 const NAV_BLOCK_H = -1.6;   // only block water shallower than this (near-land); deeper than draft so channels stay open
 GRID.dx = Math.sqrt(3)*GRID.size; GRID.dz = 1.5*GRID.size;              // column / row spacing
 GRID.cols = Math.ceil((GRID.maxX-GRID.minX)/GRID.dx)+2;
@@ -1019,10 +1030,16 @@ function buildSubNavGrid(){
   const grp=new THREE.Group(); grp.renderOrder=30;
   const N=GRID.cols*GRID.rows, y=(subGridDepth||-34)+1; let nb=0; for(let i=0;i<N;i++) if(subBlocked[i]) nb++;
   const geo=new THREE.CircleGeometry(GRID.size*0.92, 6, Math.PI/6); geo.rotateX(-Math.PI/2);
-  const blk=new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({color:0x2aa0ff,transparent:true,opacity:0.38,depthTest:false}), nb||1);
-  blk.renderOrder=30; const d=new THREE.Object3D(); let bi=0;
+  // GPU curve (same as the ship grid): per-instance world XZ → drop each hex onto the tiny-planet curve so the
+  // sub grid follows the bent seabed instead of floating on a flat plane.
+  const curveHex = () => { const awz=attribute('aworldxz','vec2'), dd=awz.sub(cameraPosition.xz);
+    return vec3(positionLocal.x, positionLocal.y.sub(dot(dd,dd).mul(uCurveK)), positionLocal.z); };
+  const mat=new THREE.MeshBasicNodeMaterial({color:0x2aa0ff,transparent:true,opacity:0.38,depthTest:false}); mat.positionNode=curveHex();
+  const blk=new THREE.InstancedMesh(geo, mat, nb||1);
+  blk.renderOrder=30; const d=new THREE.Object3D(); let bi=0; const awzS=new Float32Array((nb||1)*2);
   for(let r=0;r<GRID.rows;r++)for(let c=0;c<GRID.cols;c++){ const i=gIdx(c,r); if(!subBlocked[i])continue; const p=cellCenter(c,r);
-    d.position.set(p.x,y,p.z); d.updateMatrix(); blk.setMatrixAt(bi++, d.matrix); }
+    d.position.set(p.x,y,p.z); d.updateMatrix(); awzS[bi*2]=p.x; awzS[bi*2+1]=p.z; blk.setMatrixAt(bi++, d.matrix); }
+  geo.setAttribute('aworldxz', new THREE.InstancedBufferAttribute(awzS,2));
   blk.instanceMatrix.needsUpdate=true; grp.add(blk);
   const g2=new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(2000*3),3));
   subNavLine=new THREE.Line(g2, new THREE.LineBasicMaterial({color:0x9fe6ff,transparent:true,depthTest:false})); subNavLine.renderOrder=32; subNavLine.frustumCulled=false; grp.add(subNavLine);
