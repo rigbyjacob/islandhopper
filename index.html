@@ -261,6 +261,7 @@ const P = {
   autoDay: true, timeOfDay: 19.69, dayLength: 120,   // hours; dayLength = real seconds per full day
   // HUD visibility
   showTitle: false, showHints: false, showTelemetry: false, showCompass: false, showLabels: true, showConstellations: true,
+  showFish: true, showBirds: true,   // sea life + birds (flocking wildlife)
   // recording transition shape: fade-out → hold-at-full → fade-in (seconds), plus ease curve
   transFadeOut: 0.4, transHold: 0.2, transFadeIn: 0.4, transEase: 1.0,  // ease 0=linear … 1=smoothstep
   // lighting
@@ -1519,6 +1520,7 @@ async function init() {
     updateVehicles(dt);   // submarine / plane / UFO agents + their chase cameras
     updateVehicleFX(dt, clock.elapsedTime);   // sub bubbles / plane contrail / UFO distortion (speed-driven)
     updateSeaLife(dt);                         // schooling fish (Boid flocking + swim animation)
+    updateBirds(dt);                           // flocking birds (Boid flocking + wing-flap)
     updateFoamClaws(t);   // Hokusai curl-claws ride the near-field crest tops (gated to that art style)
     updateBreakers(t);    // a few authored hero breakers (true overhang) on the biggest crests
     updateVolcano(dt, t); // submarine volcano: caldera glow + eruption plume/ejecta
@@ -2131,7 +2133,10 @@ function buildSeaLife(){
   } catch(e){ console.warn('sea life build failed', e); seaSchools=[]; }
 }
 function updateSeaLife(dt){
-  if(!seaSchools.length) return; if(dt>0.05) dt=0.05;
+  if(!seaSchools.length) return;
+  if(!P.showFish){ for(const sc of seaSchools) sc.im.visible=false; return; }
+  for(const sc of seaSchools) sc.im.visible=true;
+  if(dt>0.05) dt=0.05;
   for(const sc of seaSchools){
     if(sc.center.distanceTo(sc.target)<45){ const p=_openWater(); sc.target.set(p.x, clampJS(sc.cy+(Math.random()-0.5)*4, sc.dmax, sc.dmin), p.z); }
     sc.center.lerp(sc.target, dt*0.06);
@@ -2151,6 +2156,71 @@ function updateSeaLife(dt){
       const s2=Math.hypot(b.v.x,b.v.y,b.v.z)||1, SP=sc.speed, lo=SP*0.55, k=s2>SP?SP/s2:(s2<lo?lo/s2:1); b.v.x*=k;b.v.y*=k;b.v.z*=k;
       b.p.x+=b.v.x*dt; b.p.y+=b.v.y*dt; b.p.z+=b.v.z*dt;
       b.p.y=clampJS(b.p.y, sc.dmax, sc.dmin); b.p.x=clampJS(b.p.x, MAP.minX+5, MAP.maxX-5); b.p.z=clampJS(b.p.z, MAP.minZ+5, MAP.maxZ-5);
+      _fdir.set(b.v.x,b.v.y,b.v.z); if(_fdir.lengthSq()<1e-4) _fdir.set(1,0,0); _fdir.normalize(); _fq.setFromUnitVectors(_FISHX,_fdir);
+      _fp.set(b.p.x, b.p.y - curveDropJS(b.p.x,b.p.z), b.p.z); _fm4.compose(_fp,_fq,_fsc.setScalar(sc.size)); sc.im.setMatrixAt(i,_fm4);
+    }
+    sc.im.instanceMatrix.needsUpdate=true;
+  }
+}
+// ---- BIRDS — flocks wheeling over the water & islands; same Boid flock + a procedural wing-flap (TSL) ----
+const _BIRD = {
+  trop:{ col:0xeef2f6, schools:2, per:14, size:2.4, hmin:16, hmax:46, speed:24, flap:9 },
+  med: { col:0xe9eef2, schools:2, per:13, size:2.3, hmin:18, hmax:48, speed:23, flap:9 },
+  temp:{ col:0xdde6ec, schools:2, per:14, size:2.5, hmin:18, hmax:52, speed:24, flap:8 },
+  nord:{ col:0xe6ecf0, schools:2, per:12, size:2.4, hmin:16, hmax:46, speed:22, flap:8 },
+};
+let birdFlocks = [];
+function _birdGeo(){
+  const V=new Float32Array([ 0.30,0,0,  -0.36,0.02,0,  -0.06,0,0.92,  -0.06,0,-0.92 ]);   // 0 head · 1 tail · 2 L-wingtip · 3 R-wingtip
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(V,3)); g.setIndex([0,2,1, 0,1,3]); g.computeVertexNormals(); return g;
+}
+function _birdMat(col, flap){
+  const m=new THREE.MeshBasicNodeMaterial({ side:THREE.DoubleSide, transparent:true, opacity:0.96 });
+  const back=new THREE.Color(col).multiplyScalar(0.7), belly=new THREE.Color(col);
+  m.colorNode=mix(vec3(back.r,back.g,back.b), vec3(belly.r,belly.g,belly.b), smoothstep(-0.05,0.05,positionLocal.y));
+  m.positionNode=positionLocal.add(vec3(0, sin( time.mul(flap).add(attribute('aSeed','float')) ).mul(0.5).mul(abs(positionLocal.z)), 0));   // wingtips flap up/down, body stays
+  return m;
+}
+function buildBirds(){
+  birdFlocks=[];
+  try {
+    const sp=_BIRD[_BIOME[REGION.id]||'temp'], base=_birdGeo(), mat=_birdMat(sp.col, sp.flap);
+    for(let s=0;s<sp.schools;s++){
+      const g=base.clone(); const seeds=new Float32Array(sp.per); for(let i=0;i<sp.per;i++) seeds[i]=Math.random()*6.2832;
+      g.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds,1));
+      const im=new THREE.InstancedMesh(g, mat, sp.per); im.frustumCulled=false; im.renderOrder=2; scene.add(im);
+      const cx=MAP.minX+Math.random()*(MAP.maxX-MAP.minX), cz=MAP.minZ+Math.random()*(MAP.maxZ-MAP.minZ), cy=sp.hmin+Math.random()*(sp.hmax-sp.hmin);
+      const sc={ im, boids:[], center:new THREE.Vector3(cx,cy,cz), target:new THREE.Vector3(cx,cy,cz),
+        size:sp.size*(0.85+Math.random()*0.3), speed:sp.speed, dmin:sp.hmax, dmax:sp.hmin, neigh2:900, sep2:64, cy };
+      for(let i=0;i<sp.per;i++){ const a=Math.random()*6.2832;
+        sc.boids.push({ p:new THREE.Vector3(cx+(Math.random()-0.5)*60, cy+(Math.random()-0.5)*10, cz+(Math.random()-0.5)*60), v:new THREE.Vector3(Math.cos(a)*sp.speed,0,Math.sin(a)*sp.speed) }); }
+      birdFlocks.push(sc);
+    }
+  } catch(e){ console.warn('birds build failed', e); birdFlocks=[]; }
+}
+function updateBirds(dt){
+  if(!birdFlocks.length) return;
+  if(!P.showBirds){ for(const sc of birdFlocks) sc.im.visible=false; return; }
+  for(const sc of birdFlocks) sc.im.visible=true;
+  if(dt>0.05) dt=0.05;
+  for(const sc of birdFlocks){
+    if(sc.center.distanceTo(sc.target)<60){ sc.target.set(MAP.minX+Math.random()*(MAP.maxX-MAP.minX), clampJS(sc.cy+(Math.random()-0.5)*10, sc.dmax, sc.dmin), MAP.minZ+Math.random()*(MAP.maxZ-MAP.minZ)); }
+    sc.center.lerp(sc.target, dt*0.05);
+    const B=sc.boids, n=B.length;
+    for(let i=0;i<n;i++){ const b=B[i];
+      let sx=0,sy=0,sz=0, vx=0,vy=0,vz=0, cx=0,cy=0,cz=0, cnt=0;
+      for(let j=0;j<n;j++){ if(i===j) continue; const o=B[j]; const dx=b.p.x-o.p.x, dy=b.p.y-o.p.y, dz=b.p.z-o.p.z, d2=dx*dx+dy*dy+dz*dz;
+        if(d2<sc.neigh2){ cnt++; vx+=o.v.x;vy+=o.v.y;vz+=o.v.z; cx+=o.p.x;cy+=o.p.y;cz+=o.p.z;
+          if(d2<sc.sep2 && d2>1e-3){ const inv=1/Math.sqrt(d2); sx+=dx*inv;sy+=dy*inv;sz+=dz*inv; } } }
+      let fx=0,fy=0,fz=0;
+      if(cnt){ vx/=cnt;vy/=cnt;vz/=cnt; cx/=cnt;cy/=cnt;cz/=cnt;
+        fx+=(vx-b.v.x)*0.6+(cx-b.p.x)*0.02; fy+=(vy-b.v.y)*0.6+(cy-b.p.y)*0.02; fz+=(vz-b.v.z)*0.6+(cz-b.p.z)*0.02; }
+      fx+=sx*5; fy+=sy*5; fz+=sz*5;
+      fx+=(sc.center.x-b.p.x)*0.04; fz+=(sc.center.z-b.p.z)*0.04; fy+=(sc.center.y-b.p.y)*0.12;
+      b.v.x+=fx*dt; b.v.y+=fy*dt; b.v.z+=fz*dt;
+      const s2=Math.hypot(b.v.x,b.v.y,b.v.z)||1, SP=sc.speed, lo=SP*0.6, k=s2>SP?SP/s2:(s2<lo?lo/s2:1); b.v.x*=k;b.v.y*=k;b.v.z*=k;
+      b.p.x+=b.v.x*dt; b.p.y+=b.v.y*dt; b.p.z+=b.v.z*dt;
+      b.p.y=clampJS(b.p.y, sc.dmax, sc.dmin); b.p.x=clampJS(b.p.x, MAP.minX, MAP.maxX); b.p.z=clampJS(b.p.z, MAP.minZ, MAP.maxZ);
       _fdir.set(b.v.x,b.v.y,b.v.z); if(_fdir.lengthSq()<1e-4) _fdir.set(1,0,0); _fdir.normalize(); _fq.setFromUnitVectors(_FISHX,_fdir);
       _fp.set(b.p.x, b.p.y - curveDropJS(b.p.x,b.p.z), b.p.z); _fm4.compose(_fp,_fq,_fsc.setScalar(sc.size)); sc.im.setMatrixAt(i,_fm4);
     }
@@ -5214,6 +5284,8 @@ function buildPanel() {
   addToggle(s, 'Constellations (night)', P, 'showConstellations');
   addToggle(s, 'Bathymetry (seabed depth)', P, 'bathy');
   addToggle(s, 'Depth contour lines', P, 'contours');
+  addToggle(s, 'Fish (sea life)', P, 'showFish');
+  addToggle(s, 'Birds', P, 'showBirds');
   addToggle(s, 'Curved horizon (tiny planet)', P, 'curveWorld');
   addToggle(s, 'Terrain LOD (clipmap)', P, 'lodTerrain', setTerrainLOD);   // ON = focus-following clipmap; OFF = static full mesh
   addToggle(s, 'Clouds', P, 'showClouds');
@@ -5705,7 +5777,7 @@ function buildRegionWorld(){
   buildOcean();
   if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
   buildDipStick();
-  buildIslandLights(); buildPalms(); buildShrubs(); buildTownMotifs(); buildVehicles(); buildVehicleFX(); buildSeaLife();
+  buildIslandLights(); buildPalms(); buildShrubs(); buildTownMotifs(); buildVehicles(); buildVehicleFX(); buildSeaLife(); buildBirds();
   buildLabels();
   BLOCKED = buildBlocked(); buildDistLand(); buildCoarseNav();
   applySceneStyle();
