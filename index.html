@@ -1354,6 +1354,7 @@ async function init() {
   await renderer.init();
 
   loadSettings();   // restore saved panel settings before building the scene
+  P.lodTerrain = new URLSearchParams(location.search).has('lod');   // ?lod is authoritative for the initial terrain (not the saved value)
   scene = new THREE.Scene();
   buildTerrainField();
   uSeaTint.value.fromArray(REGION.seaTint || [1,1,1]);   // per-region water tint
@@ -3975,7 +3976,7 @@ function setTerrainLOD(on){
   clipLevels=[];
   if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
 }
-const CLIP_N = 320, CLIP_BASE = 3, CLIP_LEVELS = 6;   // big fine ring (±480u) so near islands are uniformly detailed; seams land far out (curvature hides them)
+const CLIP_N = 160, CLIP_BASE = 4, CLIP_LEVELS = 6;   // ±320u fine ring; smaller rings (26k verts) → cheap to re-bake while flying. Coarser cell (4u) but adaptive snap means it's coarse-aligned at speed anyway
 let clipLevels = [];
 // reuse the exact buildTerrain ramp so the look matches
 function _terrainColorAt(y, slope, c){
@@ -4023,7 +4024,7 @@ function buildClipmapTerrain(){
   }
   terrainMesh=clipLevels[0].mesh;   // so dev tools / volcano rebuild hooks have a handle
 }
-let _clipDir=new THREE.Vector3();
+let _clipDir=new THREE.Vector3(), _clipFx=NaN, _clipFz=NaN;
 function updateClipmapTerrain(){
   if (!clipLevels.length) return;
   // CENTRE THE LOD ON THE CAMERA — where it's actually looking at the ground, not on the boat.
@@ -4032,8 +4033,11 @@ function updateClipmapTerrain(){
   let fx, fz;
   if (_clipDir.y < -0.04){ const t=Math.min(Math.max(-cp.y/_clipDir.y, 0), 4000); fx=cp.x+_clipDir.x*t; fz=cp.z+_clipDir.z*t; }   // ray → sea
   else { fx=cp.x; fz=cp.z; }                                                                                                     // looking flat → under the camera
-  for (const L of clipLevels){
-    const snap=L.cell*2, sx=Math.round(fx/snap)*snap, sz=Math.round(fz/snap)*snap;   // snap to 2 cells → stable, no swimming
+  // ADAPTIVE: when the focus is moving fast (flying), snap to a much coarser grid so rings re-bake far less often
+  const fspd = (_clipFx===_clipFx) ? Math.hypot(fx-_clipFx, fz-_clipFz) : 0; _clipFx=fx; _clipFz=fz;
+  const snapMul = fspd>20 ? 10 : fspd>8 ? 5 : fspd>3 ? 2 : 1;
+  for (const L of clipLevels){   // finest first; resample AT MOST ONE ring per frame → no multi-ring pile-up while moving
+    const snap=L.cell*2*snapMul, sx=Math.round(fx/snap)*snap, sz=Math.round(fz/snap)*snap;
     if (sx===L.sx && sz===L.sz) continue;                                            // this ring hasn't moved a cell → skip resample
     L.sx=sx; L.sz=sz;
     const V=L.V, cell=L.cell, half=L.half, pos=L.geo.attributes.position.array, col=L.geo.attributes.color.array, hgt=L.hgt;
@@ -4062,6 +4066,7 @@ function updateClipmapTerrain(){
         nrm.setXYZ(i, nX/Ln, nY/Ln, nZ/Ln); }
       nrm.needsUpdate=true;
     }
+    break;   // one ring per frame — the rest catch up on following frames (prevents fly-time resample spikes)
   }
 }
 
