@@ -1526,6 +1526,12 @@ async function init() {
     updateSubNavDebug();  // sub's depth grid + plan in the nav-debug overlay (after the sub has planned this frame)
     controls.update();
     if (P.lodTerrain) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
+    if (_descent){ _descent.t += dt/_descent.dur; const k=Math.min(_descent.t,1), e=1-(1-k)*(1-k)*(1-k);   // ease-out: decelerate as we settle onto the sea
+      const bx=boat3.x, bz=boat3.z, ty=Math.max(seabedHeight(bx,bz)+24, 34);
+      flyState.pos.set(_descent.fromPos.x+((bx-55)-_descent.fromPos.x)*e, _descent.fromPos.y+(ty-_descent.fromPos.y)*e, _descent.fromPos.z+((bz+55)-_descent.fromPos.z)*e);
+      flyState.pitch = _descent.fromPitch + (-0.3-_descent.fromPitch)*e;
+      _diveFade(1-k, REGION.id);
+      if (k>=1){ _descent=null; setFly(false); _diveFade(0); } }
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
@@ -1544,7 +1550,7 @@ async function init() {
     const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
     const useGodray = !useRain && !useOutline && godrayActive && godrayPost && P.atmosphere > 0.01;   // atmosphere pass: god rays (sun-gated inside) + bloom + haze
     try {
-      if (worldMapOpen && globeScene){ updateGlobe(); renderer.render(globeScene, globeCam); }
+      if (worldMapOpen && globeScene){ updateGlobe(dt); renderer.render(globeScene, globeCam); }
       else if (fleetView==='grid'){ renderFleetGrid(); }
       else if (useRain){ rainScenePass.camera = activeCam; rainScenePass.scene = scene; rainPost.render(); }
       else if (useOutline){ outlineScenePass.camera = activeCam; outlineScenePass.scene = scene; outlinePost.render(); }
@@ -1565,7 +1571,8 @@ async function init() {
     if (fpsT >= 0.5) { ui.fps.textContent = Math.round(fpsN/fpsT) + ' fps'; fpsN = 0; fpsT = 0; }
 
     if (firstFrame) { firstFrame = false; window.__booted = true;
-      setTimeout(() => document.getElementById('overlay').classList.add('hidden'), 250); }
+      setTimeout(() => document.getElementById('overlay').classList.add('hidden'), 250);
+      if (new URLSearchParams(location.search).has('dive')){ const u=new URL(location.href); u.searchParams.delete('dive'); try{history.replaceState(null,'',u.toString());}catch(_){} startDescent(); } }   // arrived from a globe dive → descend from orbit
   });
 
   window.addEventListener('resize', onResize);
@@ -5396,9 +5403,20 @@ function buildGlobe(){
 function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
   const n=latLonToVec(r.lat0||0, r.lon0||0, 1);
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0.25,0.15,1).normalize()); }   // bring the region to the front, tilted nicely
-function updateGlobe(){
+// ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
+//      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
+let _diveZoom=null, _descent=null;
+function _diveFade(a, id){ let f=document.getElementById('dive-fade');
+  if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;'; document.body.appendChild(f); }
+  const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018; f.style.background='#'+('000000'+(c>>>0).toString(16)).slice(-6); f.style.opacity=clampJS(a,0,1); }
+function updateGlobe(dt){
   if (!globeSpin) return;
   const cv=renderer.domElement, a=cv.width/cv.height; if (Math.abs(globeCam.aspect-a)>1e-3){ globeCam.aspect=a; globeCam.updateProjectionMatrix(); }   // match the ACTUAL render-target aspect (not the window — they differ under an aspect-lock), or the sphere stretches
+  if (_diveZoom){ _diveZoom.t += (dt||0.016)/_diveZoom.dur; const k=Math.min(_diveZoom.t,1), e=k*k;   // accelerate toward the surface
+    globeCam.position.set(0,0, 4.0-(4.0-1.05)*e); globeCam.lookAt(0,0,0);
+    _diveFade(Math.max(0,(k-0.5)*2), _diveZoom.id);                                   // fade to the region colour over the last half of the dive
+    if (k>=1){ const d=_diveZoom; _diveZoom=null; globeCam.position.set(0,0,4); _diveLand(d); }
+    return; }
   if (!_globeDrag){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // drag momentum only — NO auto-spin
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
     _globeVel.x*=0.9; _globeVel.y*=0.9; }
@@ -5460,9 +5478,22 @@ function openWorldMap(){ const ov=document.getElementById('worldmap'); if(!ov) r
   worldMapOpen=true; _prevCtrlEnabled=controls?controls.enabled:false; if(controls) controls.enabled=false; faceRegion(REGION.id); }
 function closeWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) ov.classList.add('hidden');
   worldMapOpen=false; if(controls) controls.enabled=_prevCtrlEnabled; }
-function travelToRegion(id){ if(!REGIONS[id]) return; if(id===REGION.id){ closeWorldMap(); return; }
-  document.body.classList.add('wm-travel');                              // launch-to-orbit warp, then load the region
-  setTimeout(()=>{ const u=new URL(location.href); u.searchParams.set('region', id); location.assign(u.toString()); }, 1050);
+function travelToRegion(id){ if(!REGIONS[id]||_diveZoom) return;
+  const r=REGIONS[id], n=latLonToVec(r.lat0||0, r.lon0||0, 1);
+  globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0,0,1));   // bring the patch dead-centre, then dive the camera straight into it
+  _diveZoom={ t:0, dur:1.15, id, same:(id===REGION.id) };
+}
+function _diveLand(d){
+  if (d.same){ closeWorldMap(); startDescent(); }                         // current region: fully seamless, no reload
+  else { const u=new URL(location.href); u.searchParams.set('region', d.id); u.searchParams.set('dive','1'); location.assign(u.toString()); }   // other region: reload (masked by the full-screen colour), then descend on arrival
+}
+// fly the sailing camera down from high orbit to the normal view, reusing the free-fly cam (hands back to orbit cleanly)
+function startDescent(){
+  setFly(true);
+  const bx=boat3.x, bz=boat3.z;
+  flyState.pos.set(bx-70, 1700, bz+70); flyState.yaw=Math.atan2(-70,70); flyState.pitch=-1.2; flyState.keys={};
+  _descent={ t:0, dur:2.6, fromPos:flyState.pos.clone(), fromYaw:flyState.yaw, fromPitch:flyState.pitch };
+  _diveFade(1, REGION.id);
 }
 
 // --- small UI factory ---
