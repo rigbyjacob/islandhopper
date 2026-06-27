@@ -173,7 +173,6 @@
   <div class="box">
     <div class="spinner"></div>
     <h2>Building the Planet…</h2>
-    <p>Charting islands, reefs, and warm seas — just a few seconds.</p>
     <div id="err"></div>
   </div>
 </div>
@@ -199,7 +198,8 @@
     var h = ov.querySelector('h2');
     if (h && h.textContent.indexOf('Could not') === -1) {
       h.textContent = 'Still loading…';
-      ov.querySelector('p').textContent =
+      var p = ov.querySelector('p'); if (!p) { p = document.createElement('p'); var bx = ov.querySelector('.box'); bx.insertBefore(p, document.getElementById('err')); }
+      p.textContent =
         'Modules are taking a while. Check your connection, or open DevTools → Console for errors. Needs Chrome or Edge with WebGPU.';
     }
   }, 12000);
