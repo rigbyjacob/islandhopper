@@ -3976,7 +3976,7 @@ function setTerrainLOD(on){
   clipLevels=[];
   if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
 }
-const CLIP_N = 192, CLIP_BASE = 3, CLIP_LEVELS = 7;   // STATIC rings; the GPU displaces + shades from a baked height texture → zero per-frame re-bake (smooth flying)
+const CLIP_N = 320, CLIP_BASE = 3, CLIP_LEVELS = 7;   // STATIC rings; the GPU displaces + shades from a baked height texture → zero per-frame re-bake (smooth flying). CLIP_N = cells per ring → bigger = the finest cell size reaches further from the camera
 let clipLevels = [];
 // ---- region heights baked ONCE into a HalfFloat texture; the clipmap samples it on the GPU ----
 let _heightTex=null;
