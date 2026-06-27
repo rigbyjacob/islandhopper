@@ -486,6 +486,8 @@ const ISLANDS = (() => { const best={}, islets=[];
   return Object.values(best).concat(islets).map(p => { let rr=0; for(const v of p.r) rr=Math.max(rr, Math.hypot(v[0]-p.c[0], v[1]-p.c[1]));
     return { name:p.n, x:p.c[0], z:p.c[1], r:rr, h:p.h, ring:p.r }; }); })();
 const BYNAME = Object.fromEntries(ISLANDS.map(i => [i.name, i]));
+// the ocean shore/shelf mask unrolls islands per-pixel — cap to the largest so big regions (100s of isles) stay fast
+const SHORE_ISLANDS = ISLANDS.slice().sort((a,b)=>b.r-a.r).slice(0, 48);
 
 const MAP = REGION.map;
 MAP.cx = (MAP.minX + MAP.maxX) / 2; MAP.cz = (MAP.minZ + MAP.maxZ) / 2;
@@ -3376,7 +3378,7 @@ function buildOcean() {
     const hD = waveH(p.add(vec2(0,-e))), hU = waveH(p.add(vec2(0,e)));
     return normalize(vec3(hL.sub(hR), 2*e, hD.sub(hU))); });
   const shore = Fn(([p]) => { const s = float(0).toVar();   // tighter shelf → more deep water between islands
-    for (const isl of ISLANDS) s.assign(max(s, smoothstep(isl.r*1.7, isl.r*0.7, length(p.sub(vec2(isl.x, isl.z))))));
+    for (const isl of SHORE_ISLANDS) s.assign(max(s, smoothstep(isl.r*1.7, isl.r*0.7, length(p.sub(vec2(isl.x, isl.z))))));
     return clamp(s, 0, 1); });
   // genuine hash value-noise (APERIODIC, not sines) — to break the regular sine interference
   const hash21 = Fn(([q]) => fract(sin(dot(q, vec2(127.1,311.7))).mul(43758.5453)));
