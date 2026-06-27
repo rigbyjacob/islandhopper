@@ -2083,7 +2083,7 @@ const SUB_BUB_N=90, CONTRAIL_N=150, SHIP_FOAM_N=110;
 let subBubbleIM=null, contrailIM=null, ufoRipple=null, ufoGlow=null, shipFoamIM=null, _bub=[], _con=[], _foam=[], _bubAcc=0, _conAcc=0, _foamAcc=0;
 const _vfxM4=new THREE.Matrix4(), _vfxQ=new THREE.Quaternion(), _vfxS=new THREE.Vector3(), _vfxP=new THREE.Vector3();
 function buildVehicleFX(){
-  _bub=[]; _con=[]; _bubAcc=0; _conAcc=0;
+  _bub=[]; _con=[]; _foam=[]; _bubAcc=0; _conAcc=0; _foamAcc=0;   // clear ALL FX particle pools (incl. ship foam) so a region swap never replays the previous region's stale puffs
   const sg=new THREE.SphereGeometry(1,7,6);
   subBubbleIM=new THREE.InstancedMesh(sg, new THREE.MeshBasicMaterial({ color:0xbcd6ea, transparent:true, opacity:0.3, depthWrite:false }), SUB_BUB_N);
   subBubbleIM.frustumCulled=false; subBubbleIM.renderOrder=4; scene.add(subBubbleIM);
@@ -5590,7 +5590,7 @@ function buildPanel() {
   const resetTune = el('div','btn',acts); resetTune.textContent='Reset gains';
   resetTune.onclick=()=>{ for (const k of ['hKp','hKi','hKd','sKp','sKi','sKd']) { P[k]=DEFAULTS[k]; syncSlider(k); } headingPID.reset(); speedPID.reset(); };
   const resetBoat = el('div','btn',acts); resetBoat.textContent='Reset boat';
-  resetBoat.onclick=()=>{ _cSTART(); Object.assign(boat3,{x:START_POS.x,z:START_POS.z,psi:_startPsi,u:8,v:0,r:0,thr:0.4,delta:0}); wpIdx=_startWp; headingPID.reset(); speedPID.reset(); TEL.length=0; kf=new KalmanFilter(boat3.x,boat3.z); path=null; planKey=''; replan(boat3); };
+  resetBoat.onclick=()=>{ _cSTART(); Object.assign(boat3,{x:START_POS.x,z:START_POS.z,psi:_startPsi,u:8,v:0,r:0,thr:0.4,delta:0}); wpIdx=_startWp; headingPID.reset(); speedPID.reset(); TEL.length=0; kf=new KalmanFilter(boat3.x,boat3.z); path=null; planKey=''; if(typeof wakeTrail!=='undefined'&&wakeTrail) wakeTrail.length=0; replan(boat3); };
 
   // Restore EVERY control (PID, weather, nav, sky, HUD toggles…) to factory defaults.
   // Clearing the saved blob + reloading is the foolproof way to resync all DOM controls at once.
@@ -6053,6 +6053,11 @@ function teardownRegionWorld(){
   if (pathRibbon){ pathRibbon.visible=false; pathRibbon.geometry.setDrawRange(0,0); }
   if (subRibbon){ subRibbon.visible=false; subRibbon.geometry.setDrawRange(0,0); }
   if (targetRing){ targetRing.visible=false; } targetRingKey='';
+  // Reset the trailing wake: its strip is sampled from the boat's recent stern track. On a swap the boat
+  // teleports to the new region's START_POS, but a non-empty wakeTrail still holds the OLD region's far-away
+  // points — so the strip stretches across the world and collapses into a thin white line pinned to the boat
+  // (the lingering "ghost line" after switching scenarios). Clearing it re-seeds from the new stern next frame.
+  if (typeof wakeTrail!=='undefined' && wakeTrail) wakeTrail.length=0;   // next updateWake re-seeds from the new stern → a single point → zero-area (invisible) strip until the boat moves
   path=null; planKey='';
 }
 let _swapping = false;   // while true the animate loop holds the 3D render (the dive colour-fade covers the screen) so we never present a half-built scene
