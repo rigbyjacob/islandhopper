@@ -74,6 +74,9 @@
   #demobar .demo-pill.active { background: #2f7bd6; border-color: #5b9fe6; color: #fff; opacity: 1; }
   #demobar .demo-exit { font-size: 14px; padding: 4px 9px; cursor: pointer; opacity: .6; border-radius: 8px; user-select: none; }
   #demobar .demo-exit:hover { opacity: 1; background: rgba(255,120,120,.18); }
+  /* On small / mobile screens the full pill list wraps into many rows and eats the view —
+     collapse to just the current scenario name with ‹ › arrows (which are already present & wired up). */
+  @media (max-width: 640px){ #demobar .demo-btns { display: none; } #demobar .demo-name { font-size: 14px; } }
   .scn-input { width: 100%; box-sizing: border-box; background: rgba(0,0,0,.25); border: 1px solid rgba(140,200,255,.25); color: #dfeefb; border-radius: 7px; padding: 5px 8px; font: 12px ui-sans-serif; margin: 4px 0; }
   .scn-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 11.5px; }
   .scn-row .scn-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
