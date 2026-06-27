@@ -4066,9 +4066,12 @@ function updateClipmapTerrain(){
   if (!clipLevels.length) return;
   const cam=(typeof activeCam!=='undefined'&&activeCam)?activeCam:camera, cp=cam.position;
   cam.getWorldDirection(_clipDir);
-  let fx, fz;
-  if (_clipDir.y < -0.04){ const t=Math.min(Math.max(-cp.y/_clipDir.y, 0), 6000); fx=cp.x+_clipDir.x*t; fz=cp.z+_clipDir.z*t; }   // ray → sea
-  else { fx=cp.x; fz=cp.z; }                                                                                                     // looking flat → under the camera
+  // Centre the clipmap on the CAMERA (not the view-ray's sea hit) so near-field detail depends on
+  // distance from the camera, NOT where you happen to be looking. A small forward nudge along the
+  // view lets terrain you're flying toward refine a touch early, but stays well inside the finest ring.
+  let hx=_clipDir.x, hz=_clipDir.z; const hl=Math.hypot(hx,hz)||1; hx/=hl; hz/=hl;
+  const BIAS=140;
+  const fx=cp.x+hx*BIAS, fz=cp.z+hz*BIAS;
   for (const L of clipLevels){   // just SLIDE each ring to its snapped centre — no resampling (the GPU samples the texture)
     const snap=L.cell*2, sx=Math.round(fx/snap)*snap, sz=Math.round(fz/snap)*snap;
     if (sx===L.sx && sz===L.sz) continue;
