@@ -1240,15 +1240,28 @@ function stepDynamics(s, dt, t) {
 // Guidance — A* path + pure-pursuit, producing desired heading + speed
 // ============================================================================
 // (route is declared earlier, near START_POS)
+function _orderTour(isls){            // nearest-neighbour + 2-opt → a SHORT, NON-self-crossing loop (angular order zig-zags badly in elongated archipelagos like Stockholm)
+  if (isls.length<4) return isls.slice();
+  const D=(a,b)=>Math.hypot(a.x-b.x, a.z-b.z);
+  let rem=isls.slice(); const start=rem.reduce((a,b)=>a.x<b.x?a:b); const ord=[start]; rem.splice(rem.indexOf(start),1);   // greedy nearest-neighbour from the west
+  while(rem.length){ const last=ord[ord.length-1]; let bi=0,bd=Infinity;
+    for(let i=0;i<rem.length;i++){ const d=D(rem[i],last); if(d<bd){bd=d;bi=i;} } ord.push(rem.splice(bi,1)[0]); }
+  const n=ord.length; let improved=true, guard=0;                                  // 2-opt: uncross the loop
+  while(improved && guard++<60){ improved=false;
+    for(let i=0;i<n-1;i++) for(let k=i+2;k<n;k++){ if(i===0 && k===n-1) continue;
+      const a=ord[i], b=ord[i+1], c=ord[k], d=ord[(k+1)%n];
+      if(D(a,b)+D(c,d) > D(a,c)+D(b,d)+1e-6){ let lo=i+1, hi=k; while(lo<hi){ const t=ord[lo]; ord[lo]=ord[hi]; ord[hi]=t; lo++; hi--; } improved=true; } }
+  }
+  return ord;
+}
 function _cROUTE(){
   const tourNames = REGION.tour || ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
                      'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
   route = tourNames.map(n => BYNAME[n]).filter(Boolean);
-  if (route.length < 2) {                                  // unknown region → auto-tour the biggest NAMED islands, ordered into a loop
+  if (route.length < 2) {                                  // unknown region → auto-tour the biggest NAMED islands as a clean loop
     const named = ISLANDS.filter(i=>i.name && i.name!=='islet');
-    route = (named.length>=2 ? named : ISLANDS.slice()).sort((a,b)=>b.r-a.r).slice(0, 11);   // destinations should be real islands, never anonymous islets
-    const cx=route.reduce((s,i)=>s+i.x,0)/route.length, cz=route.reduce((s,i)=>s+i.z,0)/route.length;
-    route.sort((a,b)=>Math.atan2(a.z-cz,a.x-cx)-Math.atan2(b.z-cz,b.x-cx));   // angular order → smooth circuit
+    const pick = (named.length>=2 ? named : ISLANDS.slice()).sort((a,b)=>b.r-a.r).slice(0, 9);   // real islands only; cap the count so the loop stays readable
+    route = _orderTour(pick);
   }
 }
 _cROUTE();
@@ -6031,6 +6044,7 @@ async function swapRegion(id){
   try { await renderer.compileAsync(scene, camera); } catch(e){ console.warn('region compile', e); }
   Object.assign(boat3, { x:START_POS.x, z:START_POS.z, psi:_startPsi, u:8, v:0, r:0, thr:0.4, delta:0, grounded:false, assist:false });
   wpIdx = _startWp; path = null; planKey=''; targetRingKey=''; kf = new KalmanFilter(boat3.x, boat3.z); replan(boat3); applyTourPacing();
+  if (ui && ui.routeInput) ui.routeInput.value = currentRouteNames().join(', ');   // refresh the Cinematic-Tour route box to THIS region (was stuck showing the startup region)
   _swapping = false;
 }
 window.swapRegion = swapRegion;   // console helper: stream a region in live, e.g. swapRegion('japan')
