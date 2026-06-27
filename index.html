@@ -468,11 +468,11 @@ if (window.THAILAND) REGIONS.thailand = Object.assign({}, window.THAILAND, {
 // ---- Sweden · Stockholm Archipelago (Värmdö — Djurö, Djurhamn, Stavsnäs) — low granite skerries & pine ----
 if (window.SWEDEN) REGIONS.sweden = Object.assign({}, window.SWEDEN, {
   relief: { escale:6, steep:0.12, ridge:0.25, lift:1.6 },   // low, rounded, glacier-smoothed granite — NOT spiky
-  seaTint: [0.80, 0.95, 1.04],                              // cool, slightly green brackish Baltic (less turquoise than the Med)
+  seaTint: [0.50, 0.70, 0.82],                              // dark, cool, steel-green brackish Baltic — NOT tropical turquoise
   palette: {
-    land: { seabed:0x18414c, wetsand:0x6b6a5c, sand:0x9a9384,
-            grass:0x55733f, forest:0x2c4a30, rock:0x8f8276, cliff:0x6d6258 },   // pink-grey granite + dark pine, lichen-grey shores (no golden sand)
-    shrub: [0x305434, 0x24402a],                            // dark spruce/pine greens
+    land: { seabed:0x18414c, wetsand:0x6f6a5e, sand:0xa99d88,
+            grass:0x9c8e79, forest:0x66704c, rock:0xb89c87, cliff:0x8a6f5b },   // BARE pink-grey granite dominant; only muted moss in the mid-band; dark pine comes from the 3D bushes
+    shrub: [0x2f5234, 0x24402a],                            // dark spruce/pine greens (the green now reads as scattered clumps, not a lush carpet)
   },
   flora: { palms:false },                                   // northern conifers, no palms
   // real archipelago settlements (lon,lat,weight) → cottages + harbour lights
@@ -488,8 +488,8 @@ if (window.SWEDEN) REGIONS.sweden = Object.assign({}, window.SWEDEN, {
     ['Stavsnäs',18.695,59.285],['Sandhamn',18.918,59.288],['Djurhamn',18.545,59.318],
     ['Djurö',18.555,59.298],['Runmarö',18.700,59.300],['Nämdö',18.680,59.180],
   ],
-  // luminous low Nordic summer-evening light, gentle sheltered water, fresh breeze
-  defaults: { timeOfDay:18.2, atmosphere:0.4, windDirDeg:205, windStrength:7, waveHeight:0.55, stormOn:false, stormIntensity:0.0 },
+  // bright Nordic summer afternoon (sun stays high at 59°N) so the pink granite reads — gentle sheltered water, fresh breeze
+  defaults: { timeOfDay:15.5, atmosphere:0.38, windDirDeg:205, windStrength:7, waveHeight:0.55, stormOn:false, stormIntensity:0.0 },
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
@@ -3069,7 +3069,8 @@ function updateStarMap(){
 }
 
 function buildLabels(){
-  for (const isl of ISLANDS){ if (isl.name==='islet') continue;                   // don't label tiny unnamed islets
+  const cityNames = new Set(CITY_LABELS.map(c => c.name));                         // a town label already carries this name
+  for (const isl of ISLANDS){ if (isl.name==='islet' || cityNames.has(isl.name)) continue;   // skip islets + don't double a town's name
     const sp=makeLabelSprite(isl.name, 0xffffff, 14);   // ~14 world units tall
     const peakY = Math.max(isl.h, terrainHeight(isl.x,isl.z), 6);                 // real centre height (tall Aegean isles)
     sp.position.set(isl.x, peakY+14, isl.z);
