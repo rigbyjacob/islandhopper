@@ -1528,7 +1528,7 @@ async function init() {
       flyState.pos.set(_descent.fromPos.x+((bx-55)-_descent.fromPos.x)*e, _descent.fromPos.y+(ty-_descent.fromPos.y)*e, _descent.fromPos.z+((bz+55)-_descent.fromPos.z)*e);
       flyState.pitch = _descent.fromPitch + (-0.3-_descent.fromPitch)*e;
       _diveFade(1-k, REGION.id);
-      if (k>=1){ _descent=null; setFly(false); _diveFade(0); } }
+      if (k>=1){ _descent=null; setFly(false); if(_descentReturnView==='cine') setCine(true); else if(_descentReturnView==='fps') setView(true); _diveFade(0); } }   // land back in the usual follow cam (Director by default), not high orbit
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
@@ -5411,7 +5411,7 @@ function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0.25,0.15,1).normalize()); }   // bring the region to the front, tilted nicely
 // ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
 //      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
-let _diveZoom=null, _descent=null;
+let _diveZoom=null, _descent=null, _descentReturnView='cine';
 function _diveFade(a, id){ let f=document.getElementById('dive-fade');
   if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;'; document.body.appendChild(f); }
   const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018; f.style.background='#'+('000000'+(c>>>0).toString(16)).slice(-6); f.style.opacity=clampJS(a,0,1); }
@@ -5500,6 +5500,7 @@ async function _diveLand(d){
 }
 // fly the sailing camera down from high orbit to the normal view, reusing the free-fly cam (hands back to orbit cleanly)
 function startDescent(){
+  _descentReturnView = fpsMode ? 'fps' : (cineMode ? 'cine' : 'orbit');   // remember the sailing view so we land back in it (Director follow by default), not high orbit
   setFly(true);
   const bx=boat3.x, bz=boat3.z;
   flyState.pos.set(bx-70, 1700, bz+70); flyState.yaw=Math.atan2(-70,70); flyState.pitch=-1.2; flyState.keys={};
