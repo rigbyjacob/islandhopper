@@ -3976,97 +3976,81 @@ function setTerrainLOD(on){
   clipLevels=[];
   if (P.lodTerrain) buildClipmapTerrain(); else buildTerrain();
 }
-const CLIP_N = 160, CLIP_BASE = 4, CLIP_LEVELS = 6;   // ±320u fine ring; smaller rings (26k verts) → cheap to re-bake while flying. Coarser cell (4u) but adaptive snap means it's coarse-aligned at speed anyway
+const CLIP_N = 192, CLIP_BASE = 3, CLIP_LEVELS = 7;   // STATIC rings; the GPU displaces + shades from a baked height texture → zero per-frame re-bake (smooth flying)
 let clipLevels = [];
-// reuse the exact buildTerrain ramp so the look matches
-function _terrainColorAt(y, slope, c){
+// ---- region heights baked ONCE into a HalfFloat texture; the clipmap samples it on the GPU ----
+let _heightTex=null;
+const uTerrBnd = uniform(new THREE.Vector4(0,0,1,1));   // x0,z0,x1,z1 world bounds of the height texture
+const _pb = { sea:uniform(new THREE.Vector3()), wet:uniform(new THREE.Vector3()), sand:uniform(new THREE.Vector3()),
+              grass:uniform(new THREE.Vector3()), forest:uniform(new THREE.Vector3()), rock:uniform(new THREE.Vector3()), cliff:uniform(new THREE.Vector3()) };
+function _v3(hex,d){ const c=new THREE.Color(hex??d); return new THREE.Vector3(c.r,c.g,c.b); }
+function bakeHeightTex(){
+  let a=1e9,b=-1e9,c=1e9,d=-1e9; for (const p of ISLAND_POLYS) for (const v of p.r){ a=Math.min(a,v[0]);b=Math.max(b,v[0]);c=Math.min(c,v[1]);d=Math.max(d,v[1]); }
+  if (a>b){ a=-500;b=500;c=-500;d=500; } const M=350; a-=M;b+=M;c-=M;d+=M;   // margin so coastlines have surrounding sea; outside = clamp-to-edge deep ocean
+  const TX=clampJS(Math.round((b-a)/2.2),256,2048), TZ=clampJS(Math.round((d-c)/2.2),256,2048);
+  const data=new Uint16Array(TX*TZ*4);
+  for (let j=0;j<TZ;j++){ const z=c+(d-c)*(j/(TZ-1)); for (let i=0;i<TX;i++){ const x=a+(b-a)*(i/(TX-1)); data[(j*TX+i)*4]=THREE.DataUtils.toHalfFloat(seabedHeight(x,z)); } }
+  if (_heightTex) _heightTex.dispose();
+  _heightTex=new THREE.DataTexture(data,TX,TZ,THREE.RGBAFormat,THREE.HalfFloatType);
+  _heightTex.minFilter=THREE.LinearFilter; _heightTex.magFilter=THREE.LinearFilter; _heightTex.wrapS=_heightTex.wrapT=THREE.ClampToEdgeWrapping; _heightTex.needsUpdate=true;
+  uTerrBnd.value.set(a,c,b,d);
   const LP=(REGION.palette&&REGION.palette.land)||{};
-  const seabed=_cl0??(_cl0=new THREE.Color()), wetsand=_cl1??(_cl1=new THREE.Color()), sand=_cl2??(_cl2=new THREE.Color()),
-        grass=_cl3??(_cl3=new THREE.Color()), forest=_cl4??(_cl4=new THREE.Color()), rock=_cl5??(_cl5=new THREE.Color()), cliff=_cl6??(_cl6=new THREE.Color());
-  seabed.set(LP.seabed??0x14506b); wetsand.set(LP.wetsand??0xa98c52); sand.set(LP.sand??0xe6d6a8);
-  grass.set(LP.grass??0x4f8a3c); forest.set(LP.forest??0x2f6630); rock.set(LP.rock??0x7d756a); cliff.set(LP.cliff??0x564f47);
-  let rgh=0.95;
-  if (y<0.2){ c.copy(seabed); }
-  else if (y<1.4){ c.copy(seabed).lerp(wetsand, smooth01(clampJS((y-0.2)/0.5,0,1))); c.lerp(sand, smooth01(clampJS((y-0.75)/0.65,0,1))); rgh=0.55+0.4*clampJS((y-0.2)/1.2,0,1); }
-  else {
-    if (y<5.0) c.copy(sand).lerp(grass, smooth01(clampJS((y-1.4)/3.6,0,1)));
-    else if (y<13) c.copy(grass).lerp(forest, smooth01(clampJS((y-5.0)/8,0,1)));
-    else c.copy(forest).lerp(rock, smooth01(clampJS((y-13)/6,0,1)));
-    const steep=smooth01(clampJS((slope-0.5)/0.6,0,1)); c.lerp(rock, steep*0.8);
-    const cliffy=smooth01(clampJS((slope-1.15)/0.7,0,1)); c.lerp(cliff, cliffy*0.9);
-    rgh=0.92-0.3*Math.max(steep,cliffy);
-  }
-  return rgh;
+  _pb.sea.value=_v3(LP.seabed,0x14506b); _pb.wet.value=_v3(LP.wetsand,0xa98c52); _pb.sand.value=_v3(LP.sand,0xe6d6a8);
+  _pb.grass.value=_v3(LP.grass,0x4f8a3c); _pb.forest.value=_v3(LP.forest,0x2f6630); _pb.rock.value=_v3(LP.rock,0x7d756a); _pb.cliff.value=_v3(LP.cliff,0x564f47);
 }
-let _cl0,_cl1,_cl2,_cl3,_cl4,_cl5,_cl6, _clC=new THREE.Color();
+function _hAt(x,z){ return texture(_heightTex, vec2( x.sub(uTerrBnd.x).div(uTerrBnd.z.sub(uTerrBnd.x)), z.sub(uTerrBnd.y).div(uTerrBnd.w.sub(uTerrBnd.y)) )).r; }
 function buildClipmapTerrain(){
-  clipLevels=[];
+  bakeHeightTex(); clipLevels=[];
   const V=CLIP_N+1;
   for (let l=0; l<CLIP_LEVELS; l++){
     const cell=CLIP_BASE*(1<<l), half=CLIP_N*cell/2;
-    const geo=new THREE.BufferGeometry();
-    const pos=new Float32Array(V*V*3), col=new Float32Array(V*V*3), hgt=new Float32Array(V*V);
+    const geo=new THREE.BufferGeometry(); const pos=new Float32Array(V*V*3);
     for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc; pos[i*3]=cc*cell-half; pos[i*3+1]=0; pos[i*3+2]=r*cell-half; }
-    // index: full grid for level 0; outer RING (central half hollow) for the rest, so finer level fills the centre
     const idx=[]; const q0=CLIP_N/4, q1=CLIP_N*3/4;
     for (let r=0;r<CLIP_N;r++) for (let cc=0;cc<CLIP_N;cc++){
-      if (l>0 && r>=q0 && r<q1 && cc>=q0 && cc<q1) continue;            // hole for the finer level
-      const a=r*V+cc, b=r*V+cc+1, d=(r+1)*V+cc, e=(r+1)*V+cc+1; idx.push(a,d,b, b,d,e);
+      if (l>0 && r>=q0 && r<q1 && cc>=q0 && cc<q1) continue;            // hole for the finer ring
+      const a=r*V+cc, b=r*V+cc+1, d=(r+1)*V+cc, e2=(r+1)*V+cc+1; idx.push(a,d,b, b,d,e2);
     }
-    geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col,3));
-    geo.setIndex(idx);
+    geo.setAttribute('position', new THREE.BufferAttribute(pos,3)); geo.setIndex(idx);
+    geo.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0), 1e7);   // verts move in the shader → never frustum-cull
+    const uCenter=uniform(new THREE.Vector2(0,0));
     const mat=new THREE.MeshStandardNodeMaterial({ metalness:0.0, roughness:0.92 });
-    mat.colorNode=attribute('color','vec3');
-    mat.positionNode=curveNode(positionLocal);
-    const mesh=new THREE.Mesh(geo, mat); mesh.frustumCulled=false; mesh.castShadow=(l<=1); mesh.receiveShadow=false; scene.add(mesh);
-    clipLevels.push({ l, cell, half, V, geo, mesh, hgt, sx:NaN, sz:NaN });
+    const e=float(cell);
+    // VERTEX: world XZ = local grid offset + this ring's snapped centre; displace from the height texture; tiny-planet curve
+    const vx=positionLocal.x.add(uCenter.x), vz=positionLocal.z.add(uCenter.y), vh=_hAt(vx,vz);
+    const vd=vec2(vx.sub(cameraPosition.x), vz.sub(cameraPosition.z));
+    mat.positionNode=vec3(vx, vh.sub(dot(vd,vd).mul(uCurveK)), vz);
+    // FRAGMENT: ramp colour + gradient normal, sampled from the height texture at the world XZ
+    const wx=positionWorld.x, wz=positionWorld.z;
+    const h=_hAt(wx,wz), hL=_hAt(wx.sub(e),wz), hR=_hAt(wx.add(e),wz), hD=_hAt(wx,wz.sub(e)), hU=_hAt(wx,wz.add(e));
+    const slope=length(vec2(hR.sub(hL).div(e.mul(2)), hU.sub(hD).div(e.mul(2))));
+    let land=mix(_pb.sand, _pb.grass, smoothstep(1.4,5.0,h));
+    land=mix(land, _pb.forest, smoothstep(5.0,13.0,h));
+    land=mix(land, _pb.rock, smoothstep(13.0,19.0,h));
+    land=mix(land, _pb.rock, smoothstep(0.5,1.1,slope).mul(0.8));
+    land=mix(land, _pb.cliff, smoothstep(1.15,1.85,slope).mul(0.9));
+    let shore=mix(_pb.sea, _pb.wet, smoothstep(0.2,0.7,h)); shore=mix(shore, _pb.sand, smoothstep(0.75,1.4,h));
+    let col=mix(_pb.sea, shore, smoothstep(0.2,0.35,h));
+    col=mix(col, land, smoothstep(1.4,1.6,h));
+    mat.colorNode=col;
+    mat.normalNode=normalize(vec3(hL.sub(hR), e.mul(2.0), hD.sub(hU)));
+    const mesh=new THREE.Mesh(geo, mat); mesh.frustumCulled=false; mesh.castShadow=false; mesh.receiveShadow=false; mesh.renderOrder=l; scene.add(mesh);
+    clipLevels.push({ l, cell, mesh, uCenter, sx:NaN, sz:NaN });
   }
-  terrainMesh=clipLevels[0].mesh;   // so dev tools / volcano rebuild hooks have a handle
+  terrainMesh=clipLevels[0].mesh;
 }
-let _clipDir=new THREE.Vector3(), _clipFx=NaN, _clipFz=NaN;
+let _clipDir=new THREE.Vector3();
 function updateClipmapTerrain(){
   if (!clipLevels.length) return;
-  // CENTRE THE LOD ON THE CAMERA — where it's actually looking at the ground, not on the boat.
   const cam=(typeof activeCam!=='undefined'&&activeCam)?activeCam:camera, cp=cam.position;
   cam.getWorldDirection(_clipDir);
   let fx, fz;
-  if (_clipDir.y < -0.04){ const t=Math.min(Math.max(-cp.y/_clipDir.y, 0), 4000); fx=cp.x+_clipDir.x*t; fz=cp.z+_clipDir.z*t; }   // ray → sea
+  if (_clipDir.y < -0.04){ const t=Math.min(Math.max(-cp.y/_clipDir.y, 0), 6000); fx=cp.x+_clipDir.x*t; fz=cp.z+_clipDir.z*t; }   // ray → sea
   else { fx=cp.x; fz=cp.z; }                                                                                                     // looking flat → under the camera
-  // ADAPTIVE: when the focus is moving fast (flying), snap to a much coarser grid so rings re-bake far less often
-  const fspd = (_clipFx===_clipFx) ? Math.hypot(fx-_clipFx, fz-_clipFz) : 0; _clipFx=fx; _clipFz=fz;
-  const snapMul = fspd>20 ? 10 : fspd>8 ? 5 : fspd>3 ? 2 : 1;
-  for (const L of clipLevels){   // finest first; resample AT MOST ONE ring per frame → no multi-ring pile-up while moving
-    const snap=L.cell*2*snapMul, sx=Math.round(fx/snap)*snap, sz=Math.round(fz/snap)*snap;
-    if (sx===L.sx && sz===L.sz) continue;                                            // this ring hasn't moved a cell → skip resample
-    L.sx=sx; L.sz=sz;
-    const V=L.V, cell=L.cell, half=L.half, pos=L.geo.attributes.position.array, col=L.geo.attributes.color.array, hgt=L.hgt;
-    for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc, wx=sx+cc*cell-half, wz=sz+r*cell-half;
-      const y=seabedHeight(wx,wz); pos[i*3]=wx; pos[i*3+1]=y; pos[i*3+2]=wz; hgt[i]=y; }
-    const detail = L.l<=2;                                               // micro-detail/AO only on the inner rings (you can't see it far out)
-    for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc, y=hgt[i];
-      const hL=hgt[cc>0?i-1:i], hR=hgt[cc<V-1?i+1:i], hD=hgt[r>0?i-V:i], hU=hgt[r<V-1?i+V:i];
-      const slope=Math.hypot((hR-hL)/(2*cell),(hU-hD)/(2*cell));
-      _terrainColorAt(y, slope, _clC);
-      let aoF=1;
-      if (detail && y>0.3){ let horizon=0;                               // cheap 4-direction horizon AO → depth in coves/valleys
-        for (let dd=0; dd<4; dd++){ const dc=dd===0?1:dd===1?-1:0, dr=dd===2?1:dd===3?-1:0; let mt=0;
-          for (let s=1;s<=7;s++){ const c2=cc+dc*s, r2=r+dr*s; if(c2<0||c2>=V||r2<0||r2>=V) break; const dh=hgt[r2*V+c2]-y; if(dh<=0) continue; const t=dh/(s*cell); if(t>mt) mt=t; }
-          horizon+=mt; }
-        aoF=1-clampJS(horizon/4*0.7,0,0.5); }
-      const tn = detail ? (fbm(pos[i*3]*0.12, pos[i*3+2]*0.12)-0.5)*0.12 : 0;     // per-vertex colour grain
-      col[i*3]=clampJS((_clC.r+tn)*aoF,0,1); col[i*3+1]=clampJS((_clC.g+tn)*aoF,0,1); col[i*3+2]=clampJS((_clC.b+tn)*aoF,0,1); }
-    L.geo.attributes.position.needsUpdate=true; L.geo.attributes.color.needsUpdate=true; L.geo.computeVertexNormals();
-    if (detail){                                                          // micro-normal shimmer: tilt land normals by a high-freq fbm gradient
-      const nrm=L.geo.attributes.normal, ND=0.8, ne=0.9, nf=0.55;
-      for (let r=0;r<V;r++) for (let cc=0;cc<V;cc++){ const i=r*V+cc; if(hgt[i]<0.3) continue;
-        const wx=pos[i*3], wz=pos[i*3+2];
-        const gx=(fbm((wx+ne)*nf,wz*nf)-fbm((wx-ne)*nf,wz*nf))/(2*ne), gz=(fbm(wx*nf,(wz+ne)*nf)-fbm(wx*nf,(wz-ne)*nf))/(2*ne);
-        let nX=nrm.getX(i)-gx*ND, nY=nrm.getY(i), nZ=nrm.getZ(i)-gz*ND, Ln=Math.hypot(nX,nY,nZ)||1;
-        nrm.setXYZ(i, nX/Ln, nY/Ln, nZ/Ln); }
-      nrm.needsUpdate=true;
-    }
-    break;   // one ring per frame — the rest catch up on following frames (prevents fly-time resample spikes)
+  for (const L of clipLevels){   // just SLIDE each ring to its snapped centre — no resampling (the GPU samples the texture)
+    const snap=L.cell*2, sx=Math.round(fx/snap)*snap, sz=Math.round(fz/snap)*snap;
+    if (sx===L.sx && sz===L.sz) continue;
+    L.sx=sx; L.sz=sz; L.uCenter.value.set(sx,sz);
   }
 }
 
