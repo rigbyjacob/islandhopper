@@ -3437,8 +3437,12 @@ function buildOcean() {
     const hL = waveH(p.add(vec2(-e,0))), hR = waveH(p.add(vec2(e,0)));
     const hD = waveH(p.add(vec2(0,-e))), hU = waveH(p.add(vec2(0,e)));
     return normalize(vec3(hL.sub(hR), 2*e, hD.sub(hU))); });
-  const shore = Fn(([p]) => { const s = float(0).toVar();   // tighter shelf → more deep water between islands
-    for (const isl of SHORE_ISLANDS) s.assign(max(s, smoothstep(isl.r*1.7, isl.r*0.7, length(p.sub(vec2(isl.x, isl.z))))));
+  // FIXED-width offshore shelf (world units), NOT proportional to island size — otherwise a big landmass
+  // (mainland, Phuket) paints a giant shallow/foam halo that floods whole bays. Now every coast gets the
+  // same ~shelf band, so open water and bay centres stay deep blue.
+  const SHELF_W = 90;
+  const shore = Fn(([p]) => { const s = float(0).toVar();
+    for (const isl of SHORE_ISLANDS) s.assign(max(s, smoothstep(isl.r+SHELF_W, isl.r, length(p.sub(vec2(isl.x, isl.z))))));
     return clamp(s, 0, 1); });
   // genuine hash value-noise (APERIODIC, not sines) — to break the regular sine interference
   const hash21 = Fn(([q]) => fract(sin(dot(q, vec2(127.1,311.7))).mul(43758.5453)));
