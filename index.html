@@ -5525,12 +5525,14 @@ function buildRegionWorld(){
   _tagRegion = false;
 }
 function teardownRegionWorld(){
-  for (const o of _regionObjs){ scene.remove(o);
-    o.traverse && o.traverse(c=>{ if(c.geometry&&c.geometry.dispose) c.geometry.dispose();
-      const m=c.material; if(m){ (Array.isArray(m)?m:[m]).forEach(mm=>{ if(mm&&mm.map&&mm.map.dispose) mm.map.dispose(); if(mm&&mm.dispose) mm.dispose(); }); } }); }
+  // Only DETACH region objects from the scene — do NOT dispose their geometry/material/textures. Disposing a texture
+  // that a still-live (region-independent) transparent material samples corrupts the WebGPU node texture cache and
+  // every subsequent frame throws "Invalid value used as weak map key" → the canvas freezes. A small per-swap GPU
+  // leak is the acceptable trade for a rock-solid live swap.
+  for (const o of _regionObjs){ scene.remove(o); }
   _regionObjs.length = 0;
   FLEET.length = 0; labelEls.length = 0; cityLabelEls.length = 0; _curveInsts.length = 0; clipLevels.length = 0;
-  if (typeof islandLightsGroup!=='undefined' && islandLightsGroup){ while(islandLightsGroup.children.length){ const c=islandLightsGroup.children.pop(); c.material&&c.material.dispose&&c.material.dispose(); } }
+  if (typeof islandLightsGroup!=='undefined' && islandLightsGroup) islandLightsGroup.clear();   // detach only, no dispose (see above)
   _heightTex = null; terrainMesh = null;
 }
 let _swapping = false;   // while true the animate loop holds the 3D render (the dive colour-fade covers the screen) so we never present a half-built scene
