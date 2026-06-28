@@ -161,3 +161,83 @@ Order suggestion (reuses existing art the most → least): el-nido-coron & halon
 solomon-gizo (hawaii volcanic) → faroe-islands & kodiak-archipelago (sweden nord) → aran-islands,
 small-isles-skye, montauk-east-end (sweden temp). The 4 North-Atlantic regions are the case for a new
 art style before polishing them.
+
+**Built so far:** halong-bay ✅ and el-nido-coron ✅ are baked, registered, and playable.
+
+---
+
+# Batch 2 — coastal / peninsula regions
+
+These are coast/peninsula-led rather than pure archipelagos; the bake features the islands + headlands
+that make a good sailing loop. Two span widely separated sub-areas (flagged below).
+
+| id | display | center (lat, lon) | biome | resembles | character |
+|----|---------|-------------------|-------|-----------|-----------|
+| st-johns-conception-bay | St. John's & Conception Bay (NL) | 47.62, -52.85 | nord | sweden | rust/grey sea-cliffs, fog, cold Atlantic |
+| cape-cod-islands | Cape Cod & the Islands (MA) | 41.50, -70.20 | temp | japan | sandy moraine, dunes, barrier beaches |
+| exe-estuary-south-devon | Exe Estuary & South Devon + Lundy (UK) | 50.58, -3.45 | temp | japan | red sandstone cliffs, estuary flats, granite Lundy |
+| apo-dauin-siquijor | Apo I., Dauin & Siquijor (PH) | 9.18, 123.32 | trop | caribbean | volcanic isles, clear reef-fringed turquoise |
+
+Notes: **Exe/South Devon** and **Apo/Dauin** each have an outlier — Lundy sits ~110 km NW of the Devon
+coast in the Bristol Channel; Camiguin sits ~150 km SE of the Apo cluster (off N Mindanao) and is best
+as its *own* future region, not in this bbox.
+
+## st-johns-conception-bay — St. John's & Conception Bay (Newfoundland)
+- center: 47.62, -52.85 · bbox [-53.05, 47.45, -52.60, 47.85]
+- biome **nord** · resembles **sweden**
+- Rust-and-grey sedimentary sea-cliffs (Bell Island iron beds) into cold slate-green swell; sparse boreal
+  scrub on headlands, fog-prone, little beach — sea-cliff, stack and tickle.
+- Islands/headlands: Bell I. (Wabana) 47.633,-52.957 ~9km · Little Bell I. 47.605,-52.945 · Kelly's I.
+  47.575,-52.915 · Cape Spear 47.523,-52.620 (easternmost N. America) · Cape St. Francis 47.810,-52.785 ·
+  Signal Hill / The Narrows 47.571,-52.681 · Fort Amherst Head 47.564,-52.683 · Bauline Head 47.715,-52.985 ·
+  Topsail Head 47.530,-52.945 · Pouch Cove Head 47.762,-52.770
+- Towns: St. John's 47.561,-52.712 · Wabana (Bell I.) 47.633,-52.948 · Portugal Cove 47.617,-52.852 ·
+  Conception Bay South 47.525,-52.985 · Pouch Cove 47.758,-52.770
+- Tour: The Narrows → Cape Spear → Fort Amherst Head → Kelly's I. → Little Bell I. → Bell I. (Wabana) → Bauline Head → Cape St. Francis → Signal Hill
+- Weather: timeOfDay 7.5, windDirDeg 250, windStrength 18, waveHeight 2.2, atmosphere 0.7
+
+## cape-cod-islands — Cape Cod & The Islands (Massachusetts)
+- center: 41.50, -70.20 · bbox [-70.95, 41.20, -69.90, 42.10]
+- biome **temp** · resembles **japan**
+- Glacial-outwash sand: scrub-oak/pitch-pine moraine, grass-topped dunes, kettle ponds, long barrier
+  beaches; cool slate-teal water, salt marsh, soft sea haze; clay bluffs (Aquinnah/Wellfleet), few true cliffs.
+- Islands: Cape Cod peninsula 41.69,-70.20 ~100km (the "mainland" arm) · Martha's Vineyard 41.39,-70.62 ~30km
+  (Aquinnah clay cliffs) · Nantucket 41.284,-70.099 ~24km · Naushon 41.483,-70.758 (Elizabeth Is.) · Nashawena
+  41.429,-70.874 · Pasque 41.445,-70.835 · Cuttyhunk 41.425,-70.928 · Nonamesset 41.527,-70.685 · Monomoy
+  41.550,-70.000 (barrier spit) · Muskeget 41.335,-70.304 · Penikese 41.452,-70.913
+- Towns: Provincetown 42.051,-70.186 · Hyannis 41.653,-70.283 · Chatham 41.682,-69.960 · Woods Hole 41.524,-70.671 ·
+  Edgartown 41.389,-70.513 · Nantucket Town 41.284,-70.099 · Cuttyhunk Village 41.425,-70.926
+- Tour: Provincetown → Chatham → Monomoy → Nantucket → Muskeget → Martha's Vineyard → Cuttyhunk → Naushon → Woods Hole
+- Weather: timeOfDay 9, windDirDeg 225, windStrength 14, waveHeight 1.2, atmosphere 0.45
+
+## exe-estuary-south-devon — Exe Estuary & South Devon + Lundy (UK)
+- center: 50.58, -3.45 · bbox [-4.75, 50.30, -3.40, 51.25] (spans the Devon coast AND Lundy ~110 km NW)
+- biome **temp** · resembles **japan**
+- Warm red Permian sandstone cliffs/stacks (Jurassic Coast W end) over a tidal sand/mudflat estuary with the
+  Dawlish Warren dune spit; green farmland headlands, mild grey-green Channel water; Lundy is a stark grey-granite
+  cliff-ringed plateau. (Exeter itself is inland → absent; the estuary mouth anchors it.)
+- Islands/headlands: Lundy 51.180,-4.667 ~5km (marquee, Bristol Channel) · Dawlish Warren spit 50.610,-3.440 ·
+  Orcombe Point 50.609,-3.378 (Jurassic Coast start) · Straight Point 50.607,-3.355 · The Parson & Clerk 50.555,-3.470
+  (stack) · Hope's Nose 50.464,-3.490 · Berry Head 50.399,-3.485 · Thatcher Rock 50.448,-3.508 · The Ore Stone
+  50.450,-3.500 · Pole Sands 50.615,-3.430 (tidal bank)
+- Towns: Exmouth 50.620,-3.413 · Starcross 50.628,-3.444 · Topsham 50.683,-3.466 · Dawlish 50.581,-3.467 ·
+  Teignmouth 50.546,-3.494 · Torquay 50.462,-3.525 · Brixham 50.396,-3.513
+- Tour: Topsham → Starcross → Dawlish Warren → Orcombe Point → The Parson & Clerk → Teignmouth → Hope's Nose → Berry Head → Lundy
+- Weather: timeOfDay 17, windDirDeg 235, windStrength 12, waveHeight 1.0, atmosphere 0.4
+
+## apo-dauin-siquijor — Apo Island, Dauin & Siquijor (Philippines, Bohol Sea)
+- center: 9.18, 123.32 · bbox [123.20, 9.00, 123.70, 9.45]
+- biome **trop** · resembles **caribbean**
+- Volcanic isles in warm clear turquoise Bohol Sea — fringing/sloping coral reefs, black-and-white volcanic
+  sand, coconut-green slopes; small steep islets vs the long forested Negros coast.
+- Islands/coast: Apo I. 9.075,123.270 ~1.5km (marine sanctuary, off Dauin) · Siquijor 9.213,123.516 ~24km ·
+  Negros SE coast at Dauin 9.193,123.270 (muck-dive black sand) · Sumilon I. 9.428,123.391 (off SE Cebu, MPA) ·
+  Maite/Masaplod reef 9.220,123.290 · Tambobo (Bonbonon) headland 9.108,123.150 · Larena coast (Siquijor N)
+  9.247,123.589 · Salag Doong headland 9.188,123.655 · Paliton Point (Siquijor W) 9.207,123.470 · Zamboanguita
+  coast 9.100,123.200
+- Towns: Dauin 9.193,123.265 · Dumaguete 9.307,123.305 · Zamboanguita 9.100,123.190 · Apo I. village 9.075,123.270 ·
+  Larena 9.250,123.589 · Siquijor town 9.214,123.515
+- Tour: Dumaguete → Dauin → Apo I. → Zamboanguita → Tambobo Bay → Paliton Point → Siquijor town → Salag Doong → Sumilon I.
+- Weather: timeOfDay 11, windDirDeg 70, windStrength 9, waveHeight 0.5, atmosphere 0.25
+
+**Future / outliers:** Camiguin (volcanic island off N Mindanao, ~9.17°N 124.73°E) — its own tropical/hawaii-style region.
