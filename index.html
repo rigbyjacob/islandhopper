@@ -4472,8 +4472,8 @@ function buildOcean() {
   {
     const _shUV = vec2( positionWorld.x.sub(BATHY_RGN.x0).div(BATHY_RGN.x1-BATHY_RGN.x0),
                         positionWorld.z.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0) );
-    const _coastN = texture(bathyTex, clamp(_shUV, vec2(0.0), vec2(1.0))).g;   // distance to nearest coast
-    const _distFade = oneMinus(smoothstep(0.14, 0.46, _coastN));               // 1 near land → 0 out in open water
+    const _coastN = texture(bathyTex, clamp(_shUV, vec2(0.0), vec2(1.0))).g;   // distance to nearest coast (0 shore → 1 far)
+    const _distFade = oneMinus(smoothstep(0.42, 0.85, _coastN));               // full across the lagoon/near-shore water → tapers out only in the DEEP open sea (middle ground: not clipped at the shore, not infinite)
     oceanMat.colorNode = oceanColor().mul( _sunShadowMul(_distFade) );
   }
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
