@@ -17,7 +17,7 @@ ds.close()
 H, W = Zraw.shape
 # Pre-smooth the elevation: at STEP=60 the bare GEBCO sampling reads as speckle / "GIS noise". A light
 # gaussian blur of the SOURCE field gives a more polished, recognisable Earth for both colour & height.
-Z = gaussian_filter(Zraw, sigma=1.1, mode='nearest')
+Z = gaussian_filter(Zraw, sigma=0.5, mode='nearest')   # light source smooth (keeps the colour/coastlines crisp; the displacement gets its own smoothing below)
 land = Z >= 0
 
 # ---- COLOR (gentler relief shading + a final de-speckle blur for a cleaner, less noisy look) ----
@@ -43,7 +43,7 @@ img = img * ao[..., None]
 # mild saturation pop, then a light blur to polish out residual speckle
 gray = img.mean(-1, keepdims=True)
 img = np.clip(gray + (img - gray) * 1.10, 0, 255)
-img = gaussian_filter(img, sigma=(0.7, 0.7, 0), mode='nearest')
+img = gaussian_filter(img, sigma=(0.25, 0.25, 0), mode='nearest')   # light de-speckle only (was 0.7 — too blurry)
 img = np.clip(img, 0, 255).astype(np.uint8)[::-1]                  # flip so top = north
 
 # ---- DISPLACEMENT (sea level = mid-grey 0.5; COMPRESSED so the globe reads as Earth, not a knobbly potato) ----

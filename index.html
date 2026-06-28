@@ -5774,17 +5774,17 @@ function _arcLabel(text, color){                       // region name as curved 
     ctx.save(); ctx.translate(cx+Math.cos(ang)*R, cy+Math.sin(ang)*R); ctx.rotate(ang+Math.PI/2);
     ctx.strokeText(chars[i],0,0); ctx.fillStyle=fill; ctx.fillText(chars[i],0,0); ctx.restore(); ang+=aw/2; }
   const tex=new THREE.CanvasTexture(cv); tex.colorSpace=THREE.SRGBColorSpace; tex.anisotropy=4;
-  const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:true, depthWrite:false }));
-  sp.scale.set(0.62,0.62,1); sp.renderOrder=43; return sp;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false }));   // depthTest off → the curved label never gets clipped INTO the globe surface; back-side labels are culled by opacity in updateGlobe
+  sp.scale.set(0.6,0.6,1); sp.renderOrder=43; return sp;
 }
 function _regionGlow(artCol){                          // soft additive halo behind a diorama; opacity fades in when it's the current target
   const S=160, cv=document.createElement('canvas'); cv.width=cv.height=S;
   const ctx=cv.getContext('2d'), c=new THREE.Color(artCol), rgb=`${c.r*255|0},${c.g*255|0},${c.b*255|0}`;
-  const g=ctx.createRadialGradient(S/2,S/2,S*0.30, S/2,S/2,S*0.5);
-  g.addColorStop(0,`rgba(${rgb},0)`); g.addColorStop(0.6,`rgba(${rgb},0.7)`); g.addColorStop(1,`rgba(${rgb},0)`);   // hollow centre → a soft translucent ring hugging the diorama, not a wash over it
+  const g=ctx.createRadialGradient(S/2,S/2,S*0.40, S/2,S/2,S*0.5);
+  g.addColorStop(0,`rgba(${rgb},0)`); g.addColorStop(0.45,`rgba(${rgb},0.9)`); g.addColorStop(1,`rgba(${rgb},0)`);   // tight bright rim that hugs the diorama edge → reads as glow emanating FROM the geometry
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(S/2,S/2,S*0.5,0,7); ctx.fill();
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending, opacity:0 }));
-  sp.scale.set(0.56,0.56,1); sp.renderOrder=38; return { mesh:sp, mat:sp.material };
+  sp.scale.set(0.36,0.36,1); sp.renderOrder=38; return { mesh:sp, mat:sp.material };   // 0.36 ≈ the diorama plinth (R≈0.156) so the halo sits right at its rim, not floating far out
 }
 // A "fun" per-region colour drawn from each place's art history — used for the relief patch, ring & label.
 const REGION_ART_COL = {
@@ -5991,10 +5991,11 @@ function updateGlobe(dt){
     if (g.userData.beam) g.userData.beam.material.opacity=0.18+0.22*p; }
   const ease=1-Math.exp(-(dt||0.016)*9);                                 // quick ease in/out for the target highlight
   for (const g of _regionGlows){ const tgt=(g.id===_globeFocus)?0.45:0; g.mat.opacity += (tgt-g.mat.opacity)*ease; }
-  // Region labels: only the FOCUSED region's label (and only when it's on the front face) fades in — keeps
-  // clustered regions (e.g. Thailand/Halong/El Nido) from overlapping into an unreadable tangle.
+  // Region labels: ALL of them show, but fade out as they rotate toward the limb/back of the globe (so
+  // labels never bleed through from the far side). depthTest is off on the labels so they're never clipped
+  // INTO the globe surface — they always read on top of the diorama they ring.
   for (const L of _regionLabels){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
-    const tgt=(L.id===_globeFocus && wn.z>0.2) ? 1 : 0;
+    const tgt=clampJS((wn.z-0.1)/0.35, 0, 1);   // 0 near the limb (z≈0.1) → 1 when well on the front face
     L.spr.material.opacity += (tgt - L.spr.material.opacity)*ease;
     L.spr.visible = L.spr.material.opacity > 0.02; }
 }
