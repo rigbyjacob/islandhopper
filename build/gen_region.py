@@ -57,6 +57,12 @@ KNOWN = {
     'Đầu Gỗ': (107.042, 20.908), 'Đầu Bê': (107.145, 20.795), 'Cát Dứa': (106.998, 20.777),
     'Trống Mái': (107.035, 20.910), 'Cống Đỏ': (107.210, 20.840), 'Ngọc Vừng': (107.400, 20.865),
   },
+  'elnido': {   # Bacuit Archipelago (El Nido) + Calamian Islands (Coron/Busuanga), Palawan (lon,lat)
+    'Cadlao': (119.350, 11.221), 'Miniloc': (119.316, 11.151), 'Matinloc': (119.284, 11.167),
+    'Tapiutan': (119.264, 11.208), 'Pinagbuyutan': (119.392, 11.122), 'Helicopter I.': (119.338, 11.201),
+    'Snake I.': (119.341, 11.095), 'Coron': (120.241, 11.929), 'Culion': (119.970, 11.819),
+    'Busuanga': (120.028, 12.145), 'Malcapuya': (120.113, 11.791), 'Banana I.': (120.127, 11.771),
+  },
 }
 
 def read_asc(path):
