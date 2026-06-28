@@ -709,7 +709,7 @@ for (const r of Object.values(REGIONS)){
     for (const p of r.islandPolys) for (const v of p.r){ a=Math.min(a,v[0]);b=Math.max(b,v[0]);c=Math.min(c,v[1]);d=Math.max(d,v[1]); }
     const m=120; r.map={ minX:a-m, maxX:b+m, minZ:c-m, maxZ:d+m }; }
 }
-const REGION_ID = new URLSearchParams(location.search).get('region') || 'caribbean';
+const REGION_ID = new URLSearchParams(location.search).get('region') || new URLSearchParams(location.search).get('globe') || 'caribbean';   // ?globe=<id> boots into the globe focused on that region (see firstFrame)
 let REGION = REGIONS[REGION_ID] || REGIONS.caribbean;
 const proj = (lon, lat) => ({ x: (lon - REGION.lon0) * REGION.K * (REGION.lonscale ?? 1), z: -(lat - REGION.lat0) * REGION.K });   // lonscale (cos lat0) keeps E-W:N-S isometric at high latitudes (reads REGION live)
 // ---- region-derived data — mutable so we can SWAP regions live (Path A: stream a new region in place, no reload) ----
@@ -1885,6 +1885,7 @@ async function init() {
       // one-time GPU-timestamp support probe (so a perf run knows whether GPU ms will populate)
       if (renderer.resolveTimestampsAsync) setTimeout(()=>{ try{ renderer.resolveTimestampsAsync().then(ms=>console.log('[perf] GPU timestamps '+((typeof ms==='number'&&ms>0)?('AVAILABLE ('+ms.toFixed(2)+' ms/frame)'):'unavailable on this device/Chrome'))).catch(()=>console.log('[perf] GPU timestamps unavailable')); }catch(_){} }, 1500);
       if (new URLSearchParams(location.search).has('dive')){ const u=new URL(location.href); u.searchParams.delete('dive'); try{history.replaceState(null,'',u.toString());}catch(_){} startDescent(); }   // arrived from a globe dive → descend from orbit
+      else if (new URLSearchParams(location.search).has('globe')){ setTimeout(()=>{ try{ openWorldMap(); }catch(_){} }, 300); }   // ?globe=<id> → boot straight into the globe, focused on <id> (REGION_ID already set to it)
       else if (!new URLSearchParams(location.search).has('nodemo') && typeof enterDemoMode==='function' && demoScenarios.length){   // boot straight into the curated demo (use ?nodemo to edit freely)
         setTimeout(()=>{ try{ enterDemoMode(); }catch(_){} }, 700); }
       const _pq = new URLSearchParams(location.search).get('perf');   // ?perf or ?perf=label → auto-run a perf sweep once booted (label defaults to baseline/optimized per ?noopt)
@@ -5990,7 +5991,7 @@ const REGION_META = {
   apo:       { tag:'Apo, Dauin & Siquijor',blurb:'Volcanic isles & clear reefs' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
-let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[];
+let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[];
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
@@ -6151,7 +6152,7 @@ function buildRegionPatch(r){
 }
 function buildGlobe(){
   globeScene=new THREE.Scene();
-  globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,4.0);
+  globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,_globeZ);
   globeScene.add(new THREE.HemisphereLight(0xf8fbff, 0x3c4757, 1.5));    // strong bright fill so EVERY diorama reads vivid (not muddy), wherever it sits on the planet
   const dir=new THREE.DirectionalLight(0xfff4e2, 1.9); dir.position.set(2.5,2,3.5); globeScene.add(dir);    // warm sunny key light models the relief
   const fill=new THREE.DirectionalLight(0xe0ecff, 0.9); fill.position.set(-2.5,-1.2,-2.0); globeScene.add(fill);   // cool back-fill lifts the shadow-side dioramas so none look dull
@@ -6177,18 +6178,19 @@ function buildGlobe(){
       } catch(_e){ c2.filter='grayscale(0.95) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0); }   // fallback if readback is ever blocked
       const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; ocean.material.map=t; ocean.material.color.setScalar(1); ocean.material.needsUpdate=true; };
     img.src=window.WORLDMAP; }
-  _globePicks=[]; _regionGlows=[]; _regionLabels=[];
+  _globePicks=[]; _regionGlows=[]; _regionLabels=[]; _regionDioramas=[];
   for (const r of Object.values(REGIONS)){
     const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const glow=_regionGlow(artCol); glow.mesh.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.01)); globeSpin.add(glow.mesh); _regionGlows.push({ id:r.id, mat:glow.mat });   // target highlight (billboard)
     const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
-    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R-0.012); globeSpin.add(patch); _globePicks.push(patch); }   // sink the plinth slightly so it seats flush on the sphere
-    const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); globeSpin.add(c); _globePicks.push(c);
+    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R-0.012); patch.scale.setScalar(0.5); globeSpin.add(patch); _globePicks.push(patch); }   // sink the plinth slightly so it seats flush on the sphere; start at the small declutter size
+    const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); c.scale.setScalar(0.5); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
     const _h={}; new THREE.Color(artCol).getHSL(_h);                  // push each art colour to a near-max-saturation, bright, "fun" version so labels really POP off the gray Earth
     const labCol=new THREE.Color().setHSL(_h.h, Math.min(1,_h.s*1.4+0.35), clampJS(_h.l*0.4+0.64, 0.68, 0.86)).getHex();
     const lab=_arcLabel(m.tag, labCol); lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.018)); lab.material.opacity=0; globeSpin.add(lab);   // curved label ringing the diorama border
     _regionLabels.push({ id:r.id, spr:lab, n:latLonToVec(r.lat0||0, r.lon0||0, 1) });   // declutter: only the focused, front-facing region's label fades in (see updateGlobe)
+    if (patch) _regionDioramas.push({ id:r.id, patch, marker:c, lab, n:latLonToVec(r.lat0||0, r.lon0||0, 1), s:0.5 });   // per-region scale: focus scales up, neighbours stay small; lab hugs the diorama
   }
   faceRegion(REGION.id);
 }
@@ -6201,7 +6203,7 @@ let _diveZoom=null, _globeRise=null, _diveAfterSlerp=null, _descent=null, _desce
 function _diveFade(a, id){ let f=document.getElementById('dive-fade');
   if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;'; document.body.appendChild(f); }
   const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018; f.style.background='#'+('000000'+(c>>>0).toString(16)).slice(-6); f.style.opacity=clampJS(a,0,1); }
-let _globeIdle=0, _globeLevel=null, _globeFocus=null, _wmPrevPanel='';
+let _globeIdle=0, _globeLevel=null, _globeFocus=null, _wmPrevPanel='', _globeZ=3.0, _hoverId=null;   // _globeZ: orbit distance (smaller = bigger globe on screen); scroll wheel adjusts it. _hoverId: region under cursor (overrides the implicit centre focus)
 function _faceQuat(localVec){ const f=localVec.clone().normalize();      // quaternion that puts localVec dead-front (+Z) with the north pole upright (no roll)
   const phi=Math.asin(clampJS(f.y,-1,1)), lam=Math.atan2(f.x,f.z);
   const qy=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), -lam);
@@ -6218,14 +6220,14 @@ function updateGlobe(dt){
   if (!globeSpin) return;
   const cv=renderer.domElement, a=cv.width/cv.height; if (Math.abs(globeCam.aspect-a)>1e-3){ globeCam.aspect=a; globeCam.updateProjectionMatrix(); }   // match the ACTUAL render-target aspect (not the window — they differ under an aspect-lock), or the sphere stretches
   if (_globeRise){ _globeRise.t += (dt||0.016)/_globeRise.dur; const k=Math.min(_globeRise.t,1), e=1-Math.pow(1-k,3);   // reverse dive: ease-OUT, sucked back up to orbit
-    globeCam.position.set(0,0, 1.05+(4.0-1.05)*e); globeCam.lookAt(0,0,0);
+    globeCam.position.set(0,0, 1.05+(_globeZ-1.05)*e); globeCam.lookAt(0,0,0);
     _diveFade(Math.max(0, 1 - k*1.8), _globeRise.id);                                 // clear the region colour over the first ~55%
-    if (k>=1){ _globeRise=null; globeCam.position.set(0,0,4.0); _diveFade(0); }
+    if (k>=1){ _globeRise=null; globeCam.position.set(0,0,_globeZ); _diveFade(0); }
     return; }
   if (_diveZoom){ _diveZoom.t += (dt||0.016)/_diveZoom.dur; const k=Math.min(_diveZoom.t,1), e=k*k;   // accelerate toward the surface
-    globeCam.position.set(0,0, 4.0-(4.0-1.05)*e); globeCam.lookAt(0,0,0);
+    globeCam.position.set(0,0, _globeZ-(_globeZ-1.05)*e); globeCam.lookAt(0,0,0);
     _diveFade(Math.max(0,(k-0.5)*2), _diveZoom.id);                                   // fade to the region colour over the last half of the dive
-    if (k>=1){ const d=_diveZoom; _diveZoom=null; globeCam.position.set(0,0,4); _diveLand(d); }
+    if (k>=1){ const d=_diveZoom; _diveZoom=null; globeCam.position.set(0,0,_globeZ); _diveLand(d); }
     return; }
   if (!_globeDrag && !_globeLevel){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // flick momentum — fast pulls keep spinning, slow drags settle at once
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
@@ -6253,17 +6255,30 @@ function updateGlobe(dt){
     if (g.userData.disc) g.userData.disc.material.opacity=0.12+0.18*p;
     if (g.userData.beam) g.userData.beam.material.opacity=0.18+0.22*p; }
   const ease=1-Math.exp(-(dt||0.016)*9);                                 // quick ease in/out for the target highlight
-  for (const g of _regionGlows){ const tgt=(g.id===_globeFocus)?0.45:0; g.mat.opacity += (tgt-g.mat.opacity)*ease; }
-  // Region labels: ALL of them show, but fade out as they rotate toward the limb/back of the globe (so
-  // labels never bleed through from the far side). depthTest is off on the labels so they're never clipped
-  // INTO the globe surface — they always read on top of the diorama they ring.
+  // TARGET selection: the region under the cursor (hover) wins; otherwise the single MOST-CENTRED region within a
+  // TIGHT cone becomes the target. So just rotating the globe targets whatever you bring to dead-centre — and the
+  // target gets the full treatment below: scale-up + halo + it's what Enter dives into.
+  if (_hoverId) _globeFocus=_hoverId;
+  else { let best=_globeFocus, bz=0.992;                                  // cos(~7°) — only a region right at the centre
+    for (const d of _regionDioramas){ const fz=d.n.clone().applyQuaternion(globeSpin.quaternion).z; if(fz>bz){ bz=fz; best=d.id; } }
+    _globeFocus=best; }
+  for (const g of _regionGlows){ const tgt=(g.id===_globeFocus)?0.45:0; g.mat.opacity += (tgt-g.mat.opacity)*ease; }   // halo follows the target
+  // DECLUTTER: every diorama sits small except the TARGET, which scales up to the full caricature size. Labels
+  // track their diorama's size so they hug the rim, but never drop below a minimum so they stay readable.
+  for (const d of _regionDioramas){
+    const tgt = (d.id===_globeFocus) ? 1.25 : 0.5;
+    d.s += (tgt - d.s)*ease;
+    d.patch.scale.setScalar(d.s); if (d.marker) d.marker.scale.setScalar(d.s);
+    if (d.lab){ const ls=clampJS(d.s*0.5, 0.30, 0.62); d.lab.scale.set(ls,ls,1); }   // hug the diorama; min font so it stays legible
+  }
+  // labels fade out toward the limb/back so they never bleed through from the far side (depthTest off → never clipped)
   for (const L of _regionLabels){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
-    const tgt=clampJS((wn.z-0.1)/0.35, 0, 1);   // 0 near the limb (z≈0.1) → 1 when well on the front face
+    const tgt=clampJS((wn.z-0.1)/0.35, 0, 1);
     L.spr.material.opacity += (tgt - L.spr.material.opacity)*ease;
     L.spr.visible = L.spr.material.opacity > 0.02; }
 }
 let _globeMoved=0;
-function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; }
+function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; _hoverId=null; }   // start dragging → the implicit centre focus drives the target
 const _gRC=new THREE.Raycaster(), _gNDC=new THREE.Vector2();
 function _globeRegionAt(e){ if(!renderer||!globeCam) return null;
   const rect=renderer.domElement.getBoundingClientRect();
@@ -6275,7 +6290,7 @@ function _globeRegionAt(e){ if(!renderer||!globeCam) return null;
 function _gPointerMove(e){ if(!worldMapOpen) return;
   if(!_globeDrag){                                                       // hovering (no drag) → set that region as the target (the glow follows the cursor)
     if(_diveZoom||_globeRise||_diveAfterSlerp||demoMode) return;
-    const id=_globeRegionAt(e); if(id) _globeFocus=id; return;
+    _hoverId=_globeRegionAt(e); if(_hoverId) _globeFocus=_hoverId; return;   // hover overrides the implicit centre focus
   }
   const dx=e.clientX-_globeDrag.x, dy=e.clientY-_globeDrag.y; _globeDrag.x=e.clientX; _globeDrag.y=e.clientY;
   if (Math.abs(dx)>90 || Math.abs(dy)>90) return;                      // ignore cursor teleports (not a real drag)
@@ -6335,6 +6350,9 @@ function buildWorldMap(){
   window.addEventListener('pointerup', e=>{ ov.classList.remove('grabbing'); _gPointerUp(e); });
   ov.addEventListener('click', _gClick);
   ov.addEventListener('dblclick', _gDblClick);   // double-click an island = dive in, same as a single click
+  ov.addEventListener('wheel', (e)=>{ if(!worldMapOpen) return; e.preventDefault();   // scroll to zoom the globe (bigger globe → dense clusters spread out & stay legible)
+    _globeZ = clampJS(_globeZ * (e.deltaY>0 ? 1.1 : 0.9), 1.7, 5.5);
+    if(globeCam && !_diveZoom && !_globeRise) globeCam.position.set(0,0,_globeZ); }, { passive:false });
   window.addEventListener('keydown', _gKey, true);    // capture phase so the sailing handler never sees globe keys
   buildGlobe();
 }

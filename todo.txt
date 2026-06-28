@@ -112,3 +112,9 @@ Every panel should default to close, but remember that choice between refreshes.
 Instead of the pirate skull and crossbones when closing, let's use a ship steering wheel badge.
 
 On a mobile phone or tablet can we use the accelerometer to act like WASD steering (but with a button to toggle on and off, starting with off).
+
+Let's temporarily hide these regiosn until we can do more polishing:
+Exe & South Devon
+Aran Islands
+Small isles & Sky
+Faroe Islands
