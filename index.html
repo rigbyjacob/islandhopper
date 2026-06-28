@@ -6436,12 +6436,12 @@ function startDescent(){
   const n=latLonToVec(r.lat0||0, r.lon0||0, 1);
   const Q=_faceQuat(n).multiply(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), n));   // diorama orientation when centred on the globe
   const look=new THREE.Vector3(0,0,-1).applyQuaternion(Q.clone().invert()).normalize();                   // globe cam looks toward -z → matching look dir in the region's (=world) frame
-  const dist=ext*1.05;
-  const camPos=new THREE.Vector3(cx,0,cz).addScaledVector(look,-dist); camPos.y=Math.max(camPos.y, ext*0.3);
+  const dist=ext*0.6;   // closer in than framing the WHOLE region, so the rectangular map edges don't show
+  const camPos=new THREE.Vector3(cx,0,cz).addScaledVector(look,-dist); camPos.y=Math.max(camPos.y, ext*0.2);
   flyState.pos.copy(camPos);
   flyState.yaw=Math.atan2(look.z, look.x); flyState.pitch=clampJS(Math.asin(clampJS(look.y,-1,1)), -1.45, 1.45);
   flyState.keys={};
-  _descent={ t:0, dur:3.4, hold:0.32, fromPos:flyState.pos.clone(), fromYaw:flyState.yaw, fromPitch:flyState.pitch };
+  _descent={ t:0, dur:2.6, hold:0, fromPos:flyState.pos.clone(), fromYaw:flyState.yaw, fromPitch:flyState.pitch };   // no hold — keep diving straight through to the ship
   _diveFade(1, REGION.id);
 }
 // ============================================================================
