@@ -119,7 +119,7 @@ Small isles & Sky
 Faroe Islands
 Montauk -> can we make this all of Long Island
 
-The boat is no longer the main target all the time, that's from the very beginning of this project. Now that you can follow the boat, the plane, sub or UFO or even fly around, is there a need to revist this shadow frustum design?
+DONE """The boat is no longer the main target all the time, that's from the very beginning of this project. Now that you can follow the boat, the plane, sub or UFO or even fly around, is there a need to revist this shadow frustum design?
 """
 Frustum — it's a tight ±340u box around the boat (kept tight for sharp palm-frond shadows). Fine for the boat, but a tall island's long shadow can run past its edge.
 """
@@ -131,9 +131,9 @@ The fleet (sub/plane/UFO) only cast, not receive — easy to add.
 """
 
 Thig big one, my concern with a shadow-catcher plane is that it will not match the nice contoured ocean?: """Ocean surface — this is the headline you want, and it's the hard one: the sea is drawn with an unlit custom material (MeshBasicNodeMaterial — all the water look is hand-built in the shader, with no lighting model), so receiveShadow does nothing on it. To get island shadows on the water I'd either add manual shadow-map sampling into the water shader, or lay a dedicated shadow-catcher plane at the (curved) sea surface that only darkens where shadowed. The catcher is the cleaner route."""
+"""
+
+DONE So the first thing I notice about the sun facing view: dev.look('Kolombangara', -17, 24, 850) is that if i nod the camera up and down (no translation), the mountain becomes dark or lighter, dramatically so. You said this was impossible, but is clearly happening.
 
 
-So the first thing I notice about the sun facing view: dev.look('Kolombangara', -17, 24, 850) is that if i nod the camera up and down (no translation), the mountain becomes dark or lighter, dramatically so. You said this was impossible, but is clearly happening.
-
-
-24d30e6
+24d30e6 = shadow fix
