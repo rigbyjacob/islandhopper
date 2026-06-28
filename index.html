@@ -650,7 +650,7 @@ if (window.MONTAUK) REGIONS.montauk = Object.assign({}, window.MONTAUK, {
   seaTint: [0.84, 1.02, 1.04], foam: 0.5,
   palette: { land: { seabed:0x2c6f74, wetsand:0xc9bd92, sand:0xe6dcb4, grass:0x6a874a, forest:0x44602f, rock:0xa89b7e, cliff:0x9a8a6a }, shrub: [0x5a7a3a, 0x3f5526] },
   flora: { palms:false, density:0.8 },
-  cities: [ [-71.95,41.04,18], [-72.29,41.00,14], [-72.36,41.10,12] ], cityLabels: [ ['Montauk',-71.95,41.04],['Sag Harbor',-72.29,41.00],['Greenport',-72.36,41.10] ],
+  cities: [ [-71.95,41.04,16], [-72.29,41.00,12], [-73.66,40.59,16], [-73.13,40.63,12] ], cityLabels: [ ['Montauk',-71.95,41.04],['Sag Harbor',-72.29,41.00],['Long Beach',-73.66,40.59],['Fire Island',-73.13,40.63] ],
   defaults: { timeOfDay:18, atmosphere:0.4, windDirDeg:200, windStrength:12, waveHeight:1.0, stormOn:false, stormIntensity:0.0 },
 });
 // ---- Kodiak Archipelago · Alaska (fjords, spruce ridges, fog) — resembles sweden (nord) ----
@@ -703,6 +703,9 @@ if (window.APO) REGIONS.apo = Object.assign({}, window.APO, {
   cities: [ [123.305,9.307,24], [123.265,9.193,12], [123.515,9.214,12] ], cityLabels: [ ['Dumaguete',123.305,9.307],['Dauin',123.265,9.193],['Siquijor',123.515,9.214] ],
   defaults: { timeOfDay:11, atmosphere:0.25, windDirDeg:70, windStrength:9, waveHeight:0.5, stormOn:false, stormIntensity:0.0 },
 });
+// TEMP: hide regions still needing polish (data stays loaded; just drop them from the registry → off the globe,
+// not navigable). Re-enable by removing the id from this list.
+['faroe','skye','exe'].forEach(id=>{ delete REGIONS[id]; });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
   if (!r.map && r.islandPolys){ let a=1e9,b=-1e9,c=1e9,d=-1e9;
@@ -1885,7 +1888,9 @@ async function init() {
       // one-time GPU-timestamp support probe (so a perf run knows whether GPU ms will populate)
       if (renderer.resolveTimestampsAsync) setTimeout(()=>{ try{ renderer.resolveTimestampsAsync().then(ms=>console.log('[perf] GPU timestamps '+((typeof ms==='number'&&ms>0)?('AVAILABLE ('+ms.toFixed(2)+' ms/frame)'):'unavailable on this device/Chrome'))).catch(()=>console.log('[perf] GPU timestamps unavailable')); }catch(_){} }, 1500);
       if (new URLSearchParams(location.search).has('dive')){ const u=new URL(location.href); u.searchParams.delete('dive'); try{history.replaceState(null,'',u.toString());}catch(_){} startDescent(); }   // arrived from a globe dive → descend from orbit
-      else if (new URLSearchParams(location.search).has('globe')){ setTimeout(()=>{ try{ openWorldMap(); }catch(_){} }, 300); }   // ?globe=<id> → boot straight into the globe, focused on <id> (REGION_ID already set to it)
+      else if (new URLSearchParams(location.search).has('globe')){   // ?globe=<id> → boot straight into the globe, focused on <id> (REGION_ID already set to it)
+        const _tryGlobe=()=>{ if(document.getElementById('worldmap') && globeSpin){ try{ openWorldMap(); }catch(_){} } else setTimeout(_tryGlobe, 120); };  // poll until the globe is built (timing varies with GPU compile)
+        setTimeout(_tryGlobe, 250); }
       else if (!new URLSearchParams(location.search).has('nodemo') && typeof enterDemoMode==='function' && demoScenarios.length){   // boot straight into the curated demo (use ?nodemo to edit freely)
         setTimeout(()=>{ try{ enterDemoMode(); }catch(_){} }, 700); }
       const _pq = new URLSearchParams(location.search).get('perf');   // ?perf or ?perf=label → auto-run a perf sweep once booted (label defaults to baseline/optimized per ?noopt)
@@ -5983,7 +5988,7 @@ const REGION_META = {
   aran:      { tag:'Aran Islands',         blurb:'Grey karst & Atlantic cliffs' },
   faroe:     { tag:'Faroe Islands',        blurb:'Basalt sea-cliffs & fjords' },
   skye:      { tag:'Small Isles & Skye',   blurb:'Cuillin peaks & sea-lochs' },
-  montauk:   { tag:'Montauk & East End',   blurb:'Moraine bluffs & salt marsh' },
+  montauk:   { tag:'Long Island',          blurb:'Moraine bluffs, bays & barrier beaches' },
   kodiak:    { tag:'Kodiak Archipelago',   blurb:'Fjords, spruce ridges & fog' },
   stjohns:   { tag:"St. John's",           blurb:'Cold-Atlantic sea-cliffs & fog' },
   capecod:   { tag:'Cape Cod & Islands',   blurb:'Sandy moraine & barrier beaches' },
@@ -6183,14 +6188,14 @@ function buildGlobe(){
     const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const glow=_regionGlow(artCol); glow.mesh.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.01)); globeSpin.add(glow.mesh); _regionGlows.push({ id:r.id, mat:glow.mat });   // target highlight (billboard)
     const patch=buildRegionPatch(r);                     // real island outlines on the planet (Phase 4b first pass)
-    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R-0.012); patch.scale.setScalar(0.5); globeSpin.add(patch); _globePicks.push(patch); }   // sink the plinth slightly so it seats flush on the sphere; start at the small declutter size
+    if (patch){ _placeOnSphere(patch, r.lat0||0, r.lon0||0, GLOBE_R-0.012); patch.scale.setScalar(0.5); globeSpin.add(patch); _globePicks.push(patch); }   // sink the plinth slightly so it seats flush on the sphere; start at the declutter size
     const c=makeRegionMarker(r.id, r.id===REGION.id, artCol); _placeOnSphere(c, r.lat0||0, r.lon0||0, GLOBE_R); c.scale.setScalar(0.5); globeSpin.add(c); _globePicks.push(c);
     const m=REGION_META[r.id]||{tag:r.name||r.id};
     const _h={}; new THREE.Color(artCol).getHSL(_h);                  // push each art colour to a near-max-saturation, bright, "fun" version so labels really POP off the gray Earth
     const labCol=new THREE.Color().setHSL(_h.h, Math.min(1,_h.s*1.4+0.35), clampJS(_h.l*0.4+0.64, 0.68, 0.86)).getHex();
     const lab=_arcLabel(m.tag, labCol); lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.018)); lab.material.opacity=0; globeSpin.add(lab);   // curved label ringing the diorama border
     _regionLabels.push({ id:r.id, spr:lab, n:latLonToVec(r.lat0||0, r.lon0||0, 1) });   // declutter: only the focused, front-facing region's label fades in (see updateGlobe)
-    if (patch) _regionDioramas.push({ id:r.id, patch, marker:c, lab, n:latLonToVec(r.lat0||0, r.lon0||0, 1), s:0.5 });   // per-region scale: focus scales up, neighbours stay small; lab hugs the diorama
+    if (patch) _regionDioramas.push({ id:r.id, patch, marker:c, lab, glow:glow.mesh, n:latLonToVec(r.lat0||0, r.lon0||0, 1), s:0.5 });   // per-region scale: focus scales up subtly; lab + glow track the diorama
   }
   faceRegion(REGION.id);
 }
@@ -6266,9 +6271,10 @@ function updateGlobe(dt){
   // DECLUTTER: every diorama sits small except the TARGET, which scales up to the full caricature size. Labels
   // track their diorama's size so they hug the rim, but never drop below a minimum so they stay readable.
   for (const d of _regionDioramas){
-    const tgt = (d.id===_globeFocus) ? 1.25 : 0.5;
+    const tgt = (d.id===_globeFocus) ? 0.56 : 0.5;                       // VERY subtle grow on the target — the halo does the real highlighting; the scale is just a little animation hint
     d.s += (tgt - d.s)*ease;
     d.patch.scale.setScalar(d.s); if (d.marker) d.marker.scale.setScalar(d.s);
+    if (d.glow) d.glow.scale.setScalar(0.46*d.s);                        // halo tracks the diorama so it rings the hero (fixed size → it hid behind the big one)
     if (d.lab){ const ls=clampJS(d.s*0.5, 0.30, 0.62); d.lab.scale.set(ls,ls,1); }   // hug the diorama; min font so it stays legible
   }
   // labels fade out toward the limb/back so they never bleed through from the far side (depthTest off → never clipped)
