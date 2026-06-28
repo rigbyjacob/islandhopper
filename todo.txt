@@ -131,3 +131,6 @@ The fleet (sub/plane/UFO) only cast, not receive — easy to add.
 """
 
 Thig big one, my concern with a shadow-catcher plane is that it will not match the nice contoured ocean?: """Ocean surface — this is the headline you want, and it's the hard one: the sea is drawn with an unlit custom material (MeshBasicNodeMaterial — all the water look is hand-built in the shader, with no lighting model), so receiveShadow does nothing on it. To get island shadows on the water I'd either add manual shadow-map sampling into the water shader, or lay a dedicated shadow-catcher plane at the (curved) sea surface that only darkens where shadowed. The catcher is the cleaner route."""
+
+
+So the first thing I notice about the sun facing view: dev.look('Kolombangara', -17, 24, 850) is that if i nod the camera up and down (no translation), the mountain becomes dark or lighter, dramatically so. You said this was impossible, but is clearly happening.

@@ -1842,6 +1842,7 @@ async function init() {
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
     _updateMusic(dt);   // intro music: play once the follow cam settles, fade out before the end
     uCurveK.value = P.curveWorld ? 1/(2*P.curveRadius) : 0;   // "tiny planet" curvature strength (1/2R), 0 = flat
+    { const _cc=(typeof activeCam!=='undefined'&&activeCam)?activeCam:camera; if(_cc) uCurveCenter.value.copy(_cc.position); }   // curve centre = the view camera (NOT the per-pass cameraPosition) so the shadow pass curves the terrain the same way
     uHorizonDrop.value = P.curveWorld ? Math.min(0.16, 765/P.curveRadius) : 0;   // horizon dip scales with curve strength (0.085 @ R=9000)
     // ATMOSPHERE: project the sun to screen space for god rays, and master the drama with the slider
     uAtmo.value = P.atmosphere;
@@ -1944,7 +1945,8 @@ const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
 const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
 const uBathy   = uniform(0.0);   // bathymetry overlay strength (0 off → 1 on)
 const uContour = uniform(0.0);   // iso-depth contour LINES strength — independent of the bathymetry ramp
-const uCurveK  = uniform(0.0);   // "tiny planet" world curvature: world Y drops by dist²·uCurveK from the camera (0 = flat)
+const uCurveK  = uniform(0.0);   // "tiny planet" world curvature: world Y drops by dist²·uCurveK from the curve centre (0 = flat)
+const uCurveCenter = uniform(new THREE.Vector3());   // the point the tiny-planet bulge sits under. MUST be a uniform (not the shader's cameraPosition): the shadow pass renders from the SUN, so cameraPosition there is the light → terrain would curve to garbage in the shadow map (mountain stops occluding → no cast shadow + light leaks through). A uniform = same curve in the main AND shadow pass, matching the CPU-curved props.
 const uHorizonDrop = uniform(0.0); // tiny-planet: lower the sky horizon band + sun/moon disks so they rise from the curved sea
 const uWarm = uniform(0.0);        // sunrise/sunset warmth (0 day → 1 at the horizon) — dims+reddens the sun disk so it's a ruddy ball
 const uAtmo = uniform(0.6);        // ATMOSPHERE master (0..1 slider): god rays, horizon haze, sunset bloom drama
@@ -3890,7 +3892,7 @@ function buildBathyTexture(){
 // transform. cameraPosition keeps the bulge always under the viewer. curveDropJS mirrors it for JS-positioned props.
 function curveNode(localPos){
   const wp  = modelWorldMatrix.mul(vec4(localPos, 1.0));
-  const dxz = wp.xz.sub(cameraPosition.xz);
+  const dxz = wp.xz.sub(uCurveCenter.xz);   // uniform centre (not per-pass cameraPosition) → identical curve in the shadow pass
   const drop = dot(dxz, dxz).mul(uCurveK);
   const wc  = vec4(wp.x, wp.y.sub(drop), wp.z, float(1.0));
   return modelWorldMatrixInverse.mul(wc).xyz;
@@ -4791,16 +4793,15 @@ function buildTerrain() {
     nrm.setXYZ(i, nX/L, nY/L, nZ/L);
   }
   nrm.needsUpdate=true;
-  const mat = new THREE.MeshStandardNodeMaterial({ metalness:0.0 });
-  // island-on-island shadows, GATED above the waterline (mesh sits at y=-0.05, so land is y>0) — keeps the seabed clean
-  mat.colorNode = attribute('color','vec3').mul( _sunShadowMul(smoothstep(0.0, 2.0, positionWorld.y)) );
-  mat.roughnessNode = attribute('arough','float');   // wet sand glossy, foliage matte, rock in between
+  // MATTE terrain (Lambert): purely diffuse + ambient + shadow, NO specular/Fresnel → shading is view-INDEPENDENT
+  // (the GGX specular of the old PBR material was the term that slid with the camera and lit up backlit faces).
+  const mat = new THREE.MeshLambertNodeMaterial({});
+  mat.colorNode = attribute('color','vec3');   // sun occlusion handled natively (receiveShadow below)
   mat.positionNode = curveNode(positionLocal);        // tiny-planet curvature — islands bend with the sea
   const mesh = new THREE.Mesh(geo, mat); mesh.position.y = -0.05;
-  // castShadow yes (islands shade the sea-floor/boat), but DON'T receive the sun shadow: this is one big
-  // land+seabed mesh, so receiving would paint the sun shadow-camera's rectangular frustum footprint onto the
-  // deep seabed (visible through the bathymetry water as a moving rectangle). Slope-shading gives island relief.
-  mesh.castShadow = true; mesh.receiveShadow = false; scene.add(mesh); terrainMesh = mesh;
+  // cast + receive natively. The region-fit shadow frustum keeps the map edge out in open ocean, so the old
+  // seabed-rectangle (the reason receive used to be off) no longer crosses the visible sea floor.
+  mesh.castShadow = true; mesh.receiveShadow = true; scene.add(mesh); terrainMesh = mesh;
 }
 
 // ============================================================================
@@ -4870,12 +4871,12 @@ function buildClipmapTerrain(){
     geo.setIndex(idx);
     geo.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0), 1e7);   // verts move in the shader → never frustum-cull
     const uCenter=uniform(new THREE.Vector2(0,0));
-    const mat=new THREE.MeshStandardNodeMaterial({ metalness:0.0, roughness:0.92 });
+    const mat=new THREE.MeshLambertNodeMaterial({});   // MATTE: diffuse + ambient + shadow only, no specular → view-independent shading
     mat.polygonOffset=true; mat.polygonOffsetFactor=l*1.0; mat.polygonOffsetUnits=l*8.0;   // push coarser rings back → in the overlap band the finer ring always wins (no z-fight)
     const e=float(cell);
     // VERTEX: world XZ = local grid offset + this ring's snapped centre; displace from the height texture; tiny-planet curve
     const vx=positionLocal.x.add(uCenter.x), vz=positionLocal.z.add(uCenter.y), vh=_hAt(vx,vz);
-    const vd=vec2(vx.sub(cameraPosition.x), vz.sub(cameraPosition.z));
+    const vd=vec2(vx.sub(uCurveCenter.x), vz.sub(uCurveCenter.z));   // uniform centre (not per-pass cameraPosition) → terrain curves identically in the shadow pass, so the mountain is a real occluder
     mat.positionNode=vec3(vx, vh.sub(dot(vd,vd).mul(uCurveK)), vz);
     // FRAGMENT: ramp colour + gradient normal, sampled from the height texture at the world XZ
     const wx=positionWorld.x, wz=positionWorld.z;
@@ -4895,19 +4896,17 @@ function buildClipmapTerrain(){
     const occ=_hAt(wx.add(aoR),wz).sub(h).max(0).add(_hAt(wx.sub(aoR),wz).sub(h).max(0)).add(_hAt(wx,wz.add(aoR)).sub(h).max(0)).add(_hAt(wx,wz.sub(aoR)).sub(h).max(0));
     const ao=float(1).sub(clamp(occ.div(aoR).mul(0.45),0,0.45));
     const grain=_nfbm2(vec2(wx,wz).mul(0.12)).sub(0.5).mul(0.12).mul(landMask);   // per-pixel colour grain on land
-    // ISLAND-on-ISLAND shadows, GATED above the waterline (h>0) so the deep seabed never receives it → no rectangle on
-    // the sea floor in bathymetry x-ray mode; the in-map mask (inside _sunShadowMul) keeps everything off-map lit too.
-    mat.colorNode = col.mul(ao).add(grain).mul( _sunShadowMul(smoothstep(0.0, 2.0, h)) );
+    mat.colorNode = col.mul(ao).add(grain);   // sun occlusion is handled NATIVELY by the engine (receiveShadow below) → correct directional diffuse + a real mountain cast/self shadow, not a hand-rolled per-pixel darken
     // gradient normal + micro-normal shimmer (fbm tilt on land) — the rocky/leafy sparkle under the sun
     const nB=normalize(vec3(hL.sub(hR), e.mul(2.0), hD.sub(hU)));
     const mgx=_nfbm2(vec2(wx.add(0.9),wz).mul(0.55)).sub(_nfbm2(vec2(wx.sub(0.9),wz).mul(0.55))).mul(landMask);
     const mgz=_nfbm2(vec2(wx,wz.add(0.9)).mul(0.55)).sub(_nfbm2(vec2(wx,wz.sub(0.9)).mul(0.55))).mul(landMask);
     mat.normalNode=normalize(vec3(nB.x.sub(mgx.mul(0.6)), nB.y, nB.z.sub(mgz.mul(0.6))));
-    // ALL rings CAST (this is why tall islands had no shadow in LOD mode — casting was off). The shadow map is now
-    // fit to the whole region, so far islands must cast too: fine inner rings give crisp near shadows, coarse outer
-    // rings cover the rest of the region (blockier, but the palm casters add the fine detail). Receiving is handled
-    // manually in the colorNode above (gated above water), so receiveShadow stays off.
-    const mesh=new THREE.Mesh(geo, mat); mesh.frustumCulled=false; mesh.castShadow=true; mesh.receiveShadow=false; mesh.renderOrder=l; scene.add(mesh);
+    // ALL rings CAST and RECEIVE natively. Casting: tall islands throw real shadows (was off in LOD mode → no island
+    // shadows at all). Receiving: the engine computes proper sun diffuse + self/neighbour shadow on the terrain. The
+    // region-fit shadow frustum keeps the map edge out in open ocean, so the old seabed-rectangle (the reason terrain
+    // receive was disabled) stays off the visible sea floor.
+    const mesh=new THREE.Mesh(geo, mat); mesh.frustumCulled=false; mesh.castShadow=true; mesh.receiveShadow=true; mesh.renderOrder=l; scene.add(mesh);
     clipLevels.push({ l, cell, mesh, uCenter, sx:NaN, sz:NaN });
   }
   terrainMesh=clipLevels[0].mesh;
@@ -5148,6 +5147,19 @@ window.dev = {
     flyState.pos.set(px,py,pz);
     const dx=tx-px, dy=ty-py, dz=tz-pz, l=Math.hypot(dx,dy,dz)||1;
     flyState.yaw=Math.atan2(dz,dx); flyState.pitch=clampJS(Math.asin(clampJS(dy/l,-1,1)),-1.4,1.4); flyState.keys={}; },
+  // debug: dump world positions so a fixed, reproducible camera can be set
+  pos(){ return { boat:[boat3.x|0, boat3.z|0], sun:[+_sun.x.toFixed(2),+_sun.y.toFixed(2),+_sun.z.toFixed(2)], islands: (typeof ISLANDS!=='undefined'?ISLANDS:[]).map(i=>[i.name, i.x|0, i.z|0]) }; },
+  // debug: stand `dist` from a named island at world azimuth `azDeg` (0=+X/east, 90=+Z) and elevation `elDeg`, looking at it.
+  // Reproducible vantage for before/after shots — independent of the wandering ship. e.g. dev.look('Kolombangara',90,20,1500)
+  look(name, azDeg, elDeg, dist){ const L=(typeof ISLANDS!=='undefined'?ISLANDS:[]); const isl=L.find(i=>i.name===name)||L[0]; if(!isl) return 'no island';
+    dist=dist||1400; const a=(azDeg||0)*Math.PI/180, e=(elDeg==null?26:elDeg)*Math.PI/180;
+    const ex=isl.x+Math.cos(a)*Math.cos(e)*dist, ey=Math.sin(e)*dist+30, ez=isl.z+Math.sin(a)*Math.cos(e)*dist;
+    if(!flyMode) setFly(true); flyState.pos.set(ex,ey,ez);
+    const dx=isl.x-ex, dy=40-ey, dz=isl.z-ez, l=Math.hypot(dx,dy,dz)||1;
+    flyState.yaw=Math.atan2(dz,dx); flyState.pitch=clampJS(Math.asin(clampJS(dy/l,-1,1)),-1.4,1.4); flyState.keys={}; return this.pos(); },
+  // debug: straight-down view over a named island from height `h`
+  top(name, h){ const L=(typeof ISLANDS!=='undefined'?ISLANDS:[]); const isl=L.find(i=>i.name===name)||L[0]; if(!isl) return 'no island'; h=h||1600;
+    if(!flyMode) setFly(true); flyState.pos.set(isl.x, h, isl.z+1); flyState.yaw=Math.atan2(-1,0); flyState.pitch=-1.4; flyState.keys={}; return this.pos(); },
   sun(back){ back=back||120; if(!flyMode) setFly(true);             // stand a bit "behind" the boat, low, facing the sun
     const px=boat3.x - _sun.x*back, pz=boat3.z - _sun.z*back, py=34;
     flyState.pos.set(px,py,pz); flyState.yaw=Math.atan2(_sun.z,_sun.x);
