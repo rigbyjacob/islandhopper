@@ -1437,11 +1437,15 @@ function maybeReplan(s, dt) {
   if (P.mode === 'tour' && P.usePlanner) {
     const key = route.map(r=>r.name).join(',') + '|' + (P.curOn ? P.curStrength.toFixed(1)+','+P.curDirDeg.toFixed(0) : '0');
     if (key !== tourKey || !tourPath) { tourKey = key; buildTourLoop(); tourFollowTimer = 0; }
-    // DETOUR: clear it once the boat REACHES it (generous radius) OR has PASSED it along the path (handles a
-    // pure-pursuit corner-cut that never enters the radius). Then replan — the loop continues from here.
+    // DETOUR: clear it once the boat REACHES it (radius floored above the hull's turn circle so it can't orbit)
+    // OR has PASSED it. The "passed" test MUST be measured only along the boat→detour PREFIX of the path — the
+    // full path loops back near the boat, so nearestPathIndex over the WHOLE path false-positives and clears the
+    // detour instantly (the bug that made detours vanish on click). Then replan — the loop continues from here.
     if (detourNode){ const np = navPosition(s);
-      const near = Math.hypot(np.x-detourNode.x, np.z-detourNode.z) < GRID.dx*3.5;
-      const passed = path && _detourIdxInPath >= 0 && nearestPathIndex(path, np.x, np.z) > _detourIdxInPath;
+      const near = Math.hypot(np.x-detourNode.x, np.z-detourNode.z) < Math.max(GRID.dx*3.5, 24);
+      let passed = false;
+      if (path && _detourIdxInPath > 0){ const prefix = path.slice(0, _detourIdxInPath+1);
+        passed = nearestPathIndex(prefix, np.x, np.z) >= _detourIdxInPath - 1; }
       if (near || passed){ detourNode = null; _detourIdxInPath = -1; tourFollowTimer = 0; } }
     tourFollowTimer -= dt;
     if (tourFollowTimer <= 0 || !path) { tourFollowTimer = 1.2; const np = navPosition(s); path = tourFollowPath(np.x, np.z); updatePathLine(); }
