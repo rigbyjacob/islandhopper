@@ -1085,13 +1085,22 @@ function nearestPathIndex(pp, x, z){ let bi=0,bd=1e18; for(let k=0;k<pp.length;k
 let tourGates = [], tourFollowTimer = 0;
 function tourFollowPath(bx, bz){
   if (!tourPath || tourPath.length < 3) return null;
-  const pi = nearestPathIndex(tourPath, bx, bz), entry = tourPath[pi];
+  // DETOUR: a double-click drops one node that becomes the immediate next stop on the SAME global path.
+  // Route boat → detour with A*, then from the detour rejoin the loop and carry on — so the detour is
+  // literally the next node of the followed path, not a separate "focus" that replaces the tour.
+  let originX = bx, originZ = bz, detourLead = null;
+  if (detourNode){
+    const dl = planPath(bx, bz, detourNode.x, detourNode.z);  // A* boat → detour (routes around islands)
+    if (dl.length >= 2){ detourLead = dl; originX = detourNode.x; originZ = detourNode.z; }
+  }
+  const pi = nearestPathIndex(tourPath, originX, originZ), entry = tourPath[pi];
   const loopRot = tourPath.slice(pi).concat(tourPath.slice(0,pi)).concat(tourPath.slice(pi, Math.min(pi+30, tourPath.length)));
   let followed = loopRot;
-  if (Math.hypot(bx-entry.x, bz-entry.z) > GRID.dx*2.5){
-    const lead = planPath(bx, bz, entry.x, entry.z);          // A* to the loop — routes around islands, never through them
+  if (Math.hypot(originX-entry.x, originZ-entry.z) > GRID.dx*2.5){
+    const lead = planPath(originX, originZ, entry.x, entry.z); // A* (from detour, or boat) onto the loop — routes around islands
     if (lead.length >= 2) followed = lead.concat(loopRot);
   }
+  if (detourLead) followed = detourLead.concat(followed);      // prepend boat → detour so it's the very next node
   navDebug = { raw: tourGates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),   // yellow=gates, green=loop
                gate: entry, start:{x:bx,z:bz}, found:true };
   return followed;
@@ -1339,8 +1348,10 @@ function applyTourPacing(){
   P.desiredSpeed = clampJS(target, 4, 30);
   syncSlider('desiredSpeed');
 }
-let gotoTarget = null;            // {x,z} from double-click — a single detour point (re-clicking REPLACES it, never stacks)
-let _gotoResumeTour = false;      // after reaching a double-click detour, resume the built-in tour loop (don't stop)
+let gotoTarget = null;            // {x,z} — explicit goto destination (legacy path; double-click now uses detourNode)
+let detourNode = null;            // {x,z} from double-click — a single DETOUR stop spliced into the global tour path as the
+                                  // immediate next node; the boat visits it then continues the existing loop. Re-clicking
+                                  // REPLACES it (only one detour at a time); it clears once the boat passes it.
 let path = null;                  // current planned waypoint list
 let planKey = '';                 // change-detection for replanning
 
@@ -1398,6 +1409,10 @@ function maybeReplan(s, dt) {
   if (P.mode === 'tour' && P.usePlanner) {
     const key = route.map(r=>r.name).join(',') + '|' + (P.curOn ? P.curStrength.toFixed(1)+','+P.curDirDeg.toFixed(0) : '0');
     if (key !== tourKey || !tourPath) { tourKey = key; buildTourLoop(); tourFollowTimer = 0; }
+    // DETOUR: clear it once the boat passes through (generous radius — it never stops, just sweeps past),
+    // then refresh the path so the loop continues cleanly without the detour node.
+    if (detourNode){ const np = navPosition(s);
+      if (Math.hypot(np.x-detourNode.x, np.z-detourNode.z) < GRID.dx*2.5){ detourNode = null; tourFollowTimer = 0; } }
     tourFollowTimer -= dt;
     if (tourFollowTimer <= 0 || !path) { tourFollowTimer = 1.2; const np = navPosition(s); path = tourFollowPath(np.x, np.z); updatePathLine(); }
     return;
@@ -1495,10 +1510,7 @@ function guidance(s, t) {
   desSpeed *= clampJS(1 - Math.abs(wrap(course - s.psi))*0.5, 0.4, 1);   // ease off for sharp turns so the hull can track the curve
 
   if (P.mode === 'tour' && arrived) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
-  if (P.mode === 'goto' && arrived) {
-    if (_gotoResumeTour){ _gotoResumeTour=false; gotoTarget=null; P.mode='tour'; path=null; planKey=''; }   // reached the double-click detour → rejoin the built-in tour loop (don't stop)
-    else desSpeed = 0;
-  }
+  if (P.mode === 'goto' && arrived) desSpeed = 0;
   const name = P.mode === 'goto' ? 'destination' : route[wpIdx].name;
   return { desPsi, desSpeed, course, dist: dArrive, name, xte: aim.xte, arrived };
 }
@@ -5183,10 +5195,13 @@ function initInput() {
       for (let it=0; it<4; it++){ _pl.constant = curveDropJS(pt.x, pt.z); const p2=new THREE.Vector3();
         if (!raycaster.ray.intersectPlane(_pl, p2)) break; pt.copy(p2); }
     }
-    // Detour to the clicked point as the VERY NEXT destination, then resume the tour loop where it left off
-    // (goto-then-resume). Routing it as a loop waypoint made it visit in route order — i.e. last, not next.
-    gotoTarget = { x: pt.x, z: pt.z }; P.mode='goto'; _gotoResumeTour = true;
-    path=null; planKey=''; try{ replan(boat3); }catch(_){}
+    // DETOUR: splice the clicked point into the GLOBAL tour path as the immediate next node — the boat
+    // sweeps to it, then continues the existing loop. The tour/route is untouched; re-clicking REPLACES
+    // this one detour (never stacks). It clears itself once the boat passes through.
+    detourNode = { x: pt.x, z: pt.z };
+    if (P.mode !== 'tour'){ P.mode = 'tour'; }   // the global path only exists in tour mode
+    P.usePlanner = true;
+    path = null; tourFollowTimer = 0; try{ replan(boat3); }catch(_){}
   });
   // single click on the volcano cone → erupt (ignore drags)
   let _vdx=0, _vdy=0;
