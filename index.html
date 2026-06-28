@@ -1085,22 +1085,35 @@ function nearestPathIndex(pp, x, z){ let bi=0,bd=1e18; for(let k=0;k<pp.length;k
 let tourGates = [], tourFollowTimer = 0;
 function tourFollowPath(bx, bz){
   if (!tourPath || tourPath.length < 3) return null;
+  const N = tourPath.length;
   // DETOUR: a double-click drops one node that becomes the immediate next stop on the SAME global path.
-  // Route boat → detour with A*, then from the detour rejoin the loop and carry on — so the detour is
-  // literally the next node of the followed path, not a separate "focus" that replaces the tour.
-  let originX = bx, originZ = bz, detourLead = null;
-  if (detourNode){
-    const dl = planPath(bx, bz, detourNode.x, detourNode.z);  // A* boat → detour (routes around islands)
-    if (dl.length >= 2){ detourLead = dl; originX = detourNode.x; originZ = detourNode.z; }
+  if (detourNode && tourGateAt.length){
+    // boat → detour (A* so it rounds islands instead of beelining through them)
+    let detourLead = planPath(bx, bz, detourNode.x, detourNode.z);
+    if (detourLead.length < 2) detourLead = [{x:bx,z:bz},{x:detourNode.x,z:detourNode.z}];
+    // REJOIN NODE: the next real gate node AHEAD of the detour in loop order (not the nearest polyline point).
+    // The gates between the boat and this node are skipped — treated as already visited — so clicking a target
+    // far ahead doesn't double the boat back to graze every island in between.
+    const piDet = nearestPathIndex(tourPath, detourNode.x, detourNode.z);
+    let rejoinIdx = tourGateAt[0], bestFwd = Infinity;
+    for (let i=0;i<tourGateAt.length;i++){ let fwd = tourGateAt[i]-piDet; if (fwd<=0) fwd+=N; if (fwd<bestFwd){ bestFwd=fwd; rejoinIdx=tourGateAt[i]; } }
+    // repath detour → that node (literal A*, around islands), then continue the loop forward from it
+    let rejoinLead = planPath(detourNode.x, detourNode.z, tourPath[rejoinIdx].x, tourPath[rejoinIdx].z);
+    const loopRot = tourPath.slice(rejoinIdx).concat(tourPath.slice(0,rejoinIdx)).concat(tourPath.slice(rejoinIdx, Math.min(rejoinIdx+30, N)));
+    let followed = detourLead;
+    if (rejoinLead.length >= 2){ rejoinLead.shift(); followed = followed.concat(rejoinLead); }   // drop the duplicated detour point
+    followed = followed.concat(loopRot);
+    navDebug = { raw: tourGates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),
+                 gate: tourPath[rejoinIdx], start:{x:bx,z:bz}, found:true };
+    return followed;
   }
-  const pi = nearestPathIndex(tourPath, originX, originZ), entry = tourPath[pi];
-  const loopRot = tourPath.slice(pi).concat(tourPath.slice(0,pi)).concat(tourPath.slice(pi, Math.min(pi+30, tourPath.length)));
+  const pi = nearestPathIndex(tourPath, bx, bz), entry = tourPath[pi];
+  const loopRot = tourPath.slice(pi).concat(tourPath.slice(0,pi)).concat(tourPath.slice(pi, Math.min(pi+30, N)));
   let followed = loopRot;
-  if (Math.hypot(originX-entry.x, originZ-entry.z) > GRID.dx*2.5){
-    const lead = planPath(originX, originZ, entry.x, entry.z); // A* (from detour, or boat) onto the loop — routes around islands
+  if (Math.hypot(bx-entry.x, bz-entry.z) > GRID.dx*2.5){
+    const lead = planPath(bx, bz, entry.x, entry.z);          // A* to the loop — routes around islands, never through them
     if (lead.length >= 2) followed = lead.concat(loopRot);
   }
-  if (detourLead) followed = detourLead.concat(followed);      // prepend boat → detour so it's the very next node
   navDebug = { raw: tourGates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),   // yellow=gates, green=loop
                gate: entry, start:{x:bx,z:bz}, found:true };
   return followed;
