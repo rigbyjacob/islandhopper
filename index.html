@@ -2084,11 +2084,15 @@ function _agentStep(v, dt){
     if (lf) v.yaw=wrap(v.yaw - mt*dt); if (rt) v.yaw=wrap(v.yaw + mt*dt);
     if (v._manAlt===undefined) v._manAlt=v.pos.y;
     if (v.id==='plane'){
-      // YOKE: W (push forward) → nose down / DIVE; S (pull back) → CLIMB. Throttle holds cruise (Shift boosts).
-      // Altitude change auto-pitches the nose below (targY→pitch), so it reads like a real plane, not a car.
-      if (K['w']||K['arrowup']) v._manAlt -= 130*dt*boost; else if (K['s']||K['arrowdown']) v._manAlt += 130*dt*boost;   // faster + wider range
-      v._manAlt = clampJS(v._manAlt, 8, 620);                 // wide ceiling/floor (sea ↔ high altitude)
-      v.cruiseY = v._manAlt;                                  // PERSIST the flown altitude → it holds after you let go (no snap back to the old cruise height)
+      // YOKE: pull back (S) → nose UP / climb; push (W) → nose DOWN / dive. The pitch EASES in and out, and the
+      // climb/descent rate is DERIVED from the nose angle × airspeed (vertical speed = speed·sin(pitch)) — so how
+      // fast it gains/loses height matches how much the nose is tilted, like a real plane (not a fixed elevator).
+      const up=K['s']||K['arrowdown'], dn=K['w']||K['arrowup'];
+      const pitchCmd = up ? 0.5 : (dn ? -0.5 : 0);            // yoke command (rad ≈ 29°); neutral eases back to level
+      v.pitch += (pitchCmd - v.pitch) * Math.min(1, dt*2.2);  // ease into / out of the climb/dive
+      v._manAlt += v.speed * Math.sin(v.pitch) * dt * boost;  // rise/fall at the rate the nose points × airspeed
+      v._manAlt = clampJS(v._manAlt, 8, 620);
+      v.cruiseY = v._manAlt;                                  // PERSIST the flown altitude → holds after release (no snap back)
       v.speed += (v.cruiseSpeed*boost - v.speed)*Math.min(1,dt*1.5);
     } else {
       // sub / UFO: W/S = forward / reverse; Q (or Space) up, E/C down
@@ -2151,7 +2155,7 @@ function _agentStep(v, dt){
   else if (v.id==='sub') targY=v.cruiseY+Math.sin(tt*0.7)*1.5;   // gentle bob (kept small so the hull stays within its depth-grid clearance)
   else targY=v.cruiseY;
   v.pos.y += (targY-v.pos.y)*Math.min(1,dt*1.6);
-  v.pitch += (clampJS((targY-v.pos.y)*0.02,-0.3,0.3) - v.pitch)*Math.min(1,dt*4);
+  if (!(v.manual && v.id==='plane')) v.pitch += (clampJS((targY-v.pos.y)*0.02,-0.3,0.3) - v.pitch)*Math.min(1,dt*4);   // manual plane sets pitch from the YOKE (above); don't override it with the auto altitude-pitch
   v.mesh.position.set(v.pos.x, v.pos.y - curveDropJS(v.pos.x, v.pos.z), v.pos.z);   // sink onto the curved world (focused vehicle is near-cam → ~0)
   v.mesh.rotation.set(0,0,0); v.mesh.rotateY(-v.yaw); v.mesh.rotateZ(v.pitch); v.mesh.rotateX(v.roll);
   if (v.id==='ufo'){ v.mesh.rotateY(tt*1.4); if (v.mesh.userData.ring) v.mesh.userData.ring.material.opacity=0.6+0.35*Math.sin(tt*6); }
