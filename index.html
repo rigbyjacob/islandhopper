@@ -5214,36 +5214,43 @@ function drawGrid(W, H){
 // Input — double-click to set a destination on the water
 // ============================================================================
 function initInput() {
-  renderer.domElement.addEventListener('dblclick', (e) => {
-    if (worldMapOpen) return;
+  // Pick the sea point under a screen position, using the ACTUAL render camera (cine/follow/orbit), refined
+  // onto the tiny-planet's CURVED surface so the hit lands in the right hex cell.
+  function pickSea(e){
     const r = renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
-    raycaster.setFromCamera(ndc, activeCam || camera);    // BUGFIX: use the ACTUAL render camera (cine/follow/orbit) — was always the orbit cam, so picks were wrong in follow mode
+    raycaster.setFromCamera(ndc, activeCam || camera);
     const pt = new THREE.Vector3();
-    if (!raycaster.ray.intersectPlane(groundPlane, pt)) return;
-    if (P.curveWorld){   // BUGFIX: refine the hit onto the tiny-planet's CURVED sea surface (the flat-plane hit lands in the wrong hex cell)
+    if (!raycaster.ray.intersectPlane(groundPlane, pt)) return null;
+    if (P.curveWorld){
       const _pl = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
       for (let it=0; it<4; it++){ _pl.constant = curveDropJS(pt.x, pt.z); const p2=new THREE.Vector3();
         if (!raycaster.ray.intersectPlane(_pl, p2)) break; pt.copy(p2); }
     }
-    // DETOUR: splice the clicked point into the GLOBAL tour path as the immediate next node — the boat
-    // sweeps to it, then continues the existing loop. The tour/route is untouched; re-clicking REPLACES
-    // this one detour (never stacks). It clears itself once the boat passes through.
-    detourNode = snapToWater({ x: pt.x, z: pt.z });   // snap onto navigable water so the boat can actually reach & clear it
-    if (P.mode !== 'tour'){ P.mode = 'tour'; }   // the boat follows the global loop only in tour mode
+    return pt;
+  }
+  function setDetour(e){
+    if (worldMapOpen) return;
+    const pt = pickSea(e); if (!pt) return;
+    // DETOUR: splice the clicked point into the GLOBAL tour path as the immediate next node — the boat sweeps
+    // to it, then continues the loop. Re-clicking REPLACES it; it clears once the boat passes through.
+    detourNode = snapToWater({ x: pt.x, z: pt.z });   // snap onto navigable water so the boat can reach & clear it
+    if (P.mode !== 'tour'){ P.mode = 'tour'; }
     P.usePlanner = true;
     path = null; tourFollowTimer = 0; try{ replan(boat3); }catch(_){}
-  });
-  // single click on the volcano cone → erupt (ignore drags)
-  let _vdx=0, _vdy=0;
+  }
+  // CUSTOM double-click: the native 'dblclick' only fires if both clicks land within a few px of each other,
+  // so when the camera is moving (and you track the target with the mouse) the two clicks miss and nothing
+  // happens. We detect it ourselves by time only — no position constraint — using the 2nd click's position.
+  let _vdx=0, _vdy=0, _lastClickT=0;
   renderer.domElement.addEventListener('pointerdown', (e)=>{ _vdx=e.clientX; _vdy=e.clientY; });
   renderer.domElement.addEventListener('click', (e)=>{
-    if (Math.hypot(e.clientX-_vdx, e.clientY-_vdy) > 6) return;          // it was a drag, not a click
-    const r = renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
-    raycaster.setFromCamera(ndc, camera);
-    const pt = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(groundPlane, pt) && Math.hypot(pt.x-VOLC.x, pt.z-VOLC.z) < VOLC.rad*0.9) eruptVolcano();
+    if (Math.hypot(e.clientX-_vdx, e.clientY-_vdy) > 6){ _lastClickT=0; return; }   // a drag, not a click — reset
+    const now = performance.now();
+    if (now - _lastClickT < 450){ _lastClickT = 0; setDetour(e); return; }          // 2nd quick click → DETOUR
+    _lastClickT = now;
+    const pt = pickSea(e);                                                          // 1st click → volcano erupt if on the cone
+    if (pt && Math.hypot(pt.x-VOLC.x, pt.z-VOLC.z) < VOLC.rad*0.9) eruptVolcano();
   });
   // crow's-nest view: 'V' toggles, drag to look around. Fly view: 'F' toggles, WASD/arrows to move, drag to look.
   const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA');
