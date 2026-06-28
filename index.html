@@ -1091,22 +1091,45 @@ function tourFollowPath(bx, bz){
   // the rejoin: once the boat reaches the detour, maybeReplan clears it and replans from the boat's NEW
   // position, so the loop resumes at the nearest point and naturally skips whatever was passed (no double-back).
   if (detourNode){
-    let lead = planPath(bx, bz, detourNode.x, detourNode.z);
-    if (lead.length < 2) lead = [{x:bx,z:bz},{x:detourNode.x,z:detourNode.z}];
+    // ONE continuous path: boat → detour → MERGE-AHEAD onto the loop → loop forward. Because the path keeps
+    // going past the detour, pure-pursuit flows THROUGH it (no orbiting a dead-end target) and the merge is a
+    // shallow join toward the next island, not a 90° dash to the nearest point. The detour clears when passed.
+    let detourLead = planPath(bx, bz, detourNode.x, detourNode.z);
+    if (detourLead.length < 2) detourLead = [{x:bx,z:bz},{x:detourNode.x,z:detourNode.z}];
+    const m = mergeOntoLoop(detourNode.x, detourNode.z);
+    let followed = detourLead.slice();
+    _detourIdxInPath = followed.length - 1;                   // where the detour vertex sits in `path` (for the passed-it test)
+    if (m.lead){ const mm = m.lead.slice(); mm.shift(); followed = followed.concat(mm); }   // drop duplicated detour point
+    followed = followed.concat(m.loopRot);
     navDebug = { raw: tourGates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),
                  gate: detourNode, start:{x:bx,z:bz}, found:true };
-    return lead;
+    return followed;
   }
-  const pi = nearestPathIndex(tourPath, bx, bz), entry = tourPath[pi];
-  const loopRot = tourPath.slice(pi).concat(tourPath.slice(0,pi)).concat(tourPath.slice(pi, Math.min(pi+30, N)));
-  let followed = loopRot;
-  if (Math.hypot(bx-entry.x, bz-entry.z) > GRID.dx*2.5){
-    const lead = planPath(bx, bz, entry.x, entry.z);          // A* to the loop — routes around islands, never through them
-    if (lead.length >= 2) followed = lead.concat(loopRot);
-  }
+  const m = mergeOntoLoop(bx, bz);
+  const followed = m.lead ? m.lead.concat(m.loopRot) : m.loopRot;
   navDebug = { raw: tourGates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),   // yellow=gates, green=loop
-               gate: entry, start:{x:bx,z:bz}, found:true };
+               gate: m.entry, start:{x:bx,z:bz}, found:true };
   return followed;
+}
+// Merge onto the global loop from (fx,fz): aim at a point AHEAD on the loop (forward by ~1.5× the cross-track
+// offset, but never past the next gate) so the boat converges at a shallow angle toward the next destination
+// instead of dashing perpendicular to the nearest point. Returns the A* lead-in (or null if already on the
+// loop) plus the loop rotated to start at that merge point.
+function mergeOntoLoop(fx, fz){
+  const N = tourPath.length;
+  const pi = nearestPathIndex(tourPath, fx, fz), ep = tourPath[pi];
+  const off = Math.hypot(fx-ep.x, fz-ep.z);
+  // arc length forward from pi to the next gate node — cap the merge so we never overshoot an island we owe
+  let nextGateArc = Infinity; { let bestFwd=Infinity, gT=pi;
+    for (let k=0;k<tourGateAt.length;k++){ let f=tourGateAt[k]-pi; if (f<=0) f+=N; if (f<bestFwd){ bestFwd=f; gT=tourGateAt[k]; } }
+    let j=pi, acc=0; while ((j%N)!==gT && (j-pi)<N){ const a=tourPath[j%N], b=tourPath[(j+1)%N]; acc+=Math.hypot(b.x-a.x,b.z-a.z); j++; } nextGateArc=acc; }
+  const advance = Math.max(GRID.dx*2, Math.min(off*1.5, nextGateArc));
+  let j=pi, acc=0; while (acc<advance && (j-pi)<N){ const a=tourPath[j%N], b=tourPath[(j+1)%N]; acc+=Math.hypot(b.x-a.x,b.z-a.z); j++; }
+  const entryIdx = j%N, entry = tourPath[entryIdx];
+  const loopRot = tourPath.slice(entryIdx).concat(tourPath.slice(0,entryIdx)).concat(tourPath.slice(entryIdx, Math.min(entryIdx+30, N)));
+  let lead = null;
+  if (off > GRID.dx*2.5){ const L = planPath(fx, fz, entry.x, entry.z); if (L.length >= 2) lead = L; }   // A* in toward the merge point (rounds islands)
+  return { lead, loopRot, entry };
 }
 // ---- navigation debug overlay: the A* grid (blocked = red, open water shaded by distance-to-land),
 //      the raw grid path (yellow, angular) vs the simplified path (green), and start/gate markers ----
@@ -1352,10 +1375,11 @@ function applyTourPacing(){
   syncSlider('desiredSpeed');
 }
 let gotoTarget = null;            // {x,z} — explicit goto destination (legacy path; double-click now uses detourNode)
-let detourNode = null;            // {x,z} from double-click — a single DETOUR target. While set, the followed path IS just
-                                  // boat→detour (a committed immediate target, like WASD steering). On arrival it clears and
-                                  // the tour replans from the boat's NEW position — rejoining the loop at the nearest point and
-                                  // skipping whatever nodes were passed, exactly like releasing manual control. Re-click replaces it.
+let detourNode = null;            // {x,z} from double-click — a single DETOUR via-point spliced into the global loop as the
+                                  // immediate next node. The followed path is boat→detour→merge-ahead→loop (one continuous path,
+                                  // so pursuit flows through without orbiting). It clears once the boat reaches OR passes it, and
+                                  // the loop continues from there, skipping whatever was passed. Re-click replaces it.
+let _detourIdxInPath = -1;        // index of the detour vertex within the followed `path` (used to detect "boat has passed it")
 let path = null;                  // current planned waypoint list
 let planKey = '';                 // change-detection for replanning
 
@@ -1413,11 +1437,12 @@ function maybeReplan(s, dt) {
   if (P.mode === 'tour' && P.usePlanner) {
     const key = route.map(r=>r.name).join(',') + '|' + (P.curOn ? P.curStrength.toFixed(1)+','+P.curDirDeg.toFixed(0) : '0');
     if (key !== tourKey || !tourPath) { tourKey = key; buildTourLoop(); tourFollowTimer = 0; }
-    // DETOUR: clear it once the boat reaches it (generous radius so the hull's turn circle can't orbit it
-    // forever), then force an immediate replan — the loop resumes from the boat's NEW position, like releasing
-    // manual control: it rejoins at the nearest point and skips whatever nodes were passed.
+    // DETOUR: clear it once the boat REACHES it (generous radius) OR has PASSED it along the path (handles a
+    // pure-pursuit corner-cut that never enters the radius). Then replan — the loop continues from here.
     if (detourNode){ const np = navPosition(s);
-      if (Math.hypot(np.x-detourNode.x, np.z-detourNode.z) < GRID.dx*3.5){ detourNode = null; tourFollowTimer = 0; } }
+      const near = Math.hypot(np.x-detourNode.x, np.z-detourNode.z) < GRID.dx*3.5;
+      const passed = path && _detourIdxInPath >= 0 && nearestPathIndex(path, np.x, np.z) > _detourIdxInPath;
+      if (near || passed){ detourNode = null; _detourIdxInPath = -1; tourFollowTimer = 0; } }
     tourFollowTimer -= dt;
     if (tourFollowTimer <= 0 || !path) { tourFollowTimer = 1.2; const np = navPosition(s); path = tourFollowPath(np.x, np.z); updatePathLine(); }
     return;
