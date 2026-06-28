@@ -6295,7 +6295,7 @@ function captureScenario(name){
 }
 async function _applyScenarioCore(sc){
   const oldLod=P.lodTerrain, sameRegion=(!sc.region || sc.region===REGION.id);
-  const applySettings=()=>{ if (sc.settings){ const a=P.panelOrder, b=P.panelCollapsed; Object.assign(P, sc.settings); P.panelOrder=a; P.panelCollapsed=b; P.paused=false; } };
+  const applySettings=()=>{ if (sc.settings){ const a=P.panelOrder, b=P.panelCollapsed, mus=P.music; Object.assign(P, sc.settings); P.panelOrder=a; P.panelCollapsed=b; P.music=mus; P.paused=false; } };   // intro-music is a sticky USER pref — scenarios must respect it, never overwrite it
   applySettings();                                                       // FIRST so the region rebuild below uses the scenario's LOD
   if (!sameRegion){ await swapRegion(sc.region); applySettings(); }      // swapRegion's recomputeRegionData re-applies REGION.defaults (timeOfDay/wind/waves/storm) — re-apply the scenario ON TOP so its sky & sea win (e.g. Starry Night stays at night, not the Aegean midday default)
   else if (P.lodTerrain!==oldLod){ try{ setTerrainLOD(P.lodTerrain); }catch(_){} }   // same region but LOD toggled → swap terrain live
