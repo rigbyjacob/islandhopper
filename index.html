@@ -6131,6 +6131,11 @@ function _gPointerUp(){ _globeDrag=null; }
 function _gClick(e){ if(!worldMapOpen || _globeMoved>10) return;       // a real click (not the end of a spin) → set target + dive
   const id=_globeRegionAt(e); if(id) travelToRegion(id);
 }
+// double-click = SAME as a single click (dive into the region). The two-tap sequence is often read as a tiny
+// drag (which spins the globe and trips _gClick's _globeMoved guard), so the click path can swallow it — but
+// the native dblclick always fires, so we dive from here too. travelToRegion is re-entry guarded, so this can
+// never double-dive alongside a click that did land.
+function _gDblClick(e){ if(!worldMapOpen) return; const id=_globeRegionAt(e); if(id) travelToRegion(id); }
 function _gKey(e){ if(!worldMapOpen || demoMode) return;   // during a demo globe-dive the demo stepper owns the keys
   if (e.target && (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')) return;
   let h=true;
@@ -6172,6 +6177,7 @@ function buildWorldMap(){
   window.addEventListener('pointermove', _gPointerMove);
   window.addEventListener('pointerup', e=>{ ov.classList.remove('grabbing'); _gPointerUp(e); });
   ov.addEventListener('click', _gClick);
+  ov.addEventListener('dblclick', _gDblClick);   // double-click an island = dive in, same as a single click
   window.addEventListener('keydown', _gKey, true);    // capture phase so the sailing handler never sees globe keys
   buildGlobe();
 }
