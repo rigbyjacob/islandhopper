@@ -2002,7 +2002,7 @@ const uTargetRad  = uniform(120.0);
 let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt, oceanMat;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
 const _sunScreen = new THREE.Vector3();   // sun projected to NDC each frame (god rays)
-const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3();
+const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3(), _shSun=new THREE.Vector3();
 const _shFocus=new THREE.Vector3(), _shCamFwd=new THREE.Vector3();   // smoothed point the shadow frustum centres on (where the active camera looks at the sea)
 const C = {
   zenNight:new THREE.Color(0x05070f), zenDay:new THREE.Color(0x1d6fc6), zenGold:new THREE.Color(0x3a3570),
@@ -2830,7 +2830,14 @@ function updateEnvironment(dt) {
     _scC.near=Math.max(1, D-_halfR*1.7); _scC.far=D+_halfR*1.7; _scC.updateProjectionMatrix(); }
   // Texel-snap the FIXED region centre in the light's own X/Y basis so the map doesn't swim as the SUN tracks across.
   const texel = (_scC.right - _scC.left) / sunLight.shadow.mapSize.x;
-  _shFwd.copy(_sun).multiplyScalar(-1).normalize();                 // light looks down the sun ray
+  // GRAZING-MINIMUM sun: the sun is modelled as a single directional light, so the instant its elevation crosses the
+  // geometric horizon (y<0) the light would shine UPWARD and the shadow camera drop below the seabed — shadows snap
+  // off. But the sun's DISK is still visibly up (the tiny-planet curve lowers the visible horizon) and obviously still
+  // casting. So during daylight, hold the casting elevation at a grazing floor: shadows lengthen and persist through
+  // the sunset window instead of vanishing at y=0. (Gated by `day` so true night is unaffected.)
+  _shSun.copy(_sun);
+  if (day > 0.03 && _shSun.y < 0.07){ _shSun.y = 0.07; _shSun.normalize(); }
+  _shFwd.copy(_shSun).multiplyScalar(-1).normalize();              // light looks down the (grazing-clamped) sun ray
   _shUp.set(0,1,0); if (Math.abs(_shFwd.y) > 0.99) _shUp.set(0,0,1);
   _shRight.crossVectors(_shFwd, _shUp).normalize();
   _shUp.crossVectors(_shRight, _shFwd).normalize();
@@ -2839,7 +2846,7 @@ function updateEnvironment(dt) {
         b = Math.round(_shCtr.dot(_shUp)/texel)*texel,
         f = _shCtr.dot(_shFwd);
   _shCtr.copy(_shRight).multiplyScalar(a).addScaledVector(_shUp, b).addScaledVector(_shFwd, f);
-  sunLight.position.copy(_shCtr).addScaledVector(_sun, D);
+  sunLight.position.copy(_shCtr).addScaledVector(_shSun, D);
   sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
   // Keep castShadow STABLE (never toggle off at night): in the WebGPU path, disabling castShadow frees
   // sunLight.shadow.map, and re-enabling it on a day-time scene before the map is reallocated makes
