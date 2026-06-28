@@ -32,7 +32,8 @@
   <label><input type="checkbox" id="showLoop" checked> show full loop (faint)</label>
   <label><input type="checkbox" id="showGates" checked> show gate nodes</label>
   <label>lookahead <input type="range" id="look" min="8" max="80" value="34"><span id="lookV">34</span></label>
-  <label>speed <input type="range" id="spd" min="4" max="28" value="14"><span id="spdV">14</span></label>
+  <label>boat speed <input type="range" id="spd" min="4" max="28" value="14"><span id="spdV">14</span></label>
+  <label>sim rate <input type="range" id="simr" min="0.25" max="8" step="0.25" value="1"><span id="simrV">1×</span></label>
   <hr style="border-color:#1d3a5f">
   <div class="legend">
     <div class="row"><span style="background:#ffd27f"></span>followed path (boat is on)</div>
@@ -485,10 +486,6 @@ function routeGate(idx){
   for (; r<600; r+=GRID.dx){ const x=cx+dx*r, z=cz+dz*r, wc=worldToCell(x,z); if (!BLOCKED || !BLOCKED[gIdx(wc.c,wc.r)]) break; }
   return { x: cx+dx*(r+GRID.dx*2), z: cz+dz*(r+GRID.dx*2) };
 }
-  }
-}
-let replanTimer = 0;
-
 function pursuit(pts, pos, lookahead) {
   let best=Infinity, bi=0, bx=pts[0].x, bz=pts[0].z;
   for (let i=0;i<pts.length-1;i++){ const a=pts[i], b=pts[i+1];
@@ -502,6 +499,10 @@ function pursuit(pts, pos, lookahead) {
   const xteSigned = tx*(pos.z-a.z) - tz*(pos.x-a.x);
   let remain=lookahead, ci=bi, cx=bx, cz=bz;
   while (ci<pts.length-1){ const b2=pts[ci+1], segd=Math.hypot(b2.x-cx,b2.z-cz);
+    if (segd>=remain){ const f=remain/segd; return { x:cx+(b2.x-cx)*f, z:cz+(b2.z-cz)*f, xte:best, xteSigned }; }
+    remain-=segd; cx=b2.x; cz=b2.z; ci++; }
+  return { x:pts[pts.length-1].x, z:pts[pts.length-1].z, xte:best, xteSigned };
+}
 // ===========================================================================
 //  HARNESS — 2D renderer, boat follower, replan loop, interactions
 // ===========================================================================
@@ -511,7 +512,7 @@ function snapToWater(p){
 }
 
 let boat3 = { x:0, z:0, psi:0, u:8, v:0, r:0, delta:0, thr:0.5, grounded:false };
-let followTimer = 0, simT = 0, paused = false, tool = 'detour';
+let followTimer = 0, simT = 0, paused = false, tool = 'detour', simSpeed = 1;   // simSpeed 1 = real ship pace
 let drawnPts = [];          // the user's pen drawing (expected path)
 
 // follow `path` with the SAME pure-pursuit used in 3D, steering the real hull dynamics
@@ -604,8 +605,8 @@ function render(){
 let last = performance.now();
 function frame(now){
   const wall = Math.min(0.05, (now-last)/1000); last = now;
-  if (!paused){ const sub=6, dt=0.025;
-    for (let i=0;i<sub;i++){ simT+=dt; replanStep(dt); followStep(dt); } }
+  if (!paused){ let acc = wall*simSpeed; const dt=0.02;        // advance sim in real time × simSpeed, in stable substeps
+    while (acc > 1e-4){ const step = Math.min(dt, acc); simT+=step; replanStep(step); followStep(step); acc-=step; } }
   render(); requestAnimationFrame(frame);
 }
 
@@ -620,6 +621,7 @@ document.getElementById('pause').onclick=(e)=>{ paused=!paused; e.target.textCon
 document.getElementById('reset').onclick=()=>resetBoat();
 document.getElementById('look').oninput=(e)=>{ P.lookahead=+e.target.value; document.getElementById('lookV').textContent=e.target.value; };
 document.getElementById('spd').oninput=(e)=>{ P.desiredSpeed=+e.target.value; document.getElementById('spdV').textContent=e.target.value; };
+document.getElementById('simr').oninput=(e)=>{ simSpeed=+e.target.value; document.getElementById('simrV').textContent=e.target.value+'×'; };
 ['showBlocked','showLoop','showGates'].forEach(id=>document.getElementById(id).onchange=()=>{});
 
 cv.addEventListener('dblclick', (e)=>{
@@ -628,7 +630,9 @@ cv.addEventListener('dblclick', (e)=>{
   path = null; followTimer = 0;
 });
 let drawing=false;
-cv.addEventListener('pointerdown', (e)=>{ if(tool==='pen'){ drawing=true; drawnPts=[]; } else if(tool==='erase') drawing=true; });
+cv.addEventListener('pointerdown', (e)=>{
+  if(tool==='detour'){ const w=toWorld(e.offsetX,e.offsetY); detourNode=snapToWater({x:w.x,z:w.z}); path=null; followTimer=0; _detourIdxInPath=-1; }
+  else if(tool==='pen'){ drawing=true; drawnPts=[]; } else if(tool==='erase') drawing=true; });
 cv.addEventListener('pointermove', (e)=>{ if(!drawing) return; const w=toWorld(e.offsetX,e.offsetY);
   if (tool==='pen') drawnPts.push({x:w.x,z:w.z});
   else if (tool==='erase') drawnPts = drawnPts.filter(p=>Math.hypot(p.x-w.x,p.z-w.z) > 18); });
