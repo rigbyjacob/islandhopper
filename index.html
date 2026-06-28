@@ -1493,18 +1493,20 @@ const clock = new THREE.Clock();
 const raycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
 
+const NOOPT = new URLSearchParams(location.search).has('noopt');   // ?noopt → revert perf opts #1/#2/#3 at runtime so a perf sweep on ?noopt is the BASELINE to diff against the optimized build
+if (NOOPT) console.log('[perf] ?noopt — BASELINE build (4096 shadow every frame · 52 godray taps · per-instance tree recompose)');
 init().catch(fatal);
 
 async function init() {
-  renderer = new THREE.WebGPURenderer({ antialias: true });
-  try { renderer.trackTimestamp = true; } catch(_){}   // perf harness: enables GPU frame-time via WebGPU timestamp queries (best-effort; ignored if unsupported)
+  renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: true });   // perf harness: request the WebGPU timestamp-query feature at device-init time (must be set in the constructor, not after)
+  try { renderer.trackTimestamp = true; } catch(_){}
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.shadowMap.autoUpdate = false;   // we drive shadow refresh manually (every other frame) — see _shadowTick in the animate loop
+  renderer.shadowMap.autoUpdate = NOOPT;   // OPT #1: manual every-other-frame refresh (autoUpdate=false); ?noopt restores autoUpdate=true (every frame) for A/B
   document.getElementById('app').appendChild(renderer.domElement);
   await renderer.init();
 
@@ -1613,7 +1615,7 @@ async function init() {
     const useRain = rainActive && rainPost && localStormG > 0.01;   // rain-on-lens only when the VIEWER is in a storm cell's reach
     const useOutline = !useRain && outlineActive && outlinePost && uOutline.value > 0.001;   // woodblock ink edges
     const useGodray = !useRain && !useOutline && godrayActive && godrayPost && P.atmosphere > 0.01;   // atmosphere pass: god rays (sun-gated inside) + bloom + haze
-    if ((_shadowTick++ & 1) === 0) renderer.shadowMap.needsUpdate = true;   // refresh the shadow map every OTHER frame; the frustum follows the boat so a 1-frame lag is imperceptible, but it halves shadow-pass cost
+    if (!NOOPT && (_shadowTick++ & 1) === 0) renderer.shadowMap.needsUpdate = true;   // OPT #1: refresh shadows every OTHER frame (autoUpdate off). ?noopt → autoUpdate on → every frame.
     try {
       if (_swapping){ /* hold the present while a region's pipelines compile — the dive colour-fade covers the screen */ }
       else if (worldMapOpen && globeScene){ updateGlobe(dt); renderer.render(globeScene, globeCam); _grabGlobeFrame(); }
@@ -1638,19 +1640,24 @@ async function init() {
 
     if (_perfRecording){   // perf harness: record CPU ms (work this frame), realized interval, and GPU ms (last resolved timestamp)
       const _now = performance.now();
-      let _gpu = 0; try { _gpu = (renderer.info && renderer.info.render && renderer.info.render.timestamp) || 0; } catch(_){}
-      _perfBuf.push({ cpu: _now - _pt0, intv: _pt0 - (_perfPrevTop || _pt0), gpu: _gpu });
+      _perfBuf.push({ cpu: _now - _pt0, intv: _pt0 - (_perfPrevTop || _pt0), gpu: _lastGpuMs });
       _perfPrevTop = _pt0;
-      if (renderer.resolveTimestampsAsync) { try { renderer.resolveTimestampsAsync(); } catch(_){} }   // kick off async readback for next frame's gpu value
+      // GPU frame-time via WebGPU timestamp queries. resolveTimestampsAsync() resolves to the render-pass
+      // duration in ms (and also updates renderer.info.render.timestamp); capture it for the next frame.
+      if (renderer.resolveTimestampsAsync){ try{ renderer.resolveTimestampsAsync().then(ms=>{
+        const v = (typeof ms==='number'&&isFinite(ms)) ? ms : (renderer.info&&renderer.info.render&&renderer.info.render.timestamp);
+        if (typeof v==='number'&&isFinite(v)&&v>=0) _lastGpuMs=v; }).catch(()=>{}); }catch(_){} }
     }
 
     if (firstFrame) { firstFrame = false; window.__booted = true;
       setTimeout(() => document.getElementById('overlay').classList.add('hidden'), 250);
+      // one-time GPU-timestamp support probe (so a perf run knows whether GPU ms will populate)
+      if (renderer.resolveTimestampsAsync) setTimeout(()=>{ try{ renderer.resolveTimestampsAsync().then(ms=>console.log('[perf] GPU timestamps '+((typeof ms==='number'&&ms>0)?('AVAILABLE ('+ms.toFixed(2)+' ms/frame)'):'unavailable on this device/Chrome'))).catch(()=>console.log('[perf] GPU timestamps unavailable')); }catch(_){} }, 1500);
       if (new URLSearchParams(location.search).has('dive')){ const u=new URL(location.href); u.searchParams.delete('dive'); try{history.replaceState(null,'',u.toString());}catch(_){} startDescent(); }   // arrived from a globe dive → descend from orbit
       else if (!new URLSearchParams(location.search).has('nodemo') && typeof enterDemoMode==='function' && demoScenarios.length){   // boot straight into the curated demo (use ?nodemo to edit freely)
         setTimeout(()=>{ try{ enterDemoMode(); }catch(_){} }, 700); }
-      const _pq = new URLSearchParams(location.search).get('perf');   // ?perf or ?perf=label → auto-run a perf sweep once booted
-      if (_pq!=null && typeof runPerfSweep==='function') setTimeout(()=>{ try{ runPerfSweep({ label: _pq||'autorun' }); }catch(e){ console.warn('perf autorun', e); } }, 2200); }
+      const _pq = new URLSearchParams(location.search).get('perf');   // ?perf or ?perf=label → auto-run a perf sweep once booted (label defaults to baseline/optimized per ?noopt)
+      if (_pq!=null && typeof runPerfSweep==='function') setTimeout(()=>{ try{ runPerfSweep({ label: _pq||undefined }); }catch(e){ console.warn('perf autorun', e); } }, 2200); }
   });
 
   window.addEventListener('resize', onResize);
@@ -1801,7 +1808,7 @@ function buildLights() {
   sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
   sunLight.position.set(420, 620, 360);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(2048, 2048);   // 2048 (was 4096): ~4x less shadow fragment/bandwidth, near-identical for this stylized look (slightly softer frond shadows)
+  sunLight.shadow.mapSize.set(NOOPT?4096:2048, NOOPT?4096:2048);   // OPT #1: 2048 (was 4096) ~4x less shadow fragment/bandwidth; ?noopt restores 4096 for A/B
   const sc = sunLight.shadow.camera;
   // tighter frustum (follows the boat) → smaller texels → steadier, sharper frond shadows.
   sc.left=-340; sc.right=340; sc.top=340; sc.bottom=-340; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();
@@ -3605,10 +3612,14 @@ function curveTrees(){
   const touched = new Set();
   for (const t of _curveInsts){
     const drop = on ? curveDropJS(t.x, t.z) : 0;
-    // Only the tiny-planet droop (translation-Y) changes each frame; rotation/scale were baked into the
-    // instance matrix at build and never change. So skip the full TRS recompose (Euler→matrix per instance,
-    // the costly part) and write just the Y translation element (col-major index 13) in place — identical result.
-    t.m.instanceMatrix.array[t.i*16 + 13] = t.y - drop;
+    if (NOOPT){   // BASELINE: full per-instance TRS recompose (Euler→matrix — the costly path) for A/B
+      _curveObj.position.set(t.x, t.y - drop, t.z); _curveObj.rotation.set(0, t.ry, 0);
+      _curveObj.scale.set(t.sx, t.sy, t.sz); _curveObj.updateMatrix(); t.m.setMatrixAt(t.i, _curveObj.matrix);
+    } else {
+      // OPT #3: only the droop (translation-Y) changes each frame; rotation/scale were baked at build.
+      // Write just the Y translation element (col-major index 13) in place — identical result, far cheaper.
+      t.m.instanceMatrix.array[t.i*16 + 13] = t.y - drop;
+    }
     touched.add(t.m);
   }
   for (const m of touched) m.instanceMatrix.needsUpdate = true;
@@ -5344,7 +5355,7 @@ async function enableGodrays(){
   try {
     godrayScenePass = pass(scene, camera);
     const col = godrayScenePass.getTextureNode();
-    const N = 30;                                         // radial taps (was 52): ~40% cheaper god-ray pass; decay retuned below so the shaft length/look is preserved (exposure already normalizes by N)
+    const N = NOOPT ? 52 : 30;                            // OPT #2: 30 radial taps (was 52), ~40% cheaper; ?noopt restores 52 for A/B. Decay retuned below so the shaft look is preserved.
     const step = uSunScreenUV.sub(screenUV).mul(0.92/N);  // march ~92% of the way to the sun
     const illum = float(0).toVar();
     const coord = screenUV.toVar();
@@ -5353,7 +5364,7 @@ async function enableGodrays(){
       coord.addAssign(step);
       const s = col.sample(clamp(coord, vec2(0.0,0.0), vec2(1.0,1.0))).xyz;
       illum.addAssign(max(dot(s, vec3(0.299,0.587,0.114)).sub(0.40), 0.0).mul(w));   // bright-pass (sky/sun/lit cloud) × decay
-      w *= 0.943;                                         // decay retuned for N=30 so cumulative reach ≈ old 0.967^52 (shafts look the same)
+      w *= (NOOPT ? 0.967 : 0.943);                       // OPT #2: decay retuned for N=30 (0.943) so cumulative reach ≈ old 52-tap 0.967 profile; ?noopt restores 0.967
     }
     illum.assign(illum.mul(4.4/N));                       // exposure
     const rays = uSunCol.mul(illum).mul(uAtmo).mul(uSunOnScreen);
@@ -5651,7 +5662,7 @@ function buildPanel() {
   const perfB = el('div','btn',acts); perfB.textContent='▶ Run perf sweep';
   perfB.title='Run every demo scenario for a fixed window, capturing CPU/GPU frame-time + fps; saves to localStorage. Keep this tab focused while it runs (~90s).';
   perfB.onclick=()=>{ if(_perfState&&_perfState.running) return;
-    runPerfSweep({label:'manual'});
+    runPerfSweep({});   // label auto = 'baseline' under ?noopt, else 'optimized'
     const iv=setInterval(()=>{ const st=_perfState; if(!st) return;
       if(st.running){ perfB.textContent='⏳ '+(st.i+1)+'/'+st.n+' '+st.current; perfB.classList.add('active'); }
       else { perfB.textContent= st.aborted?'⚠ aborted (focus tab)':'✓ sweep saved'; perfB.classList.remove('active'); clearInterval(iv); setTimeout(()=>{ perfB.textContent='▶ Run perf sweep'; },2800); } }, 400); };
@@ -6250,7 +6261,7 @@ function _refreshScenarioList(){ const c=ui.scnList; if(!c) return; c.innerHTML=
 // (CPU/GPU ms matter more than FPS for tuning: realized FPS is vsync-capped and hides
 //  headroom above the refresh rate, where most of these scenarios run.)
 // ============================================================================
-let _perfRecording=false, _perfBuf=[], _perfPrevTop=0, _perfState=null;
+let _perfRecording=false, _perfBuf=[], _perfPrevTop=0, _perfState=null, _lastGpuMs=0;
 const PERF_KEY='islandHopper.perf.v1';
 function _perfSleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 async function _perfWaitSettle(extraMs){   // wait out the dive/compile jank before sampling
@@ -6292,7 +6303,7 @@ function _perfAssembleRun(cfg, scenarios){
   return {
     schema: PERF_KEY, label: cfg.label, timestamp: new Date().toISOString(),
     env: { ua: navigator.userAgent, canvasW: c.width, canvasH: c.height, cssW: c.clientWidth, cssH: c.clientHeight,
-           devicePixelRatio: window.devicePixelRatio, pixelRatio: (renderer.getPixelRatio?renderer.getPixelRatio():null), hasGpuTimestamps: gpuMeans.length>0 },
+           devicePixelRatio: window.devicePixelRatio, pixelRatio: (renderer.getPixelRatio?renderer.getPixelRatio():null), hasGpuTimestamps: gpuMeans.length>0, noopt: NOOPT },
     config: cfg, scenarios,
     aggregate: {
       cpuMs_mean: +(cpuMeans.reduce((a,b)=>a+b,0)/(cpuMeans.length||1)).toFixed(3),
@@ -6307,7 +6318,7 @@ async function runPerfSweep(opts){
   if (_perfState && _perfState.running){ console.warn('[perf] a sweep is already running'); return _perfState; }
   if (!demoScenarios.length){ console.warn('[perf] no scenarios to sweep'); return; }
   const cfg={ settleMs: opts.settleMs!=null?opts.settleMs:2000, sampleMs: opts.sampleMs!=null?opts.sampleMs:8000,
-              label: opts.label||'run', forceW: opts.forceW||0, forceH: opts.forceH||0,
+              label: opts.label || (NOOPT?'baseline':'optimized'), noopt: NOOPT, forceW: opts.forceW||0, forceH: opts.forceH||0,
               forceSnap: !!opts.forceSnap,       // present each scenario via direct snap (skip globe dives — robust for automated/background runs; steady-state perf is identical)
               ignoreHidden: !!opts.ignoreHidden }; // don't abort if the tab is backgrounded (CPU/GPU ms stay valid when throttled; only fps inflates)
   const list=demoScenarios, wasDemo=demoMode, musicWas=P.music;
