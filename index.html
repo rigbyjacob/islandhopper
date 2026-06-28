@@ -1133,14 +1133,11 @@ function tourFollowPath(bx, bz){
       const giP = prevGateBehind(piBoat);
       followed = lead.concat(loopArc((gi+9)%N, giP)).concat(trailToBoat(giP, bx, bz));
       gate = tourPath[gi];
-    } else {                                   // on the loop — draw it from the boat forward, but STOP ~1 leg short of
-      // wrapping back onto the boat. The old "full loop + first 30 points again" re-covered the start, drawing
-      // ~30 points twice just ahead of the boat (offset dash phase = the "written twice" parallel dashes). The
-      // small undrawn arc sits BEHIND the boat where the wedge isn't shown anyway, and the far end stays well
-      // clear of the boat so pure-pursuit never latches to it (which is what the +30 guard was for).
-      const cut = Math.min(34, N-4), seq = [];
-      for (let k=0; k<N-cut; k++) seq.push(tourPath[(piBoat+k)%N]);
-      followed = seq;
+    } else {                                   // on the loop — the FULL loop from the boat, wrapping back to just behind it
+      // (so the trailing path stays connected). The old code appended the first ~30 points AGAIN ("+30 wrap"),
+      // re-covering the start and drawing it twice just ahead of the boat — that was the "written twice" double.
+      // Dropping just that re-cover removes the double while keeping the trailing path.
+      followed = tourPath.slice(piBoat).concat(tourPath.slice(0, piBoat));
       gate = tourPath[piBoat];
     }
   }

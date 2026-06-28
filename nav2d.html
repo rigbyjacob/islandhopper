@@ -438,8 +438,11 @@ function tourFollowPath(bx, bz){
       const giP = prevGateBehind(piBoat);
       followed = lead.concat(loopArc((gi+9)%N, giP)).concat(trailToBoat(giP, bx, bz));
       gate = tourPath[gi];
-    } else {                                   // on the loop — just follow it forward
-      followed = tourPath.slice(piBoat).concat(tourPath.slice(0,piBoat)).concat(tourPath.slice(piBoat, Math.min(piBoat+30, N)));
+    } else {                                   // on the loop — the FULL loop from the boat, wrapping back to just behind it
+      // (so the trailing path stays connected). The old code appended the first ~30 points AGAIN ("+30 wrap"),
+      // re-covering the start and drawing it twice just ahead of the boat — that was the "written twice" double.
+      // Dropping just that re-cover removes the double while keeping the trailing path.
+      followed = tourPath.slice(piBoat).concat(tourPath.slice(0, piBoat));
       gate = tourPath[piBoat];
     }
   }
