@@ -1497,6 +1497,7 @@ init().catch(fatal);
 
 async function init() {
   renderer = new THREE.WebGPURenderer({ antialias: true });
+  try { renderer.trackTimestamp = true; } catch(_){}   // perf harness: enables GPU frame-time via WebGPU timestamp queries (best-effort; ignored if unsupported)
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1543,6 +1544,7 @@ async function init() {
   let firstFrame = true, fpsT = 0, fpsN = 0, _shadowTick = 0;
 
   renderer.setAnimationLoop(() => {
+    const _pt0 = performance.now();   // perf harness: CPU frame-time start
     const dt = Math.min(clock.getDelta(), 0.04);
     const t = clock.elapsedTime;
     uTime.value = t;   // drive the GPU wave clock from the same elapsed time the JS sampler uses → no finger lag
@@ -1634,11 +1636,21 @@ async function init() {
     fpsN++; fpsT += dt;
     if (fpsT >= 0.5) { ui.fps.textContent = Math.round(fpsN/fpsT) + ' fps'; fpsN = 0; fpsT = 0; }
 
+    if (_perfRecording){   // perf harness: record CPU ms (work this frame), realized interval, and GPU ms (last resolved timestamp)
+      const _now = performance.now();
+      let _gpu = 0; try { _gpu = (renderer.info && renderer.info.render && renderer.info.render.timestamp) || 0; } catch(_){}
+      _perfBuf.push({ cpu: _now - _pt0, intv: _pt0 - (_perfPrevTop || _pt0), gpu: _gpu });
+      _perfPrevTop = _pt0;
+      if (renderer.resolveTimestampsAsync) { try { renderer.resolveTimestampsAsync(); } catch(_){} }   // kick off async readback for next frame's gpu value
+    }
+
     if (firstFrame) { firstFrame = false; window.__booted = true;
       setTimeout(() => document.getElementById('overlay').classList.add('hidden'), 250);
       if (new URLSearchParams(location.search).has('dive')){ const u=new URL(location.href); u.searchParams.delete('dive'); try{history.replaceState(null,'',u.toString());}catch(_){} startDescent(); }   // arrived from a globe dive → descend from orbit
       else if (!new URLSearchParams(location.search).has('nodemo') && typeof enterDemoMode==='function' && demoScenarios.length){   // boot straight into the curated demo (use ?nodemo to edit freely)
-        setTimeout(()=>{ try{ enterDemoMode(); }catch(_){} }, 700); } }
+        setTimeout(()=>{ try{ enterDemoMode(); }catch(_){} }, 700); }
+      const _pq = new URLSearchParams(location.search).get('perf');   // ?perf or ?perf=label → auto-run a perf sweep once booted
+      if (_pq!=null && typeof runPerfSweep==='function') setTimeout(()=>{ try{ runPerfSweep({ label: _pq||'autorun' }); }catch(e){ console.warn('perf autorun', e); } }, 2200); }
   });
 
   window.addEventListener('resize', onResize);
@@ -5635,6 +5647,21 @@ function buildPanel() {
     setTimeout(()=>{ exportBtn.textContent = old; exportBtn.classList.remove('active'); }, 1600);
   };
 
+  // PERF SWEEP: run every scenario for a fixed window, capture CPU/GPU frame-time + fps → localStorage.
+  const perfB = el('div','btn',acts); perfB.textContent='▶ Run perf sweep';
+  perfB.title='Run every demo scenario for a fixed window, capturing CPU/GPU frame-time + fps; saves to localStorage. Keep this tab focused while it runs (~90s).';
+  perfB.onclick=()=>{ if(_perfState&&_perfState.running) return;
+    runPerfSweep({label:'manual'});
+    const iv=setInterval(()=>{ const st=_perfState; if(!st) return;
+      if(st.running){ perfB.textContent='⏳ '+(st.i+1)+'/'+st.n+' '+st.current; perfB.classList.add('active'); }
+      else { perfB.textContent= st.aborted?'⚠ aborted (focus tab)':'✓ sweep saved'; perfB.classList.remove('active'); clearInterval(iv); setTimeout(()=>{ perfB.textContent='▶ Run perf sweep'; },2800); } }, 400); };
+  const perfExp = el('div','btn',acts); perfExp.textContent='⬇ Export perf runs (JSON)';
+  perfExp.title='Download + copy all stored perf runs';
+  perfExp.onclick=()=>{ const json=JSON.stringify(_perfLoadRuns(),null,2);
+    try{ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([json],{type:'application/json'})); a.download='island-hopper-perf.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);}catch(_){}
+    try{ navigator.clipboard&&navigator.clipboard.writeText(json);}catch(_){}
+    const o=perfExp.textContent; perfExp.textContent='✓ Saved + copied'; perfExp.classList.add('active'); setTimeout(()=>{ perfExp.textContent=o; perfExp.classList.remove('active'); },1600); };
+
   setMode('tour');                    // Island tour is the only working mode → force it (the old Mode buttons are gone)
   applyPanelLayout();                 // restore saved section order + collapsed state
 }
@@ -6212,6 +6239,134 @@ function _refreshScenarioList(){ const c=ui.scnList; if(!c) return; c.innerHTML=
     const del=el('div','scn-del',row); del.textContent='✕'; del.title='Delete scenario'; del.onclick=()=>{ demoScenarios.splice(i,1); _saveScenarios(); _refreshScenarioList(); };
   });
 }
+
+// ============================================================================
+// PERFORMANCE SWEEP HARNESS — run every demo scenario for a fixed window, capture
+// CPU frame-time (ms), realized frame interval, and (best-effort) GPU frame-time via
+// WebGPU timestamp queries. Stats + percentiles + 1%-lows per scenario, saved to
+// localStorage (ring buffer of the last 10 runs) and diffable run-to-run.
+//   Trigger:  dev.perfSweep({label:'optimized'})  ·  Misc-panel button  ·  ?perf=label
+//   Review:   dev.perfRuns()  ·  dev.perfDump()  ·  dev.perfDiff('baseline','optimized')
+// (CPU/GPU ms matter more than FPS for tuning: realized FPS is vsync-capped and hides
+//  headroom above the refresh rate, where most of these scenarios run.)
+// ============================================================================
+let _perfRecording=false, _perfBuf=[], _perfPrevTop=0, _perfState=null;
+const PERF_KEY='islandHopper.perf.v1';
+function _perfSleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+async function _perfWaitSettle(extraMs){   // wait out the dive/compile jank before sampling
+  const t0=performance.now();
+  while ((typeof _demoBusy!=='undefined' && _demoBusy) || (typeof _swapping!=='undefined' && _swapping)){
+    if (performance.now()-t0>15000) break;   // safety cap
+    await _perfSleep(90);
+  }
+  await _perfSleep(extraMs);
+}
+function _pctl(sorted, p){ if(!sorted.length) return 0; const i=Math.min(sorted.length-1, Math.max(0, Math.round((p/100)*(sorted.length-1)))); return sorted[i]; }
+function _statOf(arr){ if(!arr.length) return null; const s=arr.slice().sort((a,b)=>a-b); const mean=arr.reduce((x,y)=>x+y,0)/arr.length;
+  return { mean:+mean.toFixed(3), p50:+_pctl(s,50).toFixed(3), p95:+_pctl(s,95).toFixed(3), p99:+_pctl(s,99).toFixed(3), max:+s[s.length-1].toFixed(3) }; }
+function _perfStats(sc, buf){
+  const b = buf.slice(2).filter(r=>r.intv>0);                          // drop the first 2 (warm/zero-interval) frames
+  if (!b.length) return { name:sc.name, region:sc.region, frames:0, fps:{mean:0,p1_low:0,min:0}, cpuMs:null, gpuMs:null, intervalMs:null };
+  const cpu=b.map(r=>r.cpu), intv=b.map(r=>r.intv), gpu=b.map(r=>r.gpu).filter(v=>v>0);
+  const fpsArr=intv.map(v=>1000/v);
+  const sIntv=intv.slice().sort((a,b)=>b-a); const k=Math.max(1, Math.round(sIntv.length*0.01));   // slowest 1% of frames
+  const low1=sIntv.slice(0,k).reduce((x,y)=>x+y,0)/k;
+  return {
+    name: sc.name, region: sc.region, present: sc.present,
+    context: { style:(sc.settings&&sc.settings.style), fleet:sc.fleet, autoDay:(sc.settings&&sc.settings.autoDay), atmosphere:(sc.settings&&sc.settings.atmosphere), timeOfDay:(sc.settings&&sc.settings.timeOfDay) },
+    frames: b.length,
+    fps: { mean:+(fpsArr.reduce((x,y)=>x+y,0)/fpsArr.length).toFixed(1), p1_low:+(1000/low1).toFixed(1), min:+(1000/sIntv[0]).toFixed(1) },
+    cpuMs: _statOf(cpu),
+    gpuMs: gpu.length? _statOf(gpu) : null,
+    intervalMs: _statOf(intv),
+  };
+}
+function _perfLoadRuns(){ try{ const s=localStorage.getItem(PERF_KEY); if(s) return JSON.parse(s); }catch(_){} return []; }
+function _perfSaveRun(run){ try{ const runs=_perfLoadRuns(); runs.push(run); while(runs.length>10) runs.shift(); localStorage.setItem(PERF_KEY, JSON.stringify(runs)); }catch(e){ console.warn('[perf] save failed', e); } }
+function _perfAssembleRun(cfg, scenarios){
+  const c=renderer.domElement;
+  const cpuMeans=scenarios.map(s=>s.cpuMs?s.cpuMs.mean:0);
+  const gpuMeans=scenarios.map(s=>s.gpuMs?s.gpuMs.mean:0).filter(v=>v>0);
+  const fpsMeans=scenarios.map(s=>s.fps.mean);
+  let worst=null; scenarios.forEach(s=>{ const m=s.cpuMs?s.cpuMs.mean:0; if(!worst||m>worst.cpuMs) worst={name:s.name, cpuMs:m}; });
+  return {
+    schema: PERF_KEY, label: cfg.label, timestamp: new Date().toISOString(),
+    env: { ua: navigator.userAgent, canvasW: c.width, canvasH: c.height, cssW: c.clientWidth, cssH: c.clientHeight,
+           devicePixelRatio: window.devicePixelRatio, pixelRatio: (renderer.getPixelRatio?renderer.getPixelRatio():null), hasGpuTimestamps: gpuMeans.length>0 },
+    config: cfg, scenarios,
+    aggregate: {
+      cpuMs_mean: +(cpuMeans.reduce((a,b)=>a+b,0)/(cpuMeans.length||1)).toFixed(3),
+      gpuMs_mean: gpuMeans.length? +(gpuMeans.reduce((a,b)=>a+b,0)/gpuMeans.length).toFixed(3) : null,
+      fps_mean: +(fpsMeans.reduce((a,b)=>a+b,0)/(fpsMeans.length||1)).toFixed(1),
+      worst_scenario: worst,
+    },
+  };
+}
+async function runPerfSweep(opts){
+  opts=opts||{};
+  if (_perfState && _perfState.running){ console.warn('[perf] a sweep is already running'); return _perfState; }
+  if (!demoScenarios.length){ console.warn('[perf] no scenarios to sweep'); return; }
+  const cfg={ settleMs: opts.settleMs!=null?opts.settleMs:2000, sampleMs: opts.sampleMs!=null?opts.sampleMs:8000,
+              label: opts.label||'run', forceW: opts.forceW||0, forceH: opts.forceH||0,
+              forceSnap: !!opts.forceSnap,       // present each scenario via direct snap (skip globe dives — robust for automated/background runs; steady-state perf is identical)
+              ignoreHidden: !!opts.ignoreHidden }; // don't abort if the tab is backgrounded (CPU/GPU ms stay valid when throttled; only fps inflates)
+  const list=demoScenarios, wasDemo=demoMode, musicWas=P.music;
+  try{ P.music=false; stopIntroMusic(); }catch(_){}
+  if (!demoMode){ enterDemoMode(); await _perfSleep(800); }
+  let _restore=null;
+  if (cfg.forceW && cfg.forceH){ const c=renderer.domElement; _restore=[c.clientWidth||window.innerWidth, c.clientHeight||window.innerHeight]; try{ renderer.setSize(cfg.forceW,cfg.forceH,false); }catch(_){} }
+  _perfState={ running:true, done:false, label:cfg.label, i:0, n:list.length, current:'', scenarios:[], startedAt:Date.now() };
+  window.__perfState=_perfState;
+  console.log('[perf] sweep START ·', cfg.label, '·', list.length, 'scenarios ·', cfg.sampleMs+'ms sample, '+cfg.settleMs+'ms settle');
+  for (let i=0;i<list.length;i++){
+    _perfState.i=i; _perfState.current=list[i].name;
+    if (cfg.forceSnap){ try{ _demoIdx=i; await _applyScenarioCore(list[i]); _updateDemoBar(); }catch(e){ console.warn('[perf] applyScenario', e); } }
+    else { try{ demoGo(i); }catch(e){ console.warn('[perf] demoGo', e); } }
+    await _perfWaitSettle(cfg.settleMs);
+    if (document.hidden){ _perfState.backgrounded=true;
+      if (!cfg.ignoreHidden){ _perfState.aborted='tab hidden — keep the tab focused (RAF throttles in the background)'; console.warn('[perf] ABORTED:', _perfState.aborted); break; } }
+    _perfBuf=[]; _perfPrevTop=0; _perfRecording=true;
+    await _perfSleep(cfg.sampleMs);
+    _perfRecording=false;
+    const rec=_perfStats(list[i], _perfBuf.slice());
+    _perfState.scenarios.push(rec);
+    console.log('[perf]  '+(i+1)+'/'+list.length+' '+rec.name+': cpu '+(rec.cpuMs&&rec.cpuMs.mean)+'ms (p99 '+(rec.cpuMs&&rec.cpuMs.p99)+') · '+(rec.gpuMs?('gpu '+rec.gpuMs.mean+'ms · '):'')+'fps '+rec.fps.mean+' (1%low '+rec.fps.p1_low+')');
+  }
+  _perfRecording=false;
+  if (_restore){ try{ renderer.setSize(_restore[0],_restore[1],false); }catch(_){} }
+  const run=_perfAssembleRun(cfg, _perfState.scenarios);
+  run.env.backgrounded = !!_perfState.backgrounded;   // flag: fps unreliable (throttled) but CPU/GPU ms valid
+  _perfSaveRun(run);
+  _perfState.running=false; _perfState.done=true; _perfState.run=run;
+  try{ P.music=musicWas; }catch(_){}
+  if (!wasDemo){ try{ exitDemoMode(); }catch(_){} }
+  console.log('[perf] sweep DONE ·', cfg.label, '· aggregate', run.aggregate, '· saved to localStorage["'+PERF_KEY+'"] ('+_perfLoadRuns().length+' runs stored)');
+  return run;
+}
+function perfDiff(labelA, labelB){   // compare the latest run of each label (negative delta = labelB faster)
+  const runs=_perfLoadRuns();
+  const find=l=>{ for(let i=runs.length-1;i>=0;i--) if(runs[i].label===l) return runs[i]; return null; };
+  const A=find(labelA), B=find(labelB);
+  if(!A||!B){ console.warn('[perf] need runs labeled "'+labelA+'" & "'+labelB+'" — stored labels:', runs.map(r=>r.label)); return; }
+  const rows=[];
+  A.scenarios.forEach(sa=>{ const sb=B.scenarios.find(s=>s.name===sa.name); if(!sb||!sa.cpuMs||!sb.cpuMs) return;
+    const row={ scenario:sa.name };
+    row[labelA+'_cpu']=sa.cpuMs.mean; row[labelB+'_cpu']=sb.cpuMs.mean;
+    row.cpu_delta=+(sb.cpuMs.mean-sa.cpuMs.mean).toFixed(2); row.cpu_pct=+(100*(sb.cpuMs.mean-sa.cpuMs.mean)/sa.cpuMs.mean).toFixed(1);
+    if(sa.gpuMs&&sb.gpuMs){ row.gpu_delta=+(sb.gpuMs.mean-sa.gpuMs.mean).toFixed(2); row.gpu_pct=+(100*(sb.gpuMs.mean-sa.gpuMs.mean)/sa.gpuMs.mean).toFixed(1); }
+    row[labelA+'_fps']=sa.fps.mean; row[labelB+'_fps']=sb.fps.mean;
+    rows.push(row);
+  });
+  console.log('[perf] DIFF '+labelA+' → '+labelB+'  (negative delta = '+labelB+' faster)');
+  try{ console.table(rows); }catch(_){ console.log(rows); }
+  console.log('[perf] aggregate cpuMs '+A.aggregate.cpuMs_mean+' → '+B.aggregate.cpuMs_mean+'   gpuMs '+A.aggregate.gpuMs_mean+' → '+B.aggregate.gpuMs_mean+'   fps '+A.aggregate.fps_mean+' → '+B.aggregate.fps_mean);
+  return rows;
+}
+// expose for console + dev menu
+try{ window.runPerfSweep=runPerfSweep; window.perfDiff=perfDiff; window.perfRuns=_perfLoadRuns; window.perfDump=()=>JSON.stringify(_perfLoadRuns(),null,2);
+  if(window.dev) Object.assign(window.dev, { perfSweep:runPerfSweep, perfDiff, perfRuns:_perfLoadRuns,
+    perfDump:()=>JSON.stringify(_perfLoadRuns(),null,2), perfClear:()=>{ try{localStorage.removeItem(PERF_KEY);}catch(_){}; return 'perf runs cleared'; } });
+}catch(_){}
 
 // --- small UI factory ---
 function el(tag, cls, parent){ const e=document.createElement(tag); if(cls)e.className=cls; if(parent)parent.appendChild(e); return e; }
