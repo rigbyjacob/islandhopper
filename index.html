@@ -1339,7 +1339,8 @@ function applyTourPacing(){
   P.desiredSpeed = clampJS(target, 4, 30);
   syncSlider('desiredSpeed');
 }
-let gotoTarget = null;            // {x,z} from double-click
+let gotoTarget = null;            // {x,z} from double-click — a single detour point (re-clicking REPLACES it, never stacks)
+let _gotoResumeTour = false;      // after reaching a double-click detour, resume the built-in tour loop (don't stop)
 let path = null;                  // current planned waypoint list
 let planKey = '';                 // change-detection for replanning
 
@@ -1494,7 +1495,10 @@ function guidance(s, t) {
   desSpeed *= clampJS(1 - Math.abs(wrap(course - s.psi))*0.5, 0.4, 1);   // ease off for sharp turns so the hull can track the curve
 
   if (P.mode === 'tour' && arrived) { wpIdx = (wpIdx+1) % route.length; boat3.recoverCount = 0; }
-  if (P.mode === 'goto' && arrived) { desSpeed = 0; }
+  if (P.mode === 'goto' && arrived) {
+    if (_gotoResumeTour){ _gotoResumeTour=false; gotoTarget=null; P.mode='tour'; path=null; planKey=''; }   // reached the double-click detour → rejoin the built-in tour loop (don't stop)
+    else desSpeed = 0;
+  }
   const name = P.mode === 'goto' ? 'destination' : route[wpIdx].name;
   return { desPsi, desSpeed, course, dist: dArrive, name, xte: aim.xte, arrived };
 }
@@ -5175,14 +5179,10 @@ function initInput() {
       for (let it=0; it<4; it++){ _pl.constant = curveDropJS(pt.x, pt.z); const p2=new THREE.Vector3();
         if (!raycaster.ray.intersectPlane(_pl, p2)) break; pt.copy(p2); }
     }
-    // ADD the clicked point as a waypoint in the GLOBAL tour loop and re-route through it (instead of abandoning
-    // the route for a one-off goto). The tour rebuilds whenever the route's names change (see maybeReplan/tourKey).
-    if (P.mode!=='tour'){ P.mode='tour'; } gotoTarget=null;
-    const node = { x: pt.x, z: pt.z, name:'⚓'+(pt.x|0)+','+(pt.z|0), r: 14, ring: null };
-    const ins = Math.min(Math.max(wpIdx,0)+1, route.length);   // insert right after the current target → visit it next, then carry on
-    route.splice(ins, 0, node);
-    tourKey=''; path=null; planKey='';                          // force the loop to rebuild through the new node
-    try{ replan(boat3); }catch(_){}
+    // Detour to the clicked point as the VERY NEXT destination, then resume the tour loop where it left off
+    // (goto-then-resume). Routing it as a loop waypoint made it visit in route order — i.e. last, not next.
+    gotoTarget = { x: pt.x, z: pt.z }; P.mode='goto'; _gotoResumeTour = true;
+    path=null; planKey=''; try{ replan(boat3); }catch(_){}
   });
   // single click on the volcano cone → erupt (ignore drags)
   let _vdx=0, _vdy=0;
