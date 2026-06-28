@@ -223,6 +223,16 @@
 <script src="data/hawaii.js"></script>    <!-- Hawaiʻi · main island chain: window.HAWAII (volcanic, tropical) -->
 <script src="data/halong.js"></script>    <!-- Hạ Long Bay · limestone karst (window.HALONG, build/gen_region.py) -->
 <script src="data/elnido.js"></script>    <!-- El Nido & Coron · Palawan karst (window.ELNIDO, build/gen_region.py) -->
+<script src="data/solomon.js"></script>   <!-- Solomon Is. · Gizo & Kolombangara (window.SOLOMON) -->
+<script src="data/aran.js"></script>      <!-- Aran Islands · Galway Bay (window.ARAN) -->
+<script src="data/faroe.js"></script>     <!-- Faroe Islands (window.FAROE) -->
+<script src="data/skye.js"></script>      <!-- Small Isles & Skye · Inner Hebrides (window.SKYE) -->
+<script src="data/montauk.js"></script>   <!-- Montauk & East End · Long Island (window.MONTAUK) -->
+<script src="data/kodiak.js"></script>    <!-- Kodiak Archipelago · Alaska (window.KODIAK) -->
+<script src="data/stjohns.js"></script>   <!-- St. John's & Conception Bay · Newfoundland (window.STJOHNS) -->
+<script src="data/capecod.js"></script>   <!-- Cape Cod & the Islands · Massachusetts (window.CAPECOD) -->
+<script src="data/exe.js"></script>       <!-- Exe Estuary & South Devon + Lundy · UK (window.EXE) -->
+<script src="data/apo.js"></script>       <!-- Apo, Dauin & Siquijor · Bohol Sea (window.APO) -->
 <script src="data/worldmap.js"></script>   <!-- shaded-relief Earth COLOR texture for the world-map globe (build/gen_worldmap.py) -->
 <script src="data/worldmap_disp.js"></script>   <!-- Earth DISPLACEMENT (height) texture for globe relief -->
 <script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
@@ -592,6 +602,106 @@ if (window.ELNIDO) REGIONS.elnido = Object.assign({}, window.ELNIDO, {
   cityLabels: [ ['El Nido',119.4075,11.1956],['Coron',120.2052,11.9986] ],
   // bright tropical mid-morning, dry-season NE amihan breeze, light swell, low haze
   defaults: { timeOfDay:10.0, atmosphere:0.35, windDirDeg:60, windStrength:11, waveHeight:0.6, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Solomon Is. · Gizo & Kolombangara (high volcanic rainforest, reef lagoons) — resembles hawaii ----
+if (window.SOLOMON) REGIONS.solomon = Object.assign({}, window.SOLOMON, {
+  relief: { escale:13, steep:0.82, ridge:2.2, lift:2.1 },
+  tour: ['Ghizo','Kennedy','Mbabanga','Kolombangara'],
+  seaTint: [0.80, 1.10, 1.12], foam: 0.45,
+  palette: { land: { seabed:0x1d86a0, wetsand:0xc6a766, sand:0xe6dcb6, grass:0x357a2e, forest:0x1d521f, rock:0x6a5f54, cliff:0x4e463c }, shrub: [0x2f7a26, 0x1d5a1a] },
+  flora: { palms:true, density:1.7 },
+  cities: [ [156.842,-8.103,22] ], cityLabels: [ ['Gizo',156.842,-8.103] ],
+  defaults: { timeOfDay:15, atmosphere:0.45, windDirDeg:135, windStrength:10, waveHeight:0.5, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Aran Islands · Galway Bay mouth (grey karst, Atlantic cliffs, drystone walls) — resembles sweden (temp) ----
+if (window.ARAN) REGIONS.aran = Object.assign({}, window.ARAN, {
+  relief: { escale:22, steep:0.70, ridge:1.8, lift:1.6 },
+  tour: ['Inishmore','Inishmaan','Inisheer'],
+  seaTint: [0.82, 1.00, 1.05], foam: 0.62,
+  palette: { land: { seabed:0x2a6b7a, wetsand:0xa9a487, sand:0xcfc8a8, grass:0x5a7b46, forest:0x3a5630, rock:0x9a958a, cliff:0x76726a }, shrub: [0x4a6b38, 0x35501f] },
+  flora: { palms:false, density:0.55 },
+  cities: [ [-9.661,53.123,16], [-9.753,53.132,10] ], cityLabels: [ ['Kilronan',-9.661,53.123],['Kilmurvey',-9.753,53.132] ],
+  defaults: { timeOfDay:17, atmosphere:0.55, windDirDeg:225, windStrength:18, waveHeight:1.8, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Faroe Islands (basalt sea-cliffs, fjords, low cloud) — resembles sweden (nord) ----
+if (window.FAROE) REGIONS.faroe = Object.assign({}, window.FAROE, {
+  relief: { escale:11, steep:0.90, ridge:2.6, lift:2.4 },
+  tour: ['Streymoy','Vágar','Mykines','Eysturoy','Kalsoy','Borðoy','Viðoy','Suðuroy','Sandoy'],
+  seaTint: [0.78, 0.98, 1.06], foam: 0.85,
+  palette: { land: { seabed:0x21525e, wetsand:0x8f8a72, sand:0xb6ad90, grass:0x3f6b3a, forest:0x274d2a, rock:0x6f6a62, cliff:0x55514a }, shrub: [0x3a5e2e, 0x274018] },
+  flora: { palms:false, density:0.4 },
+  cities: [ [-6.77,62.01,24], [-6.59,62.23,16], [-7.31,62.07,10] ], cityLabels: [ ['Tórshavn',-6.77,62.01],['Klaksvík',-6.59,62.23],['Sørvágur',-7.31,62.07] ],
+  defaults: { timeOfDay:8, atmosphere:0.75, windDirDeg:225, windStrength:22, waveHeight:2.4, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Small Isles & Skye · Inner Hebrides (Cuillin peaks, sea-lochs, misty light) — resembles sweden (temp) ----
+if (window.SKYE) REGIONS.skye = Object.assign({}, window.SKYE, {
+  relief: { escale:12, steep:0.85, ridge:2.4, lift:2.2 },
+  tour: ['Soay','Eigg','Muck','Rùm','Canna','Sanday','Raasay'],
+  seaTint: [0.82, 1.00, 1.06], foam: 0.6,
+  palette: { land: { seabed:0x2a6b78, wetsand:0xa39e80, sand:0xcac2a2, grass:0x4f7440, forest:0x33512c, rock:0x8d887d, cliff:0x6b675f }, shrub: [0x456435, 0x2f4a1d] },
+  flora: { palms:false, density:0.7 },
+  cities: [ [-6.11,57.15,10], [-6.28,57.01,10], [-5.89,57.07,10] ], cityLabels: [ ['Elgol',-6.11,57.15],['Kinloch',-6.28,57.01],['Armadale',-5.89,57.07] ],
+  defaults: { timeOfDay:17, atmosphere:0.6, windDirDeg:240, windStrength:16, waveHeight:1.6, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Montauk & the East End · Long Island (moraine bluffs, dunes, salt marsh) — resembles sweden (temp) ----
+if (window.MONTAUK) REGIONS.montauk = Object.assign({}, window.MONTAUK, {
+  relief: { escale:34, steep:0.45, ridge:1.3, lift:1.3 },
+  tour: ['Gardiners','Plum Island','Block Island','Ram Island'],
+  seaTint: [0.84, 1.02, 1.04], foam: 0.5,
+  palette: { land: { seabed:0x2c6f74, wetsand:0xc9bd92, sand:0xe6dcb4, grass:0x6a874a, forest:0x44602f, rock:0xa89b7e, cliff:0x9a8a6a }, shrub: [0x5a7a3a, 0x3f5526] },
+  flora: { palms:false, density:0.8 },
+  cities: [ [-71.95,41.04,18], [-72.29,41.00,14], [-72.36,41.10,12] ], cityLabels: [ ['Montauk',-71.95,41.04],['Sag Harbor',-72.29,41.00],['Greenport',-72.36,41.10] ],
+  defaults: { timeOfDay:18, atmosphere:0.4, windDirDeg:200, windStrength:12, waveHeight:1.0, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Kodiak Archipelago · Alaska (fjords, spruce ridges, fog) — resembles sweden (nord) ----
+if (window.KODIAK) REGIONS.kodiak = Object.assign({}, window.KODIAK, {
+  relief: { escale:13, steep:0.80, ridge:2.2, lift:2.2 },
+  tour: ['Spruce','Whale','Afognak','Raspberry','Shuyak','Barren Islands'],
+  seaTint: [0.78, 0.96, 1.04], foam: 0.8,
+  palette: { land: { seabed:0x21525a, wetsand:0x8b8770, sand:0xb0a88c, grass:0x37602f, forest:0x1f3f21, rock:0x6a655c, cliff:0x504c45 }, shrub: [0x2f5226, 0x1d3815] },
+  flora: { palms:false, density:1.1 },
+  cities: [ [-152.41,57.79,20], [-152.50,57.92,10], [-152.88,57.87,10] ], cityLabels: [ ['Kodiak',-152.41,57.79],['Ouzinkie',-152.50,57.92],['Port Lions',-152.88,57.87] ],
+  defaults: { timeOfDay:7, atmosphere:0.8, windDirDeg:135, windStrength:18, waveHeight:2.2, stormOn:false, stormIntensity:0.0 },
+});
+// ---- St. John's & Conception Bay · Newfoundland (rust/grey sea-cliffs, fog, cold Atlantic) — resembles sweden (nord) ----
+if (window.STJOHNS) REGIONS.stjohns = Object.assign({}, window.STJOHNS, {
+  relief: { escale:16, steep:0.78, ridge:2.0, lift:1.9 },
+  tour: ['Bell Island'],
+  seaTint: [0.80, 0.98, 1.02], foam: 0.82,
+  palette: { land: { seabed:0x24535b, wetsand:0x968a70, sand:0xb4a98a, grass:0x3c5e34, forest:0x274a28, rock:0x7a6f60, cliff:0x6a5a48 }, shrub: [0x355226, 0x243a16] },
+  flora: { palms:false, density:0.7 },
+  cities: [ [-52.712,47.561,26], [-52.852,47.617,12], [-52.985,47.525,12] ], cityLabels: [ ["St. John's",-52.712,47.561],['Portugal Cove',-52.852,47.617],['CBS',-52.985,47.525] ],
+  defaults: { timeOfDay:7.5, atmosphere:0.7, windDirDeg:250, windStrength:18, waveHeight:2.2, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Cape Cod & the Islands · Massachusetts (sandy moraine, dunes, barrier beaches) — resembles japan (temp) ----
+if (window.CAPECOD) REGIONS.capecod = Object.assign({}, window.CAPECOD, {
+  relief: { escale:34, steep:0.45, ridge:1.3, lift:1.3 },
+  tour: ['Nantucket','Muskeget',"Martha's Vineyard",'Cuttyhunk','Naushon'],
+  seaTint: [0.84, 1.00, 1.04], foam: 0.52,
+  palette: { land: { seabed:0x2a6c76, wetsand:0xcabd90, sand:0xe6ddb2, grass:0x6a8a48, forest:0x3f5a30, rock:0xada082, cliff:0x9c906e }, shrub: [0x5a7a38, 0x3f5524] },
+  flora: { palms:false, density:0.85 },
+  cities: [ [-70.186,42.051,16], [-70.283,41.653,16], [-70.099,41.284,14], [-70.513,41.389,12] ], cityLabels: [ ['Provincetown',-70.186,42.051],['Hyannis',-70.283,41.653],['Nantucket',-70.099,41.284],['Edgartown',-70.513,41.389] ],
+  defaults: { timeOfDay:9, atmosphere:0.45, windDirDeg:225, windStrength:14, waveHeight:1.2, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Exe Estuary & South Devon + Lundy · UK (red sandstone cliffs, estuary flats, granite Lundy) — resembles japan (temp) ----
+if (window.EXE) REGIONS.exe = Object.assign({}, window.EXE, {
+  relief: { escale:20, steep:0.70, ridge:1.8, lift:1.7 },
+  tour: ['Lundy'],
+  seaTint: [0.80, 0.98, 1.0], foam: 0.48,
+  palette: { land: { seabed:0x2b6470, wetsand:0xc6a578, sand:0xdcc299, grass:0x5e7e40, forest:0x3c5630, rock:0xb87a52, cliff:0x9c5a3e }, shrub: [0x517036, 0x394e22] },
+  flora: { palms:false, density:0.8 },
+  cities: [ [-3.413,50.620,16], [-3.467,50.581,12], [-3.494,50.546,12], [-3.525,50.462,16] ], cityLabels: [ ['Exmouth',-3.413,50.620],['Dawlish',-3.467,50.581],['Teignmouth',-3.494,50.546],['Torquay',-3.525,50.462] ],
+  defaults: { timeOfDay:17, atmosphere:0.4, windDirDeg:235, windStrength:12, waveHeight:1.0, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Apo I., Dauin & Siquijor · Bohol Sea (volcanic isles, clear reef-fringed turquoise) — resembles caribbean (trop) ----
+if (window.APO) REGIONS.apo = Object.assign({}, window.APO, {
+  relief: { escale:14, steep:0.82, ridge:2.0, lift:2.0 },
+  tour: ['Apo I.','Sumilon'],
+  seaTint: [0.82, 1.12, 1.16], foam: 0.4,
+  palette: { land: { seabed:0x1f9ab0, wetsand:0xcaa86a, sand:0xeadfba, grass:0x3f8a3a, forest:0x256127, rock:0x9a8f7a, cliff:0x7c7060 }, shrub: [0x39882f, 0x256b22] },
+  flora: { palms:true, density:1.4 },
+  cities: [ [123.305,9.307,24], [123.265,9.193,12], [123.515,9.214,12] ], cityLabels: [ ['Dumaguete',123.305,9.307],['Dauin',123.265,9.193],['Siquijor',123.515,9.214] ],
+  defaults: { timeOfDay:11, atmosphere:0.25, windDirDeg:70, windStrength:9, waveHeight:0.5, stormOn:false, stormIntensity:0.0 },
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
@@ -1355,10 +1465,13 @@ function _cROUTE(){
   const tourNames = REGION.tour || ['Guadeloupe (N)','Antigua','Barbuda','Nevis','St. Kitts','St. Barths',
                      'St. Martin','Anguilla','Tortola','St. Thomas','Culebra'];
   route = tourNames.map(n => BYNAME[n]).filter(Boolean);
-  if (route.length < 2) {                                  // unknown region → auto-tour the biggest NAMED islands as a clean loop
+  if (route.length < 3) {                                  // too few named islands for a clean (non-degenerate) loop
     const named = ISLANDS.filter(i=>i.name && i.name!=='islet');
-    const pick = (named.length>=2 ? named : ISLANDS.slice()).sort((a,b)=>b.r-a.r).slice(0, 9);   // real islands only; cap the count so the loop stays readable
-    route = _orderTour(pick);
+    // top the route up to >=4 with the biggest remaining land blobs (named first, else any incl. islets), so
+    // even sparse/coastal regions get a real loop. A 2-node loop collapses and breaks the boat's start seat.
+    const pool = (named.length>=3 ? named : ISLANDS.slice()).slice().sort((a,b)=>b.r-a.r);
+    for (const isl of pool){ if (route.length>=4) break; if (!route.includes(isl)) route.push(isl); }
+    route = _orderTour(route);
   }
 }
 _cROUTE();
@@ -5865,6 +5978,16 @@ const REGION_META = {
   sweden:    { tag:'Sweden · Stockholm', blurb:'Granite skerries & pine · Djurö→Stavsnäs' },
   halong:    { tag:'Hạ Long Bay',        blurb:'Limestone towers & jade water' },
   elnido:    { tag:'El Nido & Coron',     blurb:'Palawan karst & turquoise lagoons' },
+  solomon:   { tag:'Gizo & Kolombangara', blurb:'Volcanic rainforest & reef lagoons' },
+  aran:      { tag:'Aran Islands',         blurb:'Grey karst & Atlantic cliffs' },
+  faroe:     { tag:'Faroe Islands',        blurb:'Basalt sea-cliffs & fjords' },
+  skye:      { tag:'Small Isles & Skye',   blurb:'Cuillin peaks & sea-lochs' },
+  montauk:   { tag:'Montauk & East End',   blurb:'Moraine bluffs & salt marsh' },
+  kodiak:    { tag:'Kodiak Archipelago',   blurb:'Fjords, spruce ridges & fog' },
+  stjohns:   { tag:"St. John's",           blurb:'Cold-Atlantic sea-cliffs & fog' },
+  capecod:   { tag:'Cape Cod & Islands',   blurb:'Sandy moraine & barrier beaches' },
+  exe:       { tag:'Exe & South Devon',    blurb:'Red sandstone cliffs & Lundy' },
+  apo:       { tag:'Apo, Dauin & Siquijor',blurb:'Volcanic isles & clear reefs' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
 let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[];
@@ -5925,10 +6048,21 @@ const REGION_ART_COL = {
   hawaii:    0xdd4f8c,   // Hawaiian lei & kapa — hibiscus pink
   halong:    0x2aa37e,   // Hạ Long jade-green bay water
   elnido:    0x16c4cf,   // Palawan turquoise lagoon
+  solomon:   0x1aa6c0,   // Solomon reef-lagoon aqua
+  aran:      0x2f7d8c,   // cold Atlantic steel-teal
+  faroe:     0x276f80,   // slate-teal North Atlantic
+  skye:      0x2d8090,   // Hebridean grey-green
+  montauk:   0x2f8aa0,   // East-End ocean blue-green
+  kodiak:    0x236572,   // cold deep green-grey
+  stjohns:   0x255f6c,   // cold slate-green swell
+  capecod:   0x2f93a4,   // slate-teal bay
+  exe:       0x2b7f8a,   // mild Channel grey-green
+  apo:       0x16c0cf,   // Bohol Sea turquoise
 };
 // A little tabletop DIORAMA of each region on the globe: the REAL island outlines, sculpted into hills (coast→green→
 // rock) sitting in a tinted sea — so spinning the planet gives a believable sense of each archipelago before you dive.
-const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', halong:'trop', elnido:'trop', aegean:'med', japan:'temp', sweden:'nord' };
+const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', halong:'trop', elnido:'trop', aegean:'med', japan:'temp', sweden:'nord',
+  solomon:'trop', apo:'trop', aran:'temp', skye:'temp', montauk:'temp', capecod:'temp', exe:'temp', faroe:'nord', kodiak:'nord', stjohns:'nord' };
 const _PAL = {   // per-biome palette: sea, beach, vegetated lowland, rocky peak — punchy & saturated so the dioramas read as FUN destinations against the grayscale Earth
   trop:{ sea:0x12c2ea, beach:0xffe7a3, low:0x2ed83f, peak:0x8ad348 },   // electric tropical cyan, bright sand, vivid jungle
   med: { sea:0x18b6e6, beach:0xf4dc9e, low:0x9ad84a, peak:0xe6bd56 },   // bright Aegean blue, fresh green-gold hills, warm gold rock

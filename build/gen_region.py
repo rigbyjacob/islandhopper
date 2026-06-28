@@ -63,6 +63,47 @@ KNOWN = {
     'Snake I.': (119.341, 11.095), 'Coron': (120.241, 11.929), 'Culion': (119.970, 11.819),
     'Busuanga': (120.028, 12.145), 'Malcapuya': (120.113, 11.791), 'Banana I.': (120.127, 11.771),
   },
+  'solomon': {  # Gizo–Kolombangara core, Western Province (lon,lat)
+    'Ghizo': (156.84, -8.10), 'Kolombangara': (157.067, -7.967), 'Kennedy': (156.903, -8.108),
+    'Njari': (156.758, -8.015), 'Mbabanga': (156.887, -8.120),
+  },
+  'aran': {     # Aran Islands + Brannock/Straw rocks, Galway Bay mouth (lon,lat)
+    'Inishmore': (-9.723, 53.121), 'Inishmaan': (-9.590, 53.085), 'Inisheer': (-9.528, 53.058),
+    'Brannock': (-9.840, 53.145), 'Straw': (-9.631, 53.118),
+  },
+  'faroe': {    # Faroe Islands (lon,lat)
+    'Streymoy': (-7.00, 62.13), 'Eysturoy': (-6.85, 62.22), 'Vágar': (-7.30, 62.07),
+    'Mykines': (-7.64, 62.10), 'Suðuroy': (-6.85, 61.50), 'Sandoy': (-6.80, 61.83),
+    'Borðoy': (-6.55, 62.27), 'Kalsoy': (-6.70, 62.30), 'Kunoy': (-6.65, 62.30),
+    'Viðoy': (-6.52, 62.36), 'Svínoy': (-6.32, 62.28), 'Fugloy': (-6.30, 62.34),
+  },
+  'skye': {     # Small Isles & Skye/Raasay (Inner Hebrides) (lon,lat)
+    'Rùm': (-6.33, 57.00), 'Eigg': (-6.13, 56.90), 'Muck': (-6.23, 56.83), 'Canna': (-6.53, 57.06),
+    'Sanday': (-6.50, 57.04), 'Soay': (-6.22, 57.16), 'Scalpay': (-5.97, 57.30), 'Raasay': (-6.04, 57.40),
+  },
+  'montauk': {  # Montauk & the East End islands (Long Island, NY) (lon,lat)
+    'Gardiners': (-72.10, 41.10), 'Shelter Island': (-72.33, 41.06), 'Plum Island': (-72.18, 41.18),
+    'Great Gull': (-72.12, 41.20), 'Block Island': (-71.58, 41.17), 'Ram Island': (-72.28, 41.07),
+  },
+  'kodiak': {   # Kodiak Archipelago & Barren Islands (Alaska) (lon,lat)
+    'Kodiak': (-153.40, 57.60), 'Afognak': (-152.65, 58.25), 'Shuyak': (-152.50, 58.55),
+    'Spruce': (-152.41, 57.92), 'Whale': (-152.75, 57.95), 'Raspberry': (-153.10, 58.05),
+    'Barren Islands': (-152.10, 58.90),
+  },
+  'stjohns': {  # St. John's & Conception Bay (Newfoundland) — islands (headlands stay mainland) (lon,lat)
+    'Bell Island': (-52.957, 47.633), 'Little Bell': (-52.945, 47.605), "Kelly's Island": (-52.915, 47.575),
+  },
+  'capecod': {  # Cape Cod & the Islands (MA) (lon,lat)
+    "Martha's Vineyard": (-70.62, 41.39), 'Nantucket': (-70.099, 41.284), 'Naushon': (-70.758, 41.483),
+    'Nashawena': (-70.874, 41.429), 'Cuttyhunk': (-70.928, 41.425), 'Muskeget': (-70.304, 41.335),
+    'Penikese': (-70.913, 41.452),
+  },
+  'exe': {      # Exe Estuary & South Devon + Lundy (UK) — island/stacks (headlands stay mainland) (lon,lat)
+    'Lundy': (-4.667, 51.180), 'Thatcher Rock': (-3.508, 50.448), 'Ore Stone': (-3.500, 50.450),
+  },
+  'apo': {      # Apo I., Dauin & Siquijor (Bohol Sea, PH) (lon,lat)
+    'Apo I.': (123.270, 9.075), 'Siquijor': (123.516, 9.213), 'Sumilon': (123.391, 9.428),
+  },
 }
 
 def read_asc(path):
