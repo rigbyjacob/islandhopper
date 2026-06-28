@@ -134,3 +134,6 @@ Thig big one, my concern with a shadow-catcher plane is that it will not match t
 
 
 So the first thing I notice about the sun facing view: dev.look('Kolombangara', -17, 24, 850) is that if i nod the camera up and down (no translation), the mountain becomes dark or lighter, dramatically so. You said this was impossible, but is clearly happening.
+
+
+24d30e6

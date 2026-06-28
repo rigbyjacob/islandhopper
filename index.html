@@ -4211,7 +4211,12 @@ function buildOcean() {
     const s = sin(dot(p, vec2(0.0041, 0.0023)).add(uTime.mul(0.05)))
           .add(sin(dot(p, vec2(-0.0017, 0.0033)).sub(uTime.mul(0.04))).mul(0.7))
           .add(sin(dot(p, vec2(0.0026, -0.0039)).add(uTime.mul(0.035))).mul(0.55));
-    return max(float(0.05), s.mul(uEnvAmt).mul(0.42).add(1.0)); });
+    const env = max(float(0.05), s.mul(uEnvAmt).mul(0.42).add(1.0));
+    // SHOALING: shrink wave amplitude toward shallow water so a trough can't dip below the seabed and expose it
+    // through the surface (the dark seabed patches seen on the turquoise shelf). depthN: 0 = coast/very shallow → 1 = deep.
+    const _suv = vec2( p.x.sub(BATHY_RGN.x0).div(BATHY_RGN.x1-BATHY_RGN.x0), p.y.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0) );
+    const _depthN = texture(bathyTex, clamp(_suv, vec2(0.0), vec2(1.0))).r;
+    return env.mul(smoothstep(0.02, 0.18, _depthN)); });   // ~no waves in the shallowest band, full amplitude in deep water
 
   const waveH = Fn(([p]) => { const h = float(0).toVar();
     for (const w of WAVES) h.addAssign(sin(dot(p, vec2(w.nx, w.ny)).mul(w.freq).add(uTime.mul(w.speed))).mul(w.amp));
