@@ -1086,26 +1086,16 @@ let tourGates = [], tourFollowTimer = 0;
 function tourFollowPath(bx, bz){
   if (!tourPath || tourPath.length < 3) return null;
   const N = tourPath.length;
-  // DETOUR: a double-click drops one node that becomes the immediate next stop on the SAME global path.
-  if (detourNode && tourGateAt.length){
-    // boat → detour (A* so it rounds islands instead of beelining through them)
-    let detourLead = planPath(bx, bz, detourNode.x, detourNode.z);
-    if (detourLead.length < 2) detourLead = [{x:bx,z:bz},{x:detourNode.x,z:detourNode.z}];
-    // REJOIN NODE: the next real gate node AHEAD of the detour in loop order (not the nearest polyline point).
-    // The gates between the boat and this node are skipped — treated as already visited — so clicking a target
-    // far ahead doesn't double the boat back to graze every island in between.
-    const piDet = nearestPathIndex(tourPath, detourNode.x, detourNode.z);
-    let rejoinIdx = tourGateAt[0], bestFwd = Infinity;
-    for (let i=0;i<tourGateAt.length;i++){ let fwd = tourGateAt[i]-piDet; if (fwd<=0) fwd+=N; if (fwd<bestFwd){ bestFwd=fwd; rejoinIdx=tourGateAt[i]; } }
-    // repath detour → that node (literal A*, around islands), then continue the loop forward from it
-    let rejoinLead = planPath(detourNode.x, detourNode.z, tourPath[rejoinIdx].x, tourPath[rejoinIdx].z);
-    const loopRot = tourPath.slice(rejoinIdx).concat(tourPath.slice(0,rejoinIdx)).concat(tourPath.slice(rejoinIdx, Math.min(rejoinIdx+30, N)));
-    let followed = detourLead;
-    if (rejoinLead.length >= 2){ rejoinLead.shift(); followed = followed.concat(rejoinLead); }   // drop the duplicated detour point
-    followed = followed.concat(loopRot);
+  // DETOUR: a double-click sets one committed target. The followed path is JUST boat→detour (A*, so it rounds
+  // islands) — the boat steers straight for it, exactly like manual WASD steering. It never tries to pre-plan
+  // the rejoin: once the boat reaches the detour, maybeReplan clears it and replans from the boat's NEW
+  // position, so the loop resumes at the nearest point and naturally skips whatever was passed (no double-back).
+  if (detourNode){
+    let lead = planPath(bx, bz, detourNode.x, detourNode.z);
+    if (lead.length < 2) lead = [{x:bx,z:bz},{x:detourNode.x,z:detourNode.z}];
     navDebug = { raw: tourGates.map(g=>({x:g.x,z:g.z})), simp: tourPath.map(p=>({x:p.x,z:p.z})),
-                 gate: tourPath[rejoinIdx], start:{x:bx,z:bz}, found:true };
-    return followed;
+                 gate: detourNode, start:{x:bx,z:bz}, found:true };
+    return lead;
   }
   const pi = nearestPathIndex(tourPath, bx, bz), entry = tourPath[pi];
   const loopRot = tourPath.slice(pi).concat(tourPath.slice(0,pi)).concat(tourPath.slice(pi, Math.min(pi+30, N)));
@@ -1362,9 +1352,10 @@ function applyTourPacing(){
   syncSlider('desiredSpeed');
 }
 let gotoTarget = null;            // {x,z} — explicit goto destination (legacy path; double-click now uses detourNode)
-let detourNode = null;            // {x,z} from double-click — a single DETOUR stop spliced into the global tour path as the
-                                  // immediate next node; the boat visits it then continues the existing loop. Re-clicking
-                                  // REPLACES it (only one detour at a time); it clears once the boat passes it.
+let detourNode = null;            // {x,z} from double-click — a single DETOUR target. While set, the followed path IS just
+                                  // boat→detour (a committed immediate target, like WASD steering). On arrival it clears and
+                                  // the tour replans from the boat's NEW position — rejoining the loop at the nearest point and
+                                  // skipping whatever nodes were passed, exactly like releasing manual control. Re-click replaces it.
 let path = null;                  // current planned waypoint list
 let planKey = '';                 // change-detection for replanning
 
@@ -1422,10 +1413,11 @@ function maybeReplan(s, dt) {
   if (P.mode === 'tour' && P.usePlanner) {
     const key = route.map(r=>r.name).join(',') + '|' + (P.curOn ? P.curStrength.toFixed(1)+','+P.curDirDeg.toFixed(0) : '0');
     if (key !== tourKey || !tourPath) { tourKey = key; buildTourLoop(); tourFollowTimer = 0; }
-    // DETOUR: clear it once the boat passes through (generous radius — it never stops, just sweeps past),
-    // then refresh the path so the loop continues cleanly without the detour node.
+    // DETOUR: clear it once the boat reaches it (generous radius so the hull's turn circle can't orbit it
+    // forever), then force an immediate replan — the loop resumes from the boat's NEW position, like releasing
+    // manual control: it rejoins at the nearest point and skips whatever nodes were passed.
     if (detourNode){ const np = navPosition(s);
-      if (Math.hypot(np.x-detourNode.x, np.z-detourNode.z) < GRID.dx*2.5){ detourNode = null; tourFollowTimer = 0; } }
+      if (Math.hypot(np.x-detourNode.x, np.z-detourNode.z) < GRID.dx*3.5){ detourNode = null; tourFollowTimer = 0; } }
     tourFollowTimer -= dt;
     if (tourFollowTimer <= 0 || !path) { tourFollowTimer = 1.2; const np = navPosition(s); path = tourFollowPath(np.x, np.z); updatePathLine(); }
     return;
@@ -5211,8 +5203,8 @@ function initInput() {
     // DETOUR: splice the clicked point into the GLOBAL tour path as the immediate next node — the boat
     // sweeps to it, then continues the existing loop. The tour/route is untouched; re-clicking REPLACES
     // this one detour (never stacks). It clears itself once the boat passes through.
-    detourNode = { x: pt.x, z: pt.z };
-    if (P.mode !== 'tour'){ P.mode = 'tour'; }   // the global path only exists in tour mode
+    detourNode = snapToWater({ x: pt.x, z: pt.z });   // snap onto navigable water so the boat can actually reach & clear it
+    if (P.mode !== 'tour'){ P.mode = 'tour'; }   // the boat follows the global loop only in tour mode
     P.usePlanner = true;
     path = null; tourFollowTimer = 0; try{ replan(boat3); }catch(_){}
   });
