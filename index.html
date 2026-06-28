@@ -4465,7 +4465,17 @@ function buildOcean() {
   // ISLAND SHADOWS ON THE SEA: the water shader is unlit, so darken the final colour where the sun is occluded,
   // sampled at the fragment's real (curved, Gerstner) world position → the shadow follows the contoured surface
   // (no flat catcher plane), and the in-map mask keeps open ocean lit (no frustum rectangle).
-  oceanMat.colorNode = oceanColor().mul( _sunShadowMul() );
+  // PENUMBRA / DISTANCE FALLOFF: a cast shadow's umbra pinches out and ambient skylight fills it the farther it runs
+  // from the caster. Approximate that with the bathy DISTANCE-TO-COAST field (g: 0 at shore → 1 far out): full shadow
+  // hugging the islands, fading to nothing as the long low-sun streaks reach into open water — so they taper, not run
+  // solid to their tip.
+  {
+    const _shUV = vec2( positionWorld.x.sub(BATHY_RGN.x0).div(BATHY_RGN.x1-BATHY_RGN.x0),
+                        positionWorld.z.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0) );
+    const _coastN = texture(bathyTex, clamp(_shUV, vec2(0.0), vec2(1.0))).g;   // distance to nearest coast
+    const _distFade = oneMinus(smoothstep(0.14, 0.46, _coastN));               // 1 near land → 0 out in open water
+    oceanMat.colorNode = oceanColor().mul( _sunShadowMul(_distFade) );
+  }
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
   oceanMat.opacityNode = Fn(() => {
@@ -5483,7 +5493,8 @@ function initInput() {
       if(e.key===' '){ if(typeof triggerSounding==='function') triggerSounding(); e.preventDefault(); return; }   // Space = depth sounding
       if(e.key==='ArrowRight'){ demoGo(_demoIdx+1); e.preventDefault(); return; }
       if(e.key==='ArrowLeft'){ demoGo(_demoIdx-1); e.preventDefault(); return; }                                  // arrows step scenarios
-      if('wasdqec'.includes(_mk) && _mk.length===1){ manualKeys[_mk]=true; return; }                              // …but WASD/Q/E still pilot the ship/vehicle even during the demo
+      if(flyMode){ flyState.keys[_mk]=true; return; }                                                              // Free camera = real flight (WASD/Q·E/Shift) during the demo, not just look-around
+      if('wasdqec'.includes(_mk) && _mk.length===1){ manualKeys[_mk]=true; return; }                              // …otherwise WASD/Q/E still pilot the ship/vehicle even during the demo
       return; }
     if (worldMapOpen) return;                       // globe view has its own keys (arrows/space/enter/esc)
     if (e.key === ' '){ if(typeof triggerSounding==='function') triggerSounding(); e.preventDefault(); return; }   // Space = depth sounding (camera-up is on E)
@@ -6682,7 +6693,8 @@ function _buildDemoBar(){
   const cam=el('div','demo-cam',mid); cam.id='demo-cam'; ui.demoCamBtns={};
   for (const [k,lbl] of [['ship','Ship'],['sub','Sub'],['plane','Plane'],['ufo','UFO'],['grid','4-up'],['free','Free']]){
     const b=el('div','demo-cambtn',cam); b.textContent=lbl;
-    b.onclick=()=>{ if(k==='free') setFly(true); else { if(typeof flyMode!=='undefined'&&flyMode) setFly(false); setFleetView(k); } _updateDemoCam(); };
+    b.onclick=()=>{ if(k==='free'){ if(typeof fleetView!=='undefined'&&fleetView==='grid') setFleetView('off'); setFly(true); }   // leave the 4-up grid (or a vehicle) before flying, else the split render stays on
+                    else { if(typeof flyMode!=='undefined'&&flyMode) setFly(false); setFleetView(k); } _updateDemoCam(); };
     ui.demoCamBtns[k]=b;
   }
   const next=el('div','demo-nav',bar); next.textContent='›'; next.title='Next'; next.onclick=()=>demoGo(_demoIdx+1);
