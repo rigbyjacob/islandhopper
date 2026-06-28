@@ -3408,7 +3408,8 @@ function updateNavVisuals(dt) {
   if (targetRing) {
     if (P.mode !== 'hold') {
       let tx, tz, rad, ring=null, key;
-      if (P.mode === 'tour') { const isl = route[wpIdx]; tx=isl.x; tz=isl.z; rad=Math.max(isl.r,22); ring=isl.ring; key='t:'+(isl.name||wpIdx); }
+      if (detourNode) { tx=detourNode.x; tz=detourNode.z; rad=26; key='d:'+Math.round(tx)+','+Math.round(tz); }   // detour is the immediate target → give it the same glowing highlight
+      else if (P.mode === 'tour') { const isl = route[wpIdx]; tx=isl.x; tz=isl.z; rad=Math.max(isl.r,22); ring=isl.ring; key='t:'+(isl.name||wpIdx); }
       else { const tg = activeTarget(); tx=tg.x; tz=tg.z; rad=26; key='g:'+Math.round(tx)+','+Math.round(tz); }
       if (key !== targetRingKey){ targetRingKey=key; setTargetRing(ring, tx, tz, rad); }   // rebuild only on target change
       const tt = clock.elapsedTime, pulse = 0.5 + 0.5*Math.sin(tt*1.7), yw = waveHeightJS(tx, tz, tt);
