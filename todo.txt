@@ -118,3 +118,6 @@ Exe & South Devon
 Small isles & Sky
 Faroe Islands
 Montauk -> can we make this all of Long Island
+
+
+The fix is to gate the shadow to above the waterline in the terrain shader so the seabed stays clean.

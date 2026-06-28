@@ -1823,16 +1823,22 @@ async function init() {
     controls.update();
     if (P.lodTerrain) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
     if (_descent){ _descent.t += dt/_descent.dur; const k=Math.min(_descent.t,1);
-      _diveFade(Math.max(0, 1 - k/0.20), REGION.id);                                   // clear the colour fade FAST → reveal the establishing shot first
+      _diveFade(Math.max(0, 1 - k/0.20), REGION.id);                                   // clear the cloud cover FAST → reveal the establishing shot first
       const bx=boat3.x, bz=boat3.z, ty=Math.max(seabedHeight(bx,bz)+24, 34);
-      const h=_descent.hold||0, kk=k<=h?0:(k-h)/(1-h), e=kk<0.5?2*kk*kk:1-Math.pow(-2*kk+2,2)/2;   // hold the establishing shot, then ease-in-out down to the ship
-      flyState.pos.set(_descent.fromPos.x+((bx-55)-_descent.fromPos.x)*e, _descent.fromPos.y+(ty-_descent.fromPos.y)*e, _descent.fromPos.z+((bz+55)-_descent.fromPos.z)*e);
-      flyState.pitch = _descent.fromPitch + (-0.3-_descent.fromPitch)*e;
-      flyState.yaw   = _descent.fromYaw + wrap(Math.atan2(-55,55) - _descent.fromYaw)*e;             // ease the heading to look at the ship by the end (no snap into the follow cam)
+      const e=k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2;                                       // ease-in-out from the establishing frame down to the ship
+      const tx=bx-55, tz=bz+55;                                                         // follow-cam offset behind/beside the ship
+      flyState.pos.set(_descent.fromPos.x+(tx-_descent.fromPos.x)*e, _descent.fromPos.y+(ty-_descent.fromPos.y)*e, _descent.fromPos.z+(tz-_descent.fromPos.z)*e);
+      // SLERP the full establishing quaternion (diorama framing, incl. roll) → a no-roll frame looking at the ship,
+      // so the diorama view resolves smoothly into the normal follow view instead of snapping.
+      const _toM=new THREE.Matrix4().lookAt(flyState.pos, new THREE.Vector3(bx,2,bz), new THREE.Vector3(0,1,0));
+      const _toQ=new THREE.Quaternion().setFromRotationMatrix(_toM);
+      flyCam.position.copy(flyState.pos); flyCam.quaternion.copy(_descent.fromQuat).slerp(_toQ, e);
+      const _f=new THREE.Vector3(0,0,-1).applyQuaternion(flyCam.quaternion);            // keep flyState in sync for a clean hand-off at the end
+      flyState.yaw=Math.atan2(_f.z,_f.x); flyState.pitch=clampJS(Math.asin(clampJS(_f.y,-1,1)),-1.45,1.45);
       if (k>=1){ _descent=null; setFly(false); if(_descentReturnView==='cine') setCine(true); else if(_descentReturnView==='fps') setView(true); _diveFade(0); } }   // land in the usual follow cam
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
-    else if (flyMode) updateFlyCam(dt);
+    else if (flyMode && !_descent) updateFlyCam(dt);   // the descent drives flyCam directly (position + quaternion slerp); don't let the yaw/pitch fly cam overwrite it
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
     _updateMusic(dt);   // intro music: play once the follow cam settles, fade out before the end
     uCurveK.value = P.curveWorld ? 1/(2*P.curveRadius) : 0;   // "tiny planet" curvature strength (1/2R), 0 = flat
@@ -6209,21 +6215,25 @@ function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
   globeSpin.quaternion.setFromUnitVectors(n, new THREE.Vector3(0.25,0.15,1).normalize()); }   // bring the region to the front, tilted nicely
 // ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
 //      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
-let _diveZoom=null, _globeRise=null, _diveAfterSlerp=null, _descent=null, _descentReturnView='cine';
+let _diveZoom=null, _globeRise=null, _diveAfterSlerp=null, _descent=null, _descentReturnView='cine', _diveQuat=null;
 function _diveFade(a, id){ a=clampJS(a,0,1); let f=document.getElementById('dive-fade');
   if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;overflow:hidden;';
     const inner=document.createElement('div'); inner.style.cssText='position:absolute;inset:-40%;will-change:transform,opacity;'; f.appendChild(inner); document.body.appendChild(f); }
   const inner=f.firstChild;
-  const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018, hex='#'+('000000'+(c>>>0).toString(16)).slice(-6);
-  // Cloud bank, not a flat colour wall: soft white puffs (mist) over a faint region-tinted haze, so the dive
-  // feels like plunging THROUGH cloud into the world. The puffs swell as the transition intensifies (falling in).
+  const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018;
+  // LIGHT, region-tinted haze (region colour mixed ~75% toward white) — a bright cloud bank, not a dark colour wall.
+  // A dark base banded badly and read as a "dark screen"; a light base reads as mist and hides banding.
+  const lr=Math.round((c>>16&255)*0.25+255*0.75), lg=Math.round((c>>8&255)*0.25+255*0.75), lb=Math.round((c&255)*0.25+255*0.75);
+  const hazeA='rgba('+lr+','+lg+','+lb+',.94)', hazeB='rgba('+lr+','+lg+','+lb+',1)';
+  // Cloud bank: soft white puffs (mist) over the light haze, so the dive feels like plunging THROUGH cloud into the
+  // world. The puffs swell as the transition intensifies (falling in).
   inner.style.background =
     'radial-gradient(40% 32% at 20% 26%, rgba(255,255,255,.97), rgba(255,255,255,0) 70%),'+
     'radial-gradient(36% 30% at 76% 20%, rgba(247,251,255,.95), rgba(255,255,255,0) 70%),'+
     'radial-gradient(46% 36% at 55% 73%, rgba(255,255,255,.96), rgba(255,255,255,0) 72%),'+
     'radial-gradient(38% 32% at 26% 80%, rgba(244,250,255,.93), rgba(255,255,255,0) 70%),'+
     'radial-gradient(42% 34% at 86% 60%, rgba(255,255,255,.95), rgba(255,255,255,0) 72%),'+
-    'radial-gradient(130% 130% at 50% 45%, '+hex+'b0, '+hex+'e8)';   // faint region-tinted haze behind the puffs
+    'radial-gradient(130% 130% at 50% 45%, '+hazeA+', '+hazeB+')';   // bright region-tinted haze behind the puffs
   inner.style.transform = 'scale('+(1 + a*0.9)+')';   // clouds swell as you fall into them
   inner.style.filter = 'blur('+(2 + (1-a)*4)+'px)';   // softer at the edges of the transition
   f.style.opacity = a; }
@@ -6251,7 +6261,7 @@ function updateGlobe(dt){
   if (_diveZoom){ _diveZoom.t += (dt||0.016)/_diveZoom.dur; const k=Math.min(_diveZoom.t,1), e=k*k;   // accelerate toward the surface
     globeCam.position.set(0,0, _globeZ-(_globeZ-1.05)*e); globeCam.lookAt(0,0,0);
     _diveFade(Math.max(0,(k-0.5)*2), _diveZoom.id);                                   // fade to the region colour over the last half of the dive
-    if (k>=1){ const d=_diveZoom; _diveZoom=null; globeCam.position.set(0,0,_globeZ); _diveLand(d); }
+    if (k>=1){ const d=_diveZoom; _diveZoom=null; _diveLand(d); }   // leave the cam zoomed in (no snap back to the full globe — that flashed the old view); openWorldMap/_globeRise reset it on the next visit
     return; }
   if (!_globeDrag && !_globeLevel){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // flick momentum — fast pulls keep spinning, slow drags settle at once
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
@@ -6420,6 +6430,12 @@ function travelToRegion(id){ if(!REGIONS[id]||_diveZoom||_diveAfterSlerp) return
   _diveAfterSlerp=id;
 }
 async function _diveLand(d){
+  // Capture the diorama's ACTUAL on-globe orientation RIGHT NOW (before we leave the globe). The establishing shot
+  // reproduces this exactly — the whole point of the dive. Reading the live patch world-quaternion (rather than
+  // reconstructing it from _faceQuat) also carries the diorama's roll and handles already-centred / demo dives.
+  _diveQuat = null;
+  try { const dd=_regionDioramas.find(x=>x.id===d.id); if (dd && dd.patch) _diveQuat = dd.patch.getWorldQuaternion(new THREE.Quaternion()); } catch(_){}
+  _diveFade(1, d.id);                     // make sure the cover is fully up before we leave the globe (no flash of the reset globe view)
   closeWorldMap();
   if (!d.same) await swapRegion(d.id);   // OTHER region: stream it in live under the dive fade — no reload, no load screen. await: build+compile the region before descending
   startDescent();                        // fly the camera down onto the (now-current) region's boat
@@ -6434,14 +6450,21 @@ function startDescent(){
   const r=REGION, cx=(r.map.minX+r.map.maxX)/2, cz=(r.map.minZ+r.map.maxZ)/2;
   const ext=Math.max(r.map.maxX-r.map.minX, r.map.maxZ-r.map.minZ)||600;
   const n=latLonToVec(r.lat0||0, r.lon0||0, 1);
-  const Q=_faceQuat(n).multiply(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), n));   // diorama orientation when centred on the globe
-  const look=new THREE.Vector3(0,0,-1).applyQuaternion(Q.clone().invert()).normalize();                   // globe cam looks toward -z → matching look dir in the region's (=world) frame
+  // M = the diorama's world orientation as it sat on the globe at dive time. The diorama's local frame IS the sailing
+  // world frame, and the globe camera looks down -z with +y up (identity orientation), so the establishing camera that
+  // reproduces the diorama framing — roll and all — is simply M⁻¹. (Falls back to the centred reconstruction if the
+  // live capture missed.)
+  const M = _diveQuat ? _diveQuat.clone()
+          : _faceQuat(n).multiply(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), n));
+  const camQuat = M.clone().invert();
+  const look = new THREE.Vector3(0,0,-1).applyQuaternion(camQuat).normalize();   // establishing camera's forward in world
   const dist=ext*0.6;   // closer in than framing the WHOLE region, so the rectangular map edges don't show
   const camPos=new THREE.Vector3(cx,0,cz).addScaledVector(look,-dist); camPos.y=Math.max(camPos.y, ext*0.2);
   flyState.pos.copy(camPos);
   flyState.yaw=Math.atan2(look.z, look.x); flyState.pitch=clampJS(Math.asin(clampJS(look.y,-1,1)), -1.45, 1.45);
   flyState.keys={};
-  _descent={ t:0, dur:2.6, hold:0, fromPos:flyState.pos.clone(), fromYaw:flyState.yaw, fromPitch:flyState.pitch };   // no hold — keep diving straight through to the ship
+  flyCam.position.copy(camPos); flyCam.quaternion.copy(camQuat);   // seat the establishing frame immediately (the descent loop slerps it to the follow cam)
+  _descent={ t:0, dur:2.6, hold:0, fromPos:camPos.clone(), fromQuat:camQuat.clone() };   // no hold — keep diving straight through to the ship
   _diveFade(1, REGION.id);
 }
 // ============================================================================
