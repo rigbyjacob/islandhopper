@@ -1601,7 +1601,21 @@ async function init() {
         const clear = -terrainHeight(boat3.x, boat3.z) - P.draft;
         boat3.assistClearT = (clear > 4) ? (boat3.assistClearT||0)+dt : 0;
         if (boat3.assistClearT > 0.7) { boat3.assist=false; boat3.assistClearT=0; headingPID.reset(); speedPID.reset(); planKey=''; path=null; }
+      } else if (fleetView==='off' && !flyMode && _piloting()) {
+        // MANUAL pilot: WASD / arrows override the autopilot (A/D rudder, W/S throttle); release → autopilot
+        // replans from the new position and resumes the route. Same "pilot then resume" feel as the fleet vehicles.
+        const K=manualKeys;
+        if (K['a']||K['arrowleft'])  boat3.delta = Math.max(boat3.delta - dt*3.5, -BOAT.deltaMax);
+        else if (K['d']||K['arrowright']) boat3.delta = Math.min(boat3.delta + dt*3.5,  BOAT.deltaMax);
+        else boat3.delta *= Math.pow(0.02, dt);                              // spring the rudder back to centre
+        if (K['w']||K['arrowup'])    boat3.thr = clampJS(boat3.thr + dt*0.7, 0, 1);
+        else if (K['s']||K['arrowdown']) boat3.thr = clampJS(boat3.thr - dt*1.0, 0, 1);
+        stepDynamics(boat3, dt, t);
+        headingPID.reset(); speedPID.reset();                                // keep integrators clean so resume doesn't lurch
+        boat3._manual = true;
+        if (boat3.grounded) { boat3.assist=true; boat3.assistClearT=0; }
       } else {
+        if (boat3._manual){ boat3._manual=false; path=null; planKey=''; try{ replan(boat3); }catch(_){} }   // just let go of the controls → repath from where the pilot left it
         boat3.delta = clampJS(headingPID.step(herr, boat3.psi, dt, P.hKp, P.hKi, P.hKd, -BOAT.deltaMax, BOAT.deltaMax, true), -BOAT.deltaMax, BOAT.deltaMax);
         const serr = g.desSpeed - boat3.u;
         boat3.thr = clampJS(speedPID.step(serr, boat3.u, dt, P.sKp, P.sKi, P.sKd, 0, 1, false), 0, 1);
@@ -2064,13 +2078,22 @@ function _agentStep(v, dt){
     const K=manualKeys, boost=K['shift']?2.2:1, mt=v.turnRate*1.7;
     const lf=K['a']||K['arrowleft'], rt=K['d']||K['arrowright'];
     if (lf) v.yaw=wrap(v.yaw - mt*dt); if (rt) v.yaw=wrap(v.yaw + mt*dt);
-    if (K['w']||K['arrowup']) v.speed=Math.min(v.speed + v.cruiseSpeed*3*dt*boost, v.cruiseSpeed*1.8*boost);
-    else if (K['s']||K['arrowdown']) v.speed=Math.max(v.speed - v.cruiseSpeed*3*dt, -v.cruiseSpeed*0.5);
-    else v.speed *= Math.pow(0.22, dt);                       // coast to a stop (snappy = saucery)
     if (v._manAlt===undefined) v._manAlt=v.pos.y;
-    if (K['q']||K[' ']) v._manAlt += 70*dt*boost;
-    if (K['e']||K['c']) v._manAlt -= 70*dt*boost;
-    v.roll += (((lf?0.4:(rt?-0.4:0))*(v.bank?1:0.4)) - v.roll)*Math.min(1,dt*5);
+    if (v.id==='plane'){
+      // YOKE: W (push forward) → nose down / DIVE; S (pull back) → CLIMB. Throttle holds cruise (Shift boosts).
+      // Altitude change auto-pitches the nose below (targY→pitch), so it reads like a real plane, not a car.
+      if (K['w']||K['arrowup']) v._manAlt -= 70*dt*boost; else if (K['s']||K['arrowdown']) v._manAlt += 70*dt*boost;
+      v._manAlt = clampJS(v._manAlt, 12, 480);                // never dive into the sea or climb to orbit
+      v.speed += (v.cruiseSpeed*boost - v.speed)*Math.min(1,dt*1.5);
+    } else {
+      // sub / UFO: W/S = forward / reverse; Q (or Space) up, E/C down
+      if (K['w']||K['arrowup']) v.speed=Math.min(v.speed + v.cruiseSpeed*3*dt*boost, v.cruiseSpeed*1.8*boost);
+      else if (K['s']||K['arrowdown']) v.speed=Math.max(v.speed - v.cruiseSpeed*3*dt, -v.cruiseSpeed*0.5);
+      else v.speed *= Math.pow(0.22, dt);                     // coast to a stop (snappy = saucery)
+      if (K['q']||K[' ']) v._manAlt += 70*dt*boost;
+      if (K['e']||K['c']) v._manAlt -= 70*dt*boost;
+    }
+    v.roll += (((lf?-0.4:(rt?0.4:0))*(v.bank?1:0.4)) - v.roll)*Math.min(1,dt*5);   // bank INTO the turn (lf decreases yaw → negative roll), matching the autopilot's rate→roll sign (was inverted)
   } else {
     v._manAlt=undefined;
     if (!v.route.length) return;
@@ -2291,7 +2314,11 @@ function updateSeaLife(dt){
       const th=terrainHeight(b.p.x,b.p.z); if(th>-5){ fx+=(sc.center.x-b.p.x)*0.5; fz+=(sc.center.z-b.p.z)*0.5; fy-=2.5; }  // veer off shallows/land
       b.v.x+=fx*dt; b.v.y+=fy*dt; b.v.z+=fz*dt;
       const s2=Math.hypot(b.v.x,b.v.y,b.v.z)||1, SP=sc.speed, lo=SP*0.55, k=s2>SP?SP/s2:(s2<lo?lo/s2:1); b.v.x*=k;b.v.y*=k;b.v.z*=k;
+      const _ox=b.p.x, _oz=b.p.z;
       b.p.x+=b.v.x*dt; b.p.y+=b.v.y*dt; b.p.z+=b.v.z*dt;
+      if (terrainHeight(b.p.x, b.p.z) > -3.5){            // HARD block: never let a fish swim into land/shoals — revert to the last water cell and bounce back toward open water
+        b.p.x=_ox; b.p.z=_oz;
+        b.v.x = (sc.center.x-b.p.x)*0.4 - b.v.x*0.6; b.v.z = (sc.center.z-b.p.z)*0.4 - b.v.z*0.6; }
       b.p.y=clampJS(b.p.y, sc.dmax, sc.dmin); b.p.x=clampJS(b.p.x, MAP.minX+5, MAP.maxX-5); b.p.z=clampJS(b.p.z, MAP.minZ+5, MAP.maxZ-5);
       _fdir.set(b.v.x,b.v.y,b.v.z); if(_fdir.lengthSq()<1e-4) _fdir.set(1,0,0); _fdir.normalize(); _fq.setFromUnitVectors(_FISHX,_fdir);
       _fp.set(b.p.x, b.p.y - curveDropJS(b.p.x,b.p.z), b.p.z); _fm4.compose(_fp,_fq,_fsc.setScalar(sc.size)); sc.im.setMatrixAt(i,_fm4);
@@ -5132,13 +5159,19 @@ function drawGrid(W, H){
 // ============================================================================
 function initInput() {
   renderer.domElement.addEventListener('dblclick', (e) => {
+    if (worldMapOpen) return;
     const r = renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1);
-    raycaster.setFromCamera(ndc, camera);
+    raycaster.setFromCamera(ndc, activeCam || camera);    // BUGFIX: use the ACTUAL render camera (cine/follow/orbit) — was always the orbit cam, so picks were wrong in follow mode
     const pt = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(groundPlane, pt)) {
-      gotoTarget = { x: pt.x, z: pt.z }; setMode('goto');
+    if (!raycaster.ray.intersectPlane(groundPlane, pt)) return;
+    if (P.curveWorld){   // BUGFIX: refine the hit onto the tiny-planet's CURVED sea surface (the flat-plane hit lands in the wrong hex cell)
+      const _pl = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+      for (let it=0; it<4; it++){ _pl.constant = curveDropJS(pt.x, pt.z); const p2=new THREE.Vector3();
+        if (!raycaster.ray.intersectPlane(_pl, p2)) break; pt.copy(p2); }
     }
+    gotoTarget = { x: pt.x, z: pt.z }; setMode('goto');
+    path=null; planKey=''; try{ replan(boat3); }catch(_){}   // repath the ship to the clicked destination immediately
   });
   // single click on the volcano cone → erupt (ignore drags)
   let _vdx=0, _vdy=0;
@@ -5162,7 +5195,7 @@ function initInput() {
     if (e.key === 'v' || e.key === 'V') setView(!fpsMode);
     if (e.key === 'f' || e.key === 'F') setFly(!flyMode);
     if (flyMode){ flyState.keys[e.key.toLowerCase()] = true; if(e.key===' ') e.preventDefault(); }
-    if (fleetView!=='off' && fleetView!=='grid'){ manualKeys[e.key.toLowerCase()] = true; if(e.key===' '||e.key.indexOf('Arrow')===0) e.preventDefault(); }
+    if (!flyMode && fleetView!=='grid'){ manualKeys[e.key.toLowerCase()] = true; if(e.key.indexOf('Arrow')===0) e.preventDefault(); }   // WASD/arrows pilot the focused fleet vehicle, OR (fleetView off) manually steer the ship
   });
   window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; manualKeys[e.key.toLowerCase()] = false; });
   let dragging=false, lx=0, ly=0;
@@ -5775,16 +5808,16 @@ function _arcLabel(text, color){                       // region name as curved 
     ctx.strokeText(chars[i],0,0); ctx.fillStyle=fill; ctx.fillText(chars[i],0,0); ctx.restore(); ang+=aw/2; }
   const tex=new THREE.CanvasTexture(cv); tex.colorSpace=THREE.SRGBColorSpace; tex.anisotropy=4;
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false }));   // depthTest off → the curved label never gets clipped INTO the globe surface; back-side labels are culled by opacity in updateGlobe
-  sp.scale.set(0.6,0.6,1); sp.renderOrder=43; return sp;
+  sp.scale.set(0.44,0.44,1); sp.renderOrder=43; return sp;   // smaller so the arc hugs the diorama rim instead of floating out
 }
 function _regionGlow(artCol){                          // soft additive halo behind a diorama; opacity fades in when it's the current target
   const S=160, cv=document.createElement('canvas'); cv.width=cv.height=S;
   const ctx=cv.getContext('2d'), c=new THREE.Color(artCol), rgb=`${c.r*255|0},${c.g*255|0},${c.b*255|0}`;
-  const g=ctx.createRadialGradient(S/2,S/2,S*0.40, S/2,S/2,S*0.5);
-  g.addColorStop(0,`rgba(${rgb},0)`); g.addColorStop(0.45,`rgba(${rgb},0.9)`); g.addColorStop(1,`rgba(${rgb},0)`);   // tight bright rim that hugs the diorama edge → reads as glow emanating FROM the geometry
+  const g=ctx.createRadialGradient(S/2,S/2,S*0.32, S/2,S/2,S*0.5);
+  g.addColorStop(0,`rgba(${rgb},0)`); g.addColorStop(0.5,`rgba(${rgb},0.85)`); g.addColorStop(1,`rgba(${rgb},0)`);   // a thicker bright band hugging the diorama edge → reads as glow emanating FROM the geometry
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(S/2,S/2,S*0.5,0,7); ctx.fill();
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending, opacity:0 }));
-  sp.scale.set(0.36,0.36,1); sp.renderOrder=38; return { mesh:sp, mat:sp.material };   // 0.36 ≈ the diorama plinth (R≈0.156) so the halo sits right at its rim, not floating far out
+  sp.scale.set(0.40,0.40,1); sp.renderOrder=38; return { mesh:sp, mat:sp.material };   // ≈ the diorama plinth (R≈0.156) so the halo sits right at its rim, not floating far out
 }
 // A "fun" per-region colour drawn from each place's art history — used for the relief patch, ring & label.
 const REGION_ART_COL = {

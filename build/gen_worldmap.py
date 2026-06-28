@@ -17,7 +17,8 @@ ds.close()
 H, W = Zraw.shape
 # Pre-smooth the elevation: at STEP=60 the bare GEBCO sampling reads as speckle / "GIS noise". A light
 # gaussian blur of the SOURCE field gives a more polished, recognisable Earth for both colour & height.
-Z = gaussian_filter(Zraw, sigma=0.5, mode='nearest')   # light source smooth (keeps the colour/coastlines crisp; the displacement gets its own smoothing below)
+Z = Zraw                                               # COLOUR uses the full-res GEBCO — no blur (blurring made it look like an undersized/upscaled texture)
+Zd = gaussian_filter(Zraw, sigma=1.0, mode='nearest')  # DISPLACEMENT gets its own smoothed height field (so the globe relief stays gentle/recognisable)
 land = Z >= 0
 
 # ---- COLOR (gentler relief shading + a final de-speckle blur for a cleaner, less noisy look) ----
@@ -43,14 +44,13 @@ img = img * ao[..., None]
 # mild saturation pop, then a light blur to polish out residual speckle
 gray = img.mean(-1, keepdims=True)
 img = np.clip(gray + (img - gray) * 1.10, 0, 255)
-img = gaussian_filter(img, sigma=(0.25, 0.25, 0), mode='nearest')   # light de-speckle only (was 0.7 — too blurry)
-img = np.clip(img, 0, 255).astype(np.uint8)[::-1]                  # flip so top = north
+img = np.clip(img, 0, 255).astype(np.uint8)[::-1]                  # flip so top = north (no blur — keep the texture crisp)
 
 # ---- DISPLACEMENT (sea level = mid-grey 0.5; COMPRESSED so the globe reads as Earth, not a knobbly potato) ----
 # land range compressed (÷5500 + 0.8 power → highs pulled down); ocean barely sunk; then smoothed.
-land_h = np.clip(Z / 5500.0, 0, 1) ** 0.8
-sea_h  = np.clip(-Z / 8000.0, 0, 1) ** 0.9
-disp = np.where(land, 0.5 + 0.42 * land_h, 0.5 - 0.30 * sea_h)
+land_h = np.clip(Zd / 5500.0, 0, 1) ** 0.8
+sea_h  = np.clip(-Zd / 8000.0, 0, 1) ** 0.9
+disp = np.where(Zd >= 0, 0.5 + 0.42 * land_h, 0.5 - 0.30 * sea_h)
 disp = gaussian_filter(disp, sigma=1.5, mode='nearest')           # smooth the height field (no spiky relief)
 disp = np.clip(disp * 255, 0, 255).astype(np.uint8)[::-1]
 
