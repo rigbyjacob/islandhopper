@@ -6260,7 +6260,7 @@ function updateGlobe(dt){
     return; }
   if (_diveZoom){ _diveZoom.t += (dt||0.016)/_diveZoom.dur; const k=Math.min(_diveZoom.t,1), e=k*k;   // accelerate toward the surface
     globeCam.position.set(0,0, _globeZ-(_globeZ-1.05)*e); globeCam.lookAt(0,0,0);
-    _diveFade(Math.max(0,(k-0.5)*2), _diveZoom.id);                                   // fade to the region colour over the last half of the dive
+    _diveFade(Math.max(0,(k-0.72)/0.28), _diveZoom.id);                               // hold the clear globe view until we're almost ON the surface, THEN the cloud rushes in over the last ~28% — the diorama reads as a portal into the world
     if (k>=1){ const d=_diveZoom; _diveZoom=null; _diveLand(d); }   // leave the cam zoomed in (no snap back to the full globe — that flashed the old view); openWorldMap/_globeRise reset it on the next visit
     return; }
   if (!_globeDrag && !_globeLevel){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // flick momentum — fast pulls keep spinning, slow drags settle at once

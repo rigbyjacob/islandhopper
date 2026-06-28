@@ -119,5 +119,15 @@ Small isles & Sky
 Faroe Islands
 Montauk -> can we make this all of Long Island
 
+The boat is no longer the main target all the time, that's from the very beginning of this project. Now that you can follow the boat, the plane, sub or UFO or even fly around, is there a need to revist this shadow frustum design?
+"""
+Frustum — it's a tight ±340u box around the boat (kept tight for sharp palm-frond shadows). Fine for the boat, but a tall island's long shadow can run past its edge.
+"""
 
-The fix is to gate the shadow to above the waterline in the terrain shader so the seabed stays clean.
+This seems fine, later we could think about refraction and modelling some light transpore through water? """The fix is to gate the shadow to above the waterline in the terrain shader so the seabed stays clean."""
+
+Let's do this, minor but consistent: """
+The fleet (sub/plane/UFO) only cast, not receive — easy to add.
+"""
+
+Thig big one, my concern with a shadow-catcher plane is that it will not match the nice contoured ocean?: """Ocean surface — this is the headline you want, and it's the hard one: the sea is drawn with an unlit custom material (MeshBasicNodeMaterial — all the water look is hand-built in the shader, with no lighting model), so receiveShadow does nothing on it. To get island shadows on the water I'd either add manual shadow-map sampling into the water shader, or lay a dedicated shadow-catcher plane at the (curved) sea surface that only darkens where shadowed. The catcher is the cleaner route."""
