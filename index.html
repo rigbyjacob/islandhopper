@@ -1829,13 +1829,17 @@ async function init() {
     if (P.lodTerrain) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
     if (_descent){ _descent.t += dt/_descent.dur; const k=Math.min(_descent.t,1);
       _diveFade(Math.max(0, 1 - k/0.20), REGION.id);                                   // clear the cloud cover FAST → reveal the establishing shot first
-      const bx=boat3.x, bz=boat3.z, ty=Math.max(seabedHeight(bx,bz)+24, 34);
-      const e=k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2;                                       // ease-in-out from the establishing frame down to the ship
-      const tx=bx-55, tz=bz+55;                                                         // follow-cam offset behind/beside the ship
+      // Dive straight onto whatever the Director is filming: the ship by default, or the focused vehicle (demo sticky
+      // camera) — so a dive into e.g. the Plane scenario descends right onto the plane instead of the ship-then-cut.
+      const _ds=(typeof dirSubjectId!=='undefined'&&dirSubjectId!=='ship')?FLEET.find(v=>v.id===dirSubjectId):null;
+      const bx=_ds?_ds.pos.x:boat3.x, bz=_ds?_ds.pos.z:boat3.z, subjY=_ds?_ds.pos.y:2;
+      const ty=_ds?subjY+22:Math.max(seabedHeight(bx,bz)+24, 34);
+      const e=k<0.5?2*k*k:1-Math.pow(-2*k+2,2)/2;                                       // ease-in-out from the establishing frame down to the subject
+      const tx=bx-55, tz=bz+55;                                                         // follow-cam offset behind/beside the subject
       flyState.pos.set(_descent.fromPos.x+(tx-_descent.fromPos.x)*e, _descent.fromPos.y+(ty-_descent.fromPos.y)*e, _descent.fromPos.z+(tz-_descent.fromPos.z)*e);
-      // SLERP the full establishing quaternion (diorama framing, incl. roll) → a no-roll frame looking at the ship,
+      // SLERP the full establishing quaternion (diorama framing, incl. roll) → a no-roll frame looking at the subject,
       // so the diorama view resolves smoothly into the normal follow view instead of snapping.
-      const _toM=new THREE.Matrix4().lookAt(flyState.pos, new THREE.Vector3(bx,2,bz), new THREE.Vector3(0,1,0));
+      const _toM=new THREE.Matrix4().lookAt(flyState.pos, new THREE.Vector3(bx,subjY,bz), new THREE.Vector3(0,1,0));
       const _toQ=new THREE.Quaternion().setFromRotationMatrix(_toM);
       flyCam.position.copy(flyState.pos); flyCam.quaternion.copy(_descent.fromQuat).slerp(_toQ, e);
       const _f=new THREE.Vector3(0,0,-1).applyQuaternion(flyCam.quaternion);            // keep flyState in sync for a clean hand-off at the end
