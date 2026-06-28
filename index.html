@@ -1133,8 +1133,14 @@ function tourFollowPath(bx, bz){
       const giP = prevGateBehind(piBoat);
       followed = lead.concat(loopArc((gi+9)%N, giP)).concat(trailToBoat(giP, bx, bz));
       gate = tourPath[gi];
-    } else {                                   // on the loop — just follow it forward
-      followed = tourPath.slice(piBoat).concat(tourPath.slice(0,piBoat)).concat(tourPath.slice(piBoat, Math.min(piBoat+30, N)));
+    } else {                                   // on the loop — draw it from the boat forward, but STOP ~1 leg short of
+      // wrapping back onto the boat. The old "full loop + first 30 points again" re-covered the start, drawing
+      // ~30 points twice just ahead of the boat (offset dash phase = the "written twice" parallel dashes). The
+      // small undrawn arc sits BEHIND the boat where the wedge isn't shown anyway, and the far end stays well
+      // clear of the boat so pure-pursuit never latches to it (which is what the +30 guard was for).
+      const cut = Math.min(34, N-4), seq = [];
+      for (let k=0; k<N-cut; k++) seq.push(tourPath[(piBoat+k)%N]);
+      followed = seq;
       gate = tourPath[piBoat];
     }
   }
@@ -4970,7 +4976,6 @@ function updateFlyCam(dt){
 // dev.lookAt(px,py,pz, tx,ty,tz) — stand at p, look at t.   dev.sun(distBack) — frame the sun over the boat.
 // dev.time(18.2) — set time of day (pauses auto-cycle).      dev.atmo(0.8) — set the Atmosphere slider.
 window.dev = {
-  _path:()=>path, _tourPath:()=>tourPath, _gates:()=>tourGateAt, _boat:()=>({x:boat3.x,z:boat3.z}),   // TEMP: double-wedge diagnosis
   // Van Gogh sea: 1 = the night sea mirrors the swirling Starry-Night sky (default), 0 = the old impasto-water surface
   vgSea(on){ uVgReflect.value = (on===false||on===0)?0:1; return 'Van Gogh sea = '+(uVgReflect.value?'sky reflection':'impasto surface'); },
   // hierarchical-A* benchmark: time a long boat→far-island plan with the coarse heuristic on vs off
