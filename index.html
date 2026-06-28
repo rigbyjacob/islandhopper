@@ -255,7 +255,7 @@ import {
   Fn, float, vec2, vec3, vec4, sin, dot, max, min, mix, clamp, smoothstep, pow, reflect, exp, Loop,
   normalize, length, positionLocal, time, positionWorld, cameraPosition, oneMinus, attribute, uniform, uv, floor, fract,
   pass, mrt, output, normalView, texture, abs, screenUV, screenSize, cos,
-  modelWorldMatrix, modelWorldMatrixInverse, shadow
+  modelWorldMatrix, modelWorldMatrixInverse, shadow, lightShadowMatrix
 } from 'three/tsl';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -1920,7 +1920,19 @@ const uHorizon = uniform(new THREE.Vector3(0.76, 0.88, 0.96));
 const uGradeSat  = uniform(1.0);                       // art-style scene saturation for the WATER shader (1=normal, 0=gray)
 const uGradeTint = uniform(new THREE.Vector3(1, 1, 1));// art-style water tint
 const uDayBright = uniform(1.0);
-const uShadowK = uniform(0.0);   // max darkening fraction where the sun shadow falls (0 at night → ~0.45..0.85 midday, scaled by Shadow-depth); used by the ocean + terrain manual shadow sampling
+const uShadowK = uniform(0.0);   // max darkening fraction where the sun shadow falls (0 at night/horizon → mid-day peak, scaled by Shadow-depth); used by the ocean + terrain manual shadow sampling
+// Sun-shadow colour MULTIPLIER (1 = lit, <1 in the sun's shadow) for unlit / hand-authored materials (the water and
+// the custom-shaded terrain). It samples the sun shadow map manually AND masks to inside the map's [0,1] footprint, so
+// surfaces beyond the region (open ocean) read as LIT instead of the shadow node's out-of-bounds "occluded" — that
+// out-of-bounds darkening was the hard rectangle. `gate` optionally restricts the effect (e.g. above the waterline).
+function _sunShadowMul(gate){
+  if (!sunLight) return float(1);
+  const ss = lightShadowMatrix(sunLight).mul(vec4(positionWorld.x, positionWorld.y, positionWorld.z, float(1)));
+  const u = ss.x.div(ss.w), v = ss.y.div(ss.w);
+  let inside = smoothstep(0.0, 0.03, min(u.mul(oneMinus(u)), v.mul(oneMinus(v))));   // u*(1-u) is >0 only for 0<u<1 → 0 outside the map, 1 inside (soft margin)
+  if (gate) inside = inside.mul(gate);
+  return oneMinus( oneMinus(shadow(sunLight)).mul(uShadowK).mul(inside) );
+}
 const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
 const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reactive); mirrors CPU seaAmp
 const uChop    = uniform(1.15);  // Gerstner steepness: horizontal pinch toward crests (0 = smooth sine swell, ~1.2 = sharp peaked seas)
@@ -2055,11 +2067,11 @@ function buildLights() {
   sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
   sunLight.position.set(420, 620, 360);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(NOOPT?4096:2048, NOOPT?4096:2048);   // OPT #1: 2048 (was 4096) ~4x less shadow fragment/bandwidth; ?noopt restores 4096 for A/B
+  sunLight.shadow.mapSize.set(4096, 4096);   // region-fit map covers the WHOLE region, so it needs the resolution to keep fronds legible (was 2048 when the map hugged the boat)
   const sc = sunLight.shadow.camera;
   // tighter frustum (follows the boat) → smaller texels → steadier, sharper frond shadows.
   sc.left=-480; sc.right=480; sc.top=480; sc.bottom=-480; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();   // wider box: a tall island's long low-sun shadow stays inside the map; still ~0.47u/texel @2048 (fronds stay crisp)
-  sunLight.shadow.bias = -0.0005; sunLight.shadow.normalBias = 1.4;
+  sunLight.shadow.bias = -0.0006; sunLight.shadow.normalBias = 2.2;   // normalBias bumped for the larger region-fit texel (was 1.4 for the tight boat-locked map) → no acne, while staying small enough that frond shadows don't peter-pan
   scene.add(sunLight); scene.add(sunLight.target);
   // soft cool moonlight — a second directional light that fades in at night (no shadows, keeps it cheap)
   moonLight = new THREE.DirectionalLight(0xb9c6ff, 0.0);
@@ -2754,7 +2766,11 @@ function updateEnvironment(dt) {
   uWarm.value = warm;   // drives the sun-disk dim/redden so sunset is a ruddy ball, not a white moon
   uSunInt.value  = (0.25 + 1.5*day) * (1 - 0.92*localStorm);      // storm smothers the sun
   uDayBright.value = (0.09 + 0.91*day) * (1 - 0.62*localStorm);   // sea+sky go gloomy-dark under a cell (also darker at night)
-  uShadowK.value = clampJS(day,0,1) * (0.45 + 0.42*clampJS(P.shadowDepth,0,1)) * (1 - 0.5*localStorm);   // island shadows on sea/land: fade out at night & soften under storm; deepen with the Shadow-depth slider
+  // Shadow darkness tracks the DIRECT-sun fraction, which collapses near the horizon (atmospheric extinction + grazing
+  // cosine) — so low-sun shadows fade out instead of stretching to infinity as hard black streaks. Capped well below 1
+  // so shaded surfaces keep their skylight/ambient (a shadow removes direct sun, it doesn't paint the world black).
+  const _altTaper = clampJS((_sun.y - 0.015) / 0.20, 0, 1);   // 0 at the horizon → 1 once the sun is ~12° up
+  uShadowK.value = clampJS(day,0,1) * _altTaper * (0.34 + 0.30*clampJS(P.shadowDepth,0,1)) * (1 - 0.5*localStorm);
   uNight.value = clampJS((0.14 - e) / 0.18, 0, 1);                 // lights come on at dusk
   // moon — opposite the sun, so it's up at night. Soft cool directional light + sky disk; fades with
   // night fraction and how high the moon is, dimmed by storm cloud.
@@ -2797,35 +2813,30 @@ function updateEnvironment(dt) {
   sunLight.intensity = (0.25 + (2.4+0.5*P.shadowDepth)*day) * (1 - 0.65*localStorm);
   hemiLight.intensity = (0.42 + 0.62*fill*day) * (1 - 0.4*localStorm);     // floor (0.42) so night islands aren't pure black
   hemiLight.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
-  const D=780;
-  // Shadow-map texel snapping: the shadow frustum follows the boat, so without snapping it slides
-  // sub-texel every frame and thin frond shadows "swim". Snap the follow-centre to whole shadow
-  // texels *in the light's own X/Y basis* (snapping world-XZ isn't enough when the sun is low),
-  // so the map only shifts in discrete, imperceptible steps.
-  const texel = (sunLight.shadow.camera.right - sunLight.shadow.camera.left) / sunLight.shadow.mapSize.x;
+  // SUN SHADOWS ARE A PROPERTY OF THE SCENE, NOT THE CAMERA. Fit the shadow frustum to the WHOLE region — centred on
+  // the islands, sized to their bounds — so shadows are view-INDEPENDENT: moving the eye never changes what's shaded,
+  // and no frustum rectangle drifts across the sea. (Trade: one map over the whole region = softer fronds than a
+  // tight eye-locked map; the 4096 map below buys most of it back. A future cascade could restore full crispness.)
+  const _cxR=(REGION.map.minX+REGION.map.maxX)*0.5, _czR=(REGION.map.minZ+REGION.map.maxZ)*0.5;
+  const _halfR=Math.max(REGION.map.maxX-REGION.map.minX, REGION.map.maxZ-REGION.map.minZ)*0.62 + 120;   // cover the region (+margin) from any sun azimuth
+  const _scC=sunLight.shadow.camera;
+  const D=_halfR*2.2+200;                                           // light standoff along the sun ray
+  // BRACKET the depth range tightly around the region. A blown-out near:far (was [20, ~halfR*4]) wrecks shadow-map
+  // depth precision → the terrain self-shadows (acne streaks all over the sun-facing slopes, which read as the lit
+  // side going dark). Keeping near:far ~1:7 around the region restores precision and kills the acne.
+  if (Math.abs(_scC.right-_halfR) > 1){ _scC.left=-_halfR; _scC.right=_halfR; _scC.top=_halfR; _scC.bottom=-_halfR;
+    _scC.near=Math.max(1, D-_halfR*1.7); _scC.far=D+_halfR*1.7; _scC.updateProjectionMatrix(); }
+  // Texel-snap the FIXED region centre in the light's own X/Y basis so the map doesn't swim as the SUN tracks across.
+  const texel = (_scC.right - _scC.left) / sunLight.shadow.mapSize.x;
   _shFwd.copy(_sun).multiplyScalar(-1).normalize();                 // light looks down the sun ray
   _shUp.set(0,1,0); if (Math.abs(_shFwd.y) > 0.99) _shUp.set(0,0,1);
   _shRight.crossVectors(_shFwd, _shUp).normalize();
   _shUp.crossVectors(_shRight, _shFwd).normalize();
-  // The shadow frustum centres on WHERE YOU'RE LOOKING at the sea, not always the boat — so islands/objects cast
-  // shadows in every camera mode (boat follow, vehicle chase, free-fly, cinematic), not only around the ship.
-  // Project the active camera's forward onto the y≈0 plane; clamp the reach and smooth it so the map doesn't jump.
-  { let fx=boat3.x, fz=boat3.z;                                       // fallback: the boat
-    if (activeCam){ activeCam.getWorldDirection(_shCamFwd);
-      const cp=activeCam.position;
-      if (_shCamFwd.y < -0.02){ const tt=clampJS(-cp.y/_shCamFwd.y, 0, 900); fx=cp.x+_shCamFwd.x*tt; fz=cp.z+_shCamFwd.z*tt; }
-      else { fx=cp.x+_shCamFwd.x*260; fz=cp.z+_shCamFwd.z*260; }     // looking flat/up → aim a bit ahead on the surface
-    }
-    if (_shFocus.lengthSq()===0) _shFocus.set(fx,0,fz);              // seed
-    _shFocus.x += (fx-_shFocus.x)*Math.min(1, dt*4); _shFocus.z += (fz-_shFocus.z)*Math.min(1, dt*4); }   // ease → no swim
-  _shCtr.set(_shFocus.x, 0, _shFocus.z);
-  const a = Math.round(_shCtr.dot(_shRight)/texel)*texel,           // snap the two lateral components
+  _shCtr.set(_cxR, 0, _czR);                                        // FIXED region centre — not the boat, not the eye
+  const a = Math.round(_shCtr.dot(_shRight)/texel)*texel,
         b = Math.round(_shCtr.dot(_shUp)/texel)*texel,
-        f = _shCtr.dot(_shFwd);                                     // keep depth-along-ray unchanged
+        f = _shCtr.dot(_shFwd);
   _shCtr.copy(_shRight).multiplyScalar(a).addScaledVector(_shUp, b).addScaledVector(_shFwd, f);
-  // Position the light EXACTLY along the sun ray from the snapped centre, so the shadow camera's
-  // view direction is precisely -_sun and its projection centre is the snapped centre. (Overriding
-  // the Y independently — as before — tilted the frustum off-axis and re-broke the texel alignment.)
   sunLight.position.copy(_shCtr).addScaledVector(_sun, D);
   sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
   // Keep castShadow STABLE (never toggle off at night): in the WebGPU path, disabling castShadow frees
@@ -4426,10 +4437,10 @@ function buildOcean() {
 
   oceanMat = new THREE.MeshBasicNodeMaterial();
   oceanMat.positionNode = curveNode(positionLocal.add(gerstner(positionLocal.xz)));   // Gerstner (peaked, leaning crests) + tiny-planet curvature
-  // ISLAND SHADOWS ON THE SEA: the water shader is unlit, so sample the sun's shadow map directly and darken the
-  // final colour where an island occludes the sun. Sampling at the fragment's real (curved, Gerstner) world position
-  // means the shadow follows the contoured surface — no flat catcher plane needed.
-  oceanMat.colorNode = sunLight ? oceanColor().mul( oneMinus( oneMinus(shadow(sunLight)).mul(uShadowK) ) ) : oceanColor();
+  // ISLAND SHADOWS ON THE SEA: the water shader is unlit, so darken the final colour where the sun is occluded,
+  // sampled at the fragment's real (curved, Gerstner) world position → the shadow follows the contoured surface
+  // (no flat catcher plane), and the in-map mask keeps open ocean lit (no frustum rectangle).
+  oceanMat.colorNode = oceanColor().mul( _sunShadowMul() );
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
   oceanMat.opacityNode = Fn(() => {
@@ -4782,9 +4793,7 @@ function buildTerrain() {
   nrm.needsUpdate=true;
   const mat = new THREE.MeshStandardNodeMaterial({ metalness:0.0 });
   // island-on-island shadows, GATED above the waterline (mesh sits at y=-0.05, so land is y>0) — keeps the seabed clean
-  mat.colorNode = sunLight
-    ? attribute('color','vec3').mul( oneMinus( oneMinus(shadow(sunLight)).mul(uShadowK).mul(smoothstep(0.0,2.0,positionWorld.y)) ) )
-    : attribute('color','vec3');
+  mat.colorNode = attribute('color','vec3').mul( _sunShadowMul(smoothstep(0.0, 2.0, positionWorld.y)) );
   mat.roughnessNode = attribute('arough','float');   // wet sand glossy, foliage matte, rock in between
   mat.positionNode = curveNode(positionLocal);        // tiny-planet curvature — islands bend with the sea
   const mesh = new THREE.Mesh(geo, mat); mesh.position.y = -0.05;
@@ -4886,21 +4895,19 @@ function buildClipmapTerrain(){
     const occ=_hAt(wx.add(aoR),wz).sub(h).max(0).add(_hAt(wx.sub(aoR),wz).sub(h).max(0)).add(_hAt(wx,wz.add(aoR)).sub(h).max(0)).add(_hAt(wx,wz.sub(aoR)).sub(h).max(0));
     const ao=float(1).sub(clamp(occ.div(aoR).mul(0.45),0,0.45));
     const grain=_nfbm2(vec2(wx,wz).mul(0.12)).sub(0.5).mul(0.12).mul(landMask);   // per-pixel colour grain on land
-    // ISLAND-on-ISLAND shadows, GATED above the waterline: sample the sun shadow and darken only where h>0 (land), so
-    // the deep seabed never receives it → no shadow-frustum rectangle painted on the sea floor in bathymetry x-ray mode.
-    let _shadeCol = col.mul(ao).add(grain);
-    if (sunLight){ const _aboveW=smoothstep(0.0, 2.0, h), _shK=oneMinus(shadow(sunLight)).mul(uShadowK).mul(_aboveW);
-      _shadeCol = _shadeCol.mul(oneMinus(_shK)); }
-    mat.colorNode=_shadeCol;
+    // ISLAND-on-ISLAND shadows, GATED above the waterline (h>0) so the deep seabed never receives it → no rectangle on
+    // the sea floor in bathymetry x-ray mode; the in-map mask (inside _sunShadowMul) keeps everything off-map lit too.
+    mat.colorNode = col.mul(ao).add(grain).mul( _sunShadowMul(smoothstep(0.0, 2.0, h)) );
     // gradient normal + micro-normal shimmer (fbm tilt on land) — the rocky/leafy sparkle under the sun
     const nB=normalize(vec3(hL.sub(hR), e.mul(2.0), hD.sub(hU)));
     const mgx=_nfbm2(vec2(wx.add(0.9),wz).mul(0.55)).sub(_nfbm2(vec2(wx.sub(0.9),wz).mul(0.55))).mul(landMask);
     const mgz=_nfbm2(vec2(wx,wz.add(0.9)).mul(0.55)).sub(_nfbm2(vec2(wx,wz.sub(0.9)).mul(0.55))).mul(landMask);
     mat.normalNode=normalize(vec3(nB.x.sub(mgx.mul(0.6)), nB.y, nB.z.sub(mgz.mul(0.6))));
-    // Near rings CAST shadows (this is why tall islands had no shadow in LOD mode — casting was off). The shadow
-    // camera frustum is small (±480 round the view focus), so only the fine inner rings overlap it; coarse far rings
-    // needn't cast. Receiving is handled manually in the colorNode above (gated above water), so receiveShadow stays off.
-    const mesh=new THREE.Mesh(geo, mat); mesh.frustumCulled=false; mesh.castShadow=(l<=2); mesh.receiveShadow=false; mesh.renderOrder=l; scene.add(mesh);
+    // ALL rings CAST (this is why tall islands had no shadow in LOD mode — casting was off). The shadow map is now
+    // fit to the whole region, so far islands must cast too: fine inner rings give crisp near shadows, coarse outer
+    // rings cover the rest of the region (blockier, but the palm casters add the fine detail). Receiving is handled
+    // manually in the colorNode above (gated above water), so receiveShadow stays off.
+    const mesh=new THREE.Mesh(geo, mat); mesh.frustumCulled=false; mesh.castShadow=true; mesh.receiveShadow=false; mesh.renderOrder=l; scene.add(mesh);
     clipLevels.push({ l, cell, mesh, uCenter, sx:NaN, sz:NaN });
   }
   terrainMesh=clipLevels[0].mesh;
