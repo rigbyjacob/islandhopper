@@ -2817,7 +2817,10 @@ function updateEnvironment(dt) {
   const fill = lerp(1.0, 0.32, clampJS(P.shadowDepth,0,1));
   sunLight.intensity = (0.25 + (2.4+0.5*P.shadowDepth)*day) * (1 - 0.65*localStorm);
   hemiLight.intensity = (0.42 + 0.62*fill*day) * (1 - 0.4*localStorm);     // floor (0.42) so night islands aren't pure black
-  hemiLight.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
+  // SKYLIGHT FILL: as the sun lowers, cool the ambient (sky) fill from the warm horizon toward the cool zenith. A
+  // shadowed surface is lit by the OVERHEAD sky, not the warm sunset band — so dusk shadows fill cool & stay readable
+  // against the warm directional sun, instead of the old flat warm wash that erased all contrast at sunset.
+  hemiLight.color.copy(_cHor).lerp(_cZen, clampJS((1-day)*0.8, 0, 0.8));
   // SUN SHADOWS ARE A PROPERTY OF THE SCENE, NOT THE CAMERA. Fit the shadow frustum to the WHOLE region — centred on
   // the islands, sized to their bounds — so shadows are view-INDEPENDENT: moving the eye never changes what's shaded,
   // and no frustum rectangle drifts across the sea. (Trade: one map over the whole region = softer fronds than a
