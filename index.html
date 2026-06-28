@@ -1098,6 +1098,14 @@ function prevGateBehind(idx){                  // loop index of the gate the boa
   for (const ga of tourGateAt){ let f = (idx - ga + N) % N; if (f < best){ best = f; gi = ga; } }
   return gi;
 }
+// the trailing leg that closes the loop back to the boat: A* from the previous gate to the boat so it rounds
+// islands exactly like the rest of the path (a straight segment here would cut across land). First point is the
+// gate (== the loop's last point), so drop it to avoid a duplicate.
+function trailToBoat(prevIdx, bx, bz){
+  const t = planPath(tourPath[prevIdx].x, tourPath[prevIdx].z, bx, bz);
+  if (t.length >= 2){ t.shift(); return t; }
+  return [{x:bx,z:bz}];
+}
 // The boat is itself a NODE in the global loop: the leg it currently sits on is REPLACED by
 // boat→(detour)→next-gate, repathed with the SAME A*+relax machinery as the loop (planThrough — so the turns
 // are smooth curves, not hard corners), and the loop then closes back at the boat. The replaced leg is never
@@ -1110,18 +1118,20 @@ function tourFollowPath(bx, bz){
     const gi = nextGateAhead(nearestPathIndex(tourPath, detourNode.x, detourNode.z));   // next gate AFTER the detour
     const lead = planThrough([{x:bx,z:bz}, {x:detourNode.x,z:detourNode.z}, tourPath[gi], tourPath[(gi+4)%N], tourPath[(gi+8)%N]]);
     _detourIdxInPath = nearestPathIndex(lead, detourNode.x, detourNode.z);
-    // loop runs from after the rejoin gate around to the gate BEHIND the boat; then a direct prevGate→boat leg
-    // closes it. The boat's old leg is replaced by prevGate→boat→detour→…, never redrawn (no parallel double).
-    followed = lead.concat(loopArc((gi+9)%N, prevGateBehind(piBoat))); followed.push({x:bx,z:bz});
+    // loop runs from after the rejoin gate around to the gate BEHIND the boat; an A* prevGate→boat leg closes
+    // it. The boat's old leg is replaced by prevGate→boat→detour→…, never redrawn (no parallel double).
+    const giP = prevGateBehind(piBoat);
+    followed = lead.concat(loopArc((gi+9)%N, giP)).concat(trailToBoat(giP, bx, bz));
     gate = detourNode;
   } else {
     const off = Math.hypot(bx-tourPath[piBoat].x, bz-tourPath[piBoat].z);
     if (off > GRID.dx*2.5){                    // off the loop (e.g. just released manual steering) → smooth rejoin to next gate
       const gi = nextGateAhead(piBoat);
       const lead = planThrough([{x:bx,z:bz}, tourPath[gi], tourPath[(gi+4)%N], tourPath[(gi+8)%N]]);
-      // loop ends at the gate BEHIND the boat, then a direct prevGate→boat leg closes it — the boat is a node
+      // loop ends at the gate BEHIND the boat, then an A* prevGate→boat leg closes it — the boat is a node
       // spliced between prevGate and nextGate; its old leg isn't redrawn, so no right-angle jog and no double.
-      followed = lead.concat(loopArc((gi+9)%N, prevGateBehind(piBoat))); followed.push({x:bx,z:bz});
+      const giP = prevGateBehind(piBoat);
+      followed = lead.concat(loopArc((gi+9)%N, giP)).concat(trailToBoat(giP, bx, bz));
       gate = tourPath[gi];
     } else {                                   // on the loop — just follow it forward
       followed = tourPath.slice(piBoat).concat(tourPath.slice(0,piBoat)).concat(tourPath.slice(piBoat, Math.min(piBoat+30, N)));
