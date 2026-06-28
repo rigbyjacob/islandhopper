@@ -1822,12 +1822,14 @@ async function init() {
     updateSubNavDebug();  // sub's depth grid + plan in the nav-debug overlay (after the sub has planned this frame)
     controls.update();
     if (P.lodTerrain) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
-    if (_descent){ _descent.t += dt/_descent.dur; const k=Math.min(_descent.t,1), e=1-(1-k)*(1-k)*(1-k);   // ease-out: decelerate as we settle onto the sea
+    if (_descent){ _descent.t += dt/_descent.dur; const k=Math.min(_descent.t,1);
+      _diveFade(Math.max(0, 1 - k/0.20), REGION.id);                                   // clear the colour fade FAST → reveal the establishing shot first
       const bx=boat3.x, bz=boat3.z, ty=Math.max(seabedHeight(bx,bz)+24, 34);
+      const h=_descent.hold||0, kk=k<=h?0:(k-h)/(1-h), e=kk<0.5?2*kk*kk:1-Math.pow(-2*kk+2,2)/2;   // hold the establishing shot, then ease-in-out down to the ship
       flyState.pos.set(_descent.fromPos.x+((bx-55)-_descent.fromPos.x)*e, _descent.fromPos.y+(ty-_descent.fromPos.y)*e, _descent.fromPos.z+((bz+55)-_descent.fromPos.z)*e);
       flyState.pitch = _descent.fromPitch + (-0.3-_descent.fromPitch)*e;
-      _diveFade(1-k, REGION.id);
-      if (k>=1){ _descent=null; setFly(false); if(_descentReturnView==='cine') setCine(true); else if(_descentReturnView==='fps') setView(true); _diveFade(0); } }   // land back in the usual follow cam (Director by default), not high orbit
+      flyState.yaw   = _descent.fromYaw + wrap(Math.atan2(-55,55) - _descent.fromYaw)*e;             // ease the heading to look at the ship by the end (no snap into the follow cam)
+      if (k>=1){ _descent=null; setFly(false); if(_descentReturnView==='cine') setCine(true); else if(_descentReturnView==='fps') setView(true); _diveFade(0); } }   // land in the usual follow cam
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     else if (flyMode) updateFlyCam(dt);
@@ -6408,13 +6410,24 @@ async function _diveLand(d){
   if (!d.same) await swapRegion(d.id);   // OTHER region: stream it in live under the dive fade — no reload, no load screen. await: build+compile the region before descending
   startDescent();                        // fly the camera down onto the (now-current) region's boat
 }
-// fly the sailing camera down from high orbit to the normal view, reusing the free-fly cam (hands back to orbit cleanly)
+// fly the sailing camera down from an ESTABLISHING shot (framed like the globe diorama) to the normal view.
 function startDescent(){
   _descentReturnView = fpsMode ? 'fps' : 'cine';   // ALWAYS land in the Director follow cam (the default view) unless piloting in first-person — every region should start following the ship
   setFly(true);
-  const bx=boat3.x, bz=boat3.z;
-  flyState.pos.set(bx-70, 1700, bz+70); flyState.yaw=Math.atan2(-70,70); flyState.pitch=-1.2; flyState.keys={};
-  _descent={ t:0, dur:2.6, fromPos:flyState.pos.clone(), fromYaw:flyState.yaw, fromPitch:flyState.pitch };
+  // ESTABLISHING framing: view the whole region from the SAME angle the globe diorama is rendered, for continuity.
+  // The diorama's local frame (east=+x, south=+z, up=+y) IS the sailing world frame, so inverting the diorama's
+  // on-globe orientation gives the matching look direction in world space. Then we hold a beat and ease to the ship.
+  const r=REGION, cx=(r.map.minX+r.map.maxX)/2, cz=(r.map.minZ+r.map.maxZ)/2;
+  const ext=Math.max(r.map.maxX-r.map.minX, r.map.maxZ-r.map.minZ)||600;
+  const n=latLonToVec(r.lat0||0, r.lon0||0, 1);
+  const Q=_faceQuat(n).multiply(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), n));   // diorama orientation when centred on the globe
+  const look=new THREE.Vector3(0,0,-1).applyQuaternion(Q.clone().invert()).normalize();                   // globe cam looks toward -z → matching look dir in the region's (=world) frame
+  const dist=ext*1.05;
+  const camPos=new THREE.Vector3(cx,0,cz).addScaledVector(look,-dist); camPos.y=Math.max(camPos.y, ext*0.3);
+  flyState.pos.copy(camPos);
+  flyState.yaw=Math.atan2(look.z, look.x); flyState.pitch=clampJS(Math.asin(clampJS(look.y,-1,1)), -1.45, 1.45);
+  flyState.keys={};
+  _descent={ t:0, dur:3.4, hold:0.32, fromPos:flyState.pos.clone(), fromYaw:flyState.yaw, fromPitch:flyState.pitch };
   _diveFade(1, REGION.id);
 }
 // ============================================================================
