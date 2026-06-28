@@ -3339,8 +3339,9 @@ function buildNavVisuals() {
 }
 // Fill a wedge-dash ribbon from `pts`, with the vehicle at (ex,ez) "eating" passed dashes, laid at height
 // yLevel. If `gate` is given (pathFull off), the dashes stop at the next waypoint instead of the full route.
-function fillRibbon(ribbon, pts, ex, ez, yLevel, gate){
+function fillRibbon(ribbon, pts, ex, ez, yLevel, gate, rideWaves){
   if (!ribbon) return;
+  const _T = clock.elapsedTime;   // for laying the dashes ON the live wave surface (ship), not a flat plane
   const show = P.showPath && pts && pts.length > 1;
   ribbon.visible = show;
   if (!show){ ribbon.geometry.setDrawRange(0,0); return; }
@@ -3365,7 +3366,10 @@ function fillRibbon(ribbon, pts, ex, ez, yLevel, gate){
   let s = bestS + 20, di = 0;
   while (s < Math.min(total, capS) && di < DASHMAX){
     const p0=at(s), p1=at(s+dash), nx=-p0.dz, nz=p0.dx, b=di*12;
-    const y0=y-curveDropJS(p0.x,p0.z), y1=y-curveDropJS(p1.x,p1.z);   // sink the dashes onto the curved sea
+    // ride the LIVE wave surface (+y as a clearance offset) so crests can't occlude the dashes → no gaps.
+    // Underwater ribbons (sub) keep the flat depth plane. Both still sink onto the curved tiny-planet sea.
+    const wv0 = rideWaves ? waveHeightJS(p0.x,p0.z,_T) : 0, wv1 = rideWaves ? waveHeightJS(p1.x,p1.z,_T) : 0;
+    const y0=wv0+y-curveDropJS(p0.x,p0.z), y1=wv1+y-curveDropJS(p1.x,p1.z);
     arr[b   ]=p0.x-nx*wB*0.5; arr[b+1 ]=y0; arr[b+2 ]=p0.z-nz*wB*0.5;
     arr[b+3 ]=p0.x+nx*wB*0.5; arr[b+4 ]=y0; arr[b+5 ]=p0.z+nz*wB*0.5;
     arr[b+6 ]=p1.x+nx*wF*0.5; arr[b+7 ]=y1; arr[b+8 ]=p1.z+nz*wF*0.5;
@@ -3377,7 +3381,7 @@ function fillRibbon(ribbon, pts, ex, ez, yLevel, gate){
 }
 function updatePathLine() {
   fillRibbon(pathRibbon, path, boat3.x, boat3.z, 0.45,
-    (P.pathFull===false && P.mode==='tour' && route[wpIdx]) ? routeGate(wpIdx) : null);
+    (P.pathFull===false && P.mode==='tour' && route[wpIdx]) ? routeGate(wpIdx) : null, true);   // ship ribbon rides the wave surface
   // submarine route ribbon — same wedge markers + same Show-path / Full-route controls, at the sub's depth
   const sub = (typeof FLEET!=='undefined') ? FLEET.find(v=>v.id==='sub') : null;
   if (subRibbon) fillRibbon(subRibbon, sub&&sub.path, sub?sub.pos.x:0, sub?sub.pos.z:0, sub?sub.pos.y+0.6:0.45,
