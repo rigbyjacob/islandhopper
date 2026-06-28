@@ -6210,9 +6210,23 @@ function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
 // ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
 //      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
 let _diveZoom=null, _globeRise=null, _diveAfterSlerp=null, _descent=null, _descentReturnView='cine';
-function _diveFade(a, id){ let f=document.getElementById('dive-fade');
-  if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;'; document.body.appendChild(f); }
-  const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018; f.style.background='#'+('000000'+(c>>>0).toString(16)).slice(-6); f.style.opacity=clampJS(a,0,1); }
+function _diveFade(a, id){ a=clampJS(a,0,1); let f=document.getElementById('dive-fade');
+  if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;overflow:hidden;';
+    const inner=document.createElement('div'); inner.style.cssText='position:absolute;inset:-40%;will-change:transform,opacity;'; f.appendChild(inner); document.body.appendChild(f); }
+  const inner=f.firstChild;
+  const c=(id!=null?REGION_ART_COL[id]:0)||0x0a1018, hex='#'+('000000'+(c>>>0).toString(16)).slice(-6);
+  // Cloud bank, not a flat colour wall: soft white puffs (mist) over a faint region-tinted haze, so the dive
+  // feels like plunging THROUGH cloud into the world. The puffs swell as the transition intensifies (falling in).
+  inner.style.background =
+    'radial-gradient(40% 32% at 20% 26%, rgba(255,255,255,.97), rgba(255,255,255,0) 70%),'+
+    'radial-gradient(36% 30% at 76% 20%, rgba(247,251,255,.95), rgba(255,255,255,0) 70%),'+
+    'radial-gradient(46% 36% at 55% 73%, rgba(255,255,255,.96), rgba(255,255,255,0) 72%),'+
+    'radial-gradient(38% 32% at 26% 80%, rgba(244,250,255,.93), rgba(255,255,255,0) 70%),'+
+    'radial-gradient(42% 34% at 86% 60%, rgba(255,255,255,.95), rgba(255,255,255,0) 72%),'+
+    'radial-gradient(130% 130% at 50% 45%, '+hex+'b0, '+hex+'e8)';   // faint region-tinted haze behind the puffs
+  inner.style.transform = 'scale('+(1 + a*0.9)+')';   // clouds swell as you fall into them
+  inner.style.filter = 'blur('+(2 + (1-a)*4)+'px)';   // softer at the edges of the transition
+  f.style.opacity = a; }
 let _globeIdle=0, _globeLevel=null, _globeFocus=null, _wmPrevPanel='', _globeZ=3.0, _hoverId=null;   // _globeZ: orbit distance (smaller = bigger globe on screen); scroll wheel adjusts it. _hoverId: region under cursor (overrides the implicit centre focus)
 function _faceQuat(localVec){ const f=localVec.clone().normalize();      // quaternion that puts localVec dead-front (+Z) with the north pole upright (no roll)
   const phi=Math.asin(clampJS(f.y,-1,1)), lam=Math.atan2(f.x,f.z);
