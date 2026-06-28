@@ -1656,15 +1656,18 @@ async function init() {
     fpsN++; fpsT += dt;
     if (fpsT >= 0.5) { ui.fps.textContent = Math.round(fpsN/fpsT) + ' fps'; fpsN = 0; fpsT = 0; }
 
-    if (_perfRecording){   // perf harness: record CPU ms (work this frame), realized interval, and GPU ms (last resolved timestamp)
+    // GPU frame-time via WebGPU timestamp queries. resolveTimestampsAsync() resolves to this frame's GPU
+    // render duration (ms) and drains the query buffer. We MUST drain EVERY frame during a sweep (settle +
+    // sample) — draining only on recorded frames let queries accumulate across the settle, inflating the value.
+    if ((_perfState && _perfState.running) && renderer.resolveTimestampsAsync){
+      try{ renderer.resolveTimestampsAsync().then(ms=>{
+        const v = (typeof ms==='number'&&isFinite(ms)) ? ms : (renderer.info&&renderer.info.render&&renderer.info.render.timestamp);
+        if (typeof v==='number'&&isFinite(v)&&v>=0) _lastGpuMs=v; }).catch(()=>{}); }catch(_){}
+    }
+    if (_perfRecording){   // perf harness: record CPU ms (work this frame), realized interval, and GPU ms (last resolved)
       const _now = performance.now();
       _perfBuf.push({ cpu: _now - _pt0, intv: _pt0 - (_perfPrevTop || _pt0), gpu: _lastGpuMs });
       _perfPrevTop = _pt0;
-      // GPU frame-time via WebGPU timestamp queries. resolveTimestampsAsync() resolves to the render-pass
-      // duration in ms (and also updates renderer.info.render.timestamp); capture it for the next frame.
-      if (renderer.resolveTimestampsAsync){ try{ renderer.resolveTimestampsAsync().then(ms=>{
-        const v = (typeof ms==='number'&&isFinite(ms)) ? ms : (renderer.info&&renderer.info.render&&renderer.info.render.timestamp);
-        if (typeof v==='number'&&isFinite(v)&&v>=0) _lastGpuMs=v; }).catch(()=>{}); }catch(_){} }
     }
 
     if (firstFrame) { firstFrame = false; window.__booted = true;
@@ -6356,7 +6359,7 @@ async function runPerfSweep(opts){
     await _perfWaitSettle(cfg.settleMs);
     if (document.hidden){ _perfState.backgrounded=true;
       if (!cfg.ignoreHidden){ _perfState.aborted='tab hidden — keep the tab focused (RAF throttles in the background)'; console.warn('[perf] ABORTED:', _perfState.aborted); break; } }
-    _perfBuf=[]; _perfPrevTop=0; _perfRecording=true;
+    _perfBuf=[]; _perfPrevTop=0; _lastGpuMs=0; _perfRecording=true;
     await _perfSleep(cfg.sampleMs);
     _perfRecording=false;
     const rec=_perfStats(list[i], _perfBuf.slice());
