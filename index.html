@@ -221,6 +221,7 @@
 <script src="data/thailand.js"></script>  <!-- Thailand · Andaman region: window.THAILAND -->
 <script src="data/sweden.js"></script>    <!-- Sweden · Stockholm Archipelago region: window.SWEDEN (lonscale-corrected for 59°N) -->
 <script src="data/hawaii.js"></script>    <!-- Hawaiʻi · main island chain: window.HAWAII (volcanic, tropical) -->
+<script src="data/halong.js"></script>    <!-- Hạ Long Bay · limestone karst (window.HALONG, build/gen_region.py) -->
 <script src="data/worldmap.js"></script>   <!-- shaded-relief Earth COLOR texture for the world-map globe (build/gen_worldmap.py) -->
 <script src="data/worldmap_disp.js"></script>   <!-- Earth DISPLACEMENT (height) texture for globe relief -->
 <script src="data/starmap.js"></script>   <!-- real star catalog + constellations; build with: node build/build_starmap.js (optional; sky falls back to procedural stars if absent) -->
@@ -556,6 +557,23 @@ if (window.HAWAII) REGIONS.hawaii = Object.assign({}, window.HAWAII, {
   ],
   // bright tropical day, fresh NE trade winds, a steady Pacific swell (Hawaii surfs — keep the foam)
   defaults: { timeOfDay:13.0, atmosphere:0.5, windDirDeg:60, windStrength:12, waveHeight:1.8, stormOn:false, stormIntensity:0.0 },
+});
+// ---- Hạ Long Bay · limestone tower karst — jade water, sheltered bay, morning haze ----
+if (window.HALONG) REGIONS.halong = Object.assign({}, window.HALONG, {
+  relief: { escale:13, steep:0.6, ridge:1.9, lift:2.4 },     // sheer limestone towers rising straight from the water
+  tour: ['Ti Tốp','Bồ Hòn','Cống Đỏ','Đầu Bê','Cát Dứa','Cát Bà'],   // loop through the named karst islands
+  seaTint: [0.80, 1.16, 1.00],                               // jade-green sheltered bay (greener than the Andaman turquoise)
+  foam: 0.16,                                                // glassy, almost no open-water surf in the sheltered bay
+  palette: {
+    land: { seabed:0x1c7c86, wetsand:0xbfa06a, sand:0xe2d3a8,
+            grass:0x3c7e36, forest:0x235a23, rock:0xb9b3a3, cliff:0x8c867a },   // jungle-topped grey limestone towers
+    shrub: [0x357c2c, 0x21621f],
+  },
+  flora: { palms:true, density:1.6 },                        // dense green scrub/forest on the tower tops
+  cities: [ [107.0425,20.9599,30], [107.0482,20.7278,16] ],  // Hạ Long City (Bãi Cháy), Cát Bà town
+  cityLabels: [ ['Hạ Long City',107.0425,20.9599],['Cát Bà',107.0482,20.7278] ],
+  // sheltered jade bay at misty morning — light NE breeze, almost flat water, heavy karst haze
+  defaults: { timeOfDay:7.5, atmosphere:0.7, windDirDeg:45, windStrength:8, waveHeight:0.3, stormOn:false, stormIntensity:0.0 },
 });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
@@ -5695,6 +5713,7 @@ const REGION_META = {
   japan:     { tag:'Japan · Sagami',    blurb:'The Great Wave & Mt. Fuji' },
   thailand:  { tag:'Thailand · Andaman', blurb:'Limestone karst & warm seas' },
   sweden:    { tag:'Sweden · Stockholm', blurb:'Granite skerries & pine · Djurö→Stavsnäs' },
+  halong:    { tag:'Hạ Long Bay',        blurb:'Limestone towers & jade water' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
 let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[];
@@ -5753,10 +5772,11 @@ const REGION_ART_COL = {
   thailand:  0xe8a82a,   // Thai temple gilding — leaf gold
   sweden:    0x1f7fd0,   // Swedish flag blue (was Falu red — blue reads more "Sweden")
   hawaii:    0xdd4f8c,   // Hawaiian lei & kapa — hibiscus pink
+  halong:    0x2aa37e,   // Hạ Long jade-green bay water
 };
 // A little tabletop DIORAMA of each region on the globe: the REAL island outlines, sculpted into hills (coast→green→
 // rock) sitting in a tinted sea — so spinning the planet gives a believable sense of each archipelago before you dive.
-const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', aegean:'med', japan:'temp', sweden:'nord' };
+const _BIOME = { caribbean:'trop', thailand:'trop', hawaii:'trop', halong:'trop', aegean:'med', japan:'temp', sweden:'nord' };
 const _PAL = {   // per-biome palette: sea, beach, vegetated lowland, rocky peak — punchy & saturated so the dioramas read as FUN destinations against the grayscale Earth
   trop:{ sea:0x12c2ea, beach:0xffe7a3, low:0x2ed83f, peak:0x8ad348 },   // electric tropical cyan, bright sand, vivid jungle
   med: { sea:0x18b6e6, beach:0xf4dc9e, low:0x9ad84a, peak:0xe6bd56 },   // bright Aegean blue, fresh green-gold hills, warm gold rock
