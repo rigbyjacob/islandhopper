@@ -2771,8 +2771,11 @@ function updateEnvironment(dt) {
   // Shadow darkness tracks the DIRECT-sun fraction, which collapses near the horizon (atmospheric extinction + grazing
   // cosine) — so low-sun shadows fade out instead of stretching to infinity as hard black streaks. Capped well below 1
   // so shaded surfaces keep their skylight/ambient (a shadow removes direct sun, it doesn't paint the world black).
-  const _altTaper = clampJS((_sun.y - 0.015) / 0.20, 0, 1);   // 0 at the horizon → 1 once the sun is ~12° up
-  uShadowK.value = clampJS(day,0,1) * _altTaper * (0.34 + 0.30*clampJS(P.shadowDepth,0,1)) * (1 - 0.5*localStorm);
+  // Ocean cast-shadow strength. Gated only by `day` (which is curve-aware: e = sun.y + horizonDrop) so the water shows
+  // island shadows right down to the VISIBLE sunset horizon and fades to none only at true night — matching the
+  // grazing-sun terrain shadows. (Previously an _altTaper killed this near the horizon, which is exactly why a low
+  // sun lit the terrain but cast nothing on the water.)
+  uShadowK.value = clampJS(day,0,1) * (0.34 + 0.30*clampJS(P.shadowDepth,0,1)) * (1 - 0.5*localStorm);
   uNight.value = clampJS((0.14 - e) / 0.18, 0, 1);                 // lights come on at dusk
   // moon — opposite the sun, so it's up at night. Soft cool directional light + sky disk; fades with
   // night fraction and how high the moon is, dimmed by storm cloud.
