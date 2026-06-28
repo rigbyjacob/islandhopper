@@ -5738,7 +5738,7 @@ const REGION_META = {
   elnido:    { tag:'El Nido & Coron',     blurb:'Palawan karst & turquoise lagoons' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
-let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[];
+let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[];
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
@@ -5898,7 +5898,7 @@ function buildGlobe(){
   globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color:0xbcd4ff, size:0.16, sizeAttenuation:true, transparent:true, opacity:0.85 })));
   globeSpin=new THREE.Group(); globeScene.add(globeSpin);
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
-  if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.10; oceanMatOpts.displacementBias=-0.05; }   // sea level (disp 0.5) stays at radius; land +0.05, deep ocean -0.05
+  if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03; }   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
   const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R,360,180), new THREE.MeshStandardMaterial(oceanMatOpts));
   globeSpin.add(ocean);
   if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map → grayscale planet
@@ -5914,7 +5914,7 @@ function buildGlobe(){
       } catch(_e){ c2.filter='grayscale(0.95) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0); }   // fallback if readback is ever blocked
       const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; ocean.material.map=t; ocean.material.color.setScalar(1); ocean.material.needsUpdate=true; };
     img.src=window.WORLDMAP; }
-  _globePicks=[]; _regionGlows=[];
+  _globePicks=[]; _regionGlows=[]; _regionLabels=[];
   for (const r of Object.values(REGIONS)){
     const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const glow=_regionGlow(artCol); glow.mesh.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.01)); globeSpin.add(glow.mesh); _regionGlows.push({ id:r.id, mat:glow.mat });   // target highlight (billboard)
@@ -5924,7 +5924,8 @@ function buildGlobe(){
     const m=REGION_META[r.id]||{tag:r.name||r.id};
     const _h={}; new THREE.Color(artCol).getHSL(_h);                  // push each art colour to a near-max-saturation, bright, "fun" version so labels really POP off the gray Earth
     const labCol=new THREE.Color().setHSL(_h.h, Math.min(1,_h.s*1.4+0.35), clampJS(_h.l*0.4+0.64, 0.68, 0.86)).getHex();
-    const lab=_arcLabel(m.tag, labCol); lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.012)); globeSpin.add(lab);   // curved label ringing the diorama border
+    const lab=_arcLabel(m.tag, labCol); lab.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.018)); lab.material.opacity=0; globeSpin.add(lab);   // curved label ringing the diorama border
+    _regionLabels.push({ id:r.id, spr:lab, n:latLonToVec(r.lat0||0, r.lon0||0, 1) });   // declutter: only the focused, front-facing region's label fades in (see updateGlobe)
   }
   faceRegion(REGION.id);
 }
@@ -5990,6 +5991,12 @@ function updateGlobe(dt){
     if (g.userData.beam) g.userData.beam.material.opacity=0.18+0.22*p; }
   const ease=1-Math.exp(-(dt||0.016)*9);                                 // quick ease in/out for the target highlight
   for (const g of _regionGlows){ const tgt=(g.id===_globeFocus)?0.45:0; g.mat.opacity += (tgt-g.mat.opacity)*ease; }
+  // Region labels: only the FOCUSED region's label (and only when it's on the front face) fades in — keeps
+  // clustered regions (e.g. Thailand/Halong/El Nido) from overlapping into an unreadable tangle.
+  for (const L of _regionLabels){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
+    const tgt=(L.id===_globeFocus && wn.z>0.2) ? 1 : 0;
+    L.spr.material.opacity += (tgt - L.spr.material.opacity)*ease;
+    L.spr.visible = L.spr.material.opacity > 0.02; }
 }
 let _globeMoved=0;
 function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; }
