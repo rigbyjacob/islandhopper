@@ -83,6 +83,11 @@
   #demobar .demo-pill.active { background: #2f7bd6; border-color: #5b9fe6; color: #fff; opacity: 1; }
   #demobar .demo-exit { font-size: 14px; padding: 4px 9px; cursor: pointer; opacity: .6; border-radius: 8px; user-select: none; }
   #demobar .demo-exit:hover { opacity: 1; background: rgba(255,120,120,.18); }
+  /* demo camera switcher row */
+  #demobar .demo-cam { display: flex; gap: 5px; flex-wrap: nowrap; }
+  #demobar .demo-cambtn { padding: 0 8px; height: 22px; display: flex; align-items: center; border-radius: 11px; cursor: pointer; background: rgba(140,200,255,.1); border: 1px solid rgba(140,200,255,.22); font-size: 11px; font-weight: 600; opacity: .8; flex: 0 0 auto; user-select: none; white-space: nowrap; }
+  #demobar .demo-cambtn:hover { background: rgba(140,200,255,.22); opacity: 1; }
+  #demobar .demo-cambtn.active { background: #2f7bd6; border-color: #5b9fe6; color: #fff; opacity: 1; }
   .scn-input { width: 100%; box-sizing: border-box; background: rgba(0,0,0,.25); border: 1px solid rgba(140,200,255,.25); color: #dfeefb; border-radius: 7px; padding: 5px 8px; font: 12px ui-sans-serif; margin: 4px 0; }
   .scn-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 11.5px; }
   .scn-row .scn-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -6673,6 +6678,13 @@ function _buildDemoBar(){
   const btns=el('div','demo-btns',scroll); btns.id='demo-btns';
   demoScenarios.forEach((sc,i)=>{ const b=el('div','demo-pill',btns); b.textContent=String(i+1); b.title=sc.name; b.onclick=()=>demoGo(i); });   // numbered circles; the name shows above
   btns.addEventListener('scroll', _updateDemoScroll, {passive:true});
+  // camera switcher: film the Ship / a fleet vehicle / 4-up grid / free-fly — same controls as the (hidden) Helm panel
+  const cam=el('div','demo-cam',mid); cam.id='demo-cam'; ui.demoCamBtns={};
+  for (const [k,lbl] of [['ship','Ship'],['sub','Sub'],['plane','Plane'],['ufo','UFO'],['grid','4-up'],['free','Free']]){
+    const b=el('div','demo-cambtn',cam); b.textContent=lbl;
+    b.onclick=()=>{ if(k==='free') setFly(true); else { if(typeof flyMode!=='undefined'&&flyMode) setFly(false); setFleetView(k); } _updateDemoCam(); };
+    ui.demoCamBtns[k]=b;
+  }
   const next=el('div','demo-nav',bar); next.textContent='›'; next.title='Next'; next.onclick=()=>demoGo(_demoIdx+1);
   const exit=el('div','demo-exit',bar); exit.textContent='✕'; exit.title='Exit demo (Esc)'; exit.onclick=exitDemoMode;
   document.body.appendChild(bar); _demoBar=bar; _updateDemoBar();
@@ -6691,7 +6703,12 @@ function _updateDemoBar(){ const nm=document.getElementById('demo-name'); if(nm&
   const bs=document.getElementById('demo-btns'); if(!bs) return;
   [...bs.children].forEach((b,i)=>b.classList.toggle('active', i===_demoIdx));
   const active=bs.children[_demoIdx]; if(active&&active.scrollIntoView) active.scrollIntoView({inline:'center', block:'nearest', behavior:'smooth'});   // keep the current pill in view as ‹ › step
+  _updateDemoCam();
   setTimeout(_updateDemoScroll, 0); }
+// reflect the live camera mode on the demo camera-switcher buttons
+function _updateDemoCam(){ if(!ui||!ui.demoCamBtns) return;
+  const cur = (typeof flyMode!=='undefined'&&flyMode) ? 'free' : ((typeof fleetView!=='undefined'&&fleetView==='off') ? 'ship' : fleetView);
+  for (const k in ui.demoCamBtns) ui.demoCamBtns[k].classList.toggle('active', k===cur); }
 function buildDemoSection(panel){
   const s=section(panel,'Scenarios');
   ui.scnName=el('input','scn-input',s); ui.scnName.type='text'; ui.scnName.placeholder='Scenario name…';
