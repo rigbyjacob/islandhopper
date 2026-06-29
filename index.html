@@ -7309,8 +7309,8 @@ function updateGlobe(dt){
     if (S.glow) S.glow.position.y += ((S.gY + lift) - S.glow.position.y)*ease;
     S.gmat.opacity += ((on?0.85:0) - S.gmat.opacity)*ease; }
 }
-let _globeMoved=0;
-function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; _hoverId=null;
+let _globeMoved=0, _pinching=false, _pinchD=0, _pinchZ=0, _pinchSuppress=false;
+function _gPointerDown(e){ if(!worldMapOpen || _pinching) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; _hoverId=null;
   try{ e.target&&e.target.setPointerCapture&&e.target.setPointerCapture(e.pointerId); }catch(_){ }   // keep receiving moves even if the finger drifts off the element (touch drag)
 }
 const _gRC=new THREE.Raycaster(), _gNDC=new THREE.Vector2();
@@ -7321,7 +7321,7 @@ function _globeRegionAt(e){ if(!renderer||!globeCam) return null;
   const hits=_gRC.intersectObjects(_globePicks, true);
   if(!hits.length) return null; let o=hits[0].object; while(o && !o.userData.regionId) o=o.parent; return o ? o.userData.regionId : null;
 }
-function _gPointerMove(e){ if(!worldMapOpen) return;
+function _gPointerMove(e){ if(!worldMapOpen || _pinching) return;
   if(!_globeDrag){                                                       // hovering (no drag) → set that region as the target (the glow follows the cursor)
     if(_diveZoom||_globeRise||_diveAfterSlerp||demoMode) return;
     _hoverId=_globeRegionAt(e); if(_hoverId) _globeFocus=_hoverId; return;   // hover overrides the implicit centre focus
@@ -7334,8 +7334,10 @@ function _gPointerMove(e){ if(!worldMapOpen) return;
   _globeVel.y=clampJS(_globeVel.y*0.35 + dx*0.0011*0.65, -0.05, 0.05);   // smoothed, speed-scaled flick velocity (capped)
   _globeVel.x=clampJS(_globeVel.x*0.35 + dy*0.0011*0.65, -0.05, 0.05); }
 function _gPointerUp(){ _globeDrag=null; }
-function _gClick(e){ if(!worldMapOpen || _globeMoved>10) return;       // a real click (not the end of a spin) → set target + dive
-  const id=_globeRegionAt(e); if(id) travelToRegion(id);
+function _gClick(e){ if(!worldMapOpen || _globeMoved>10 || _pinchSuppress) return;   // a real tap (not the end of a spin/pinch)
+  // tap a region marker to dive; if the tap misses the small marker (common on touch), fall back to the FOCUSED
+  // (centred) region — so on mobile you spin a region to centre, then just tap to dive in.
+  const id=_globeRegionAt(e) || _globeFocus; if(id) travelToRegion(id);
 }
 // double-click = SAME as a single click (dive into the region). The two-tap sequence is often read as a tiny
 // drag (which spins the globe and trips _gClick's _globeMoved guard), so the click path can swallow it — but
@@ -7389,6 +7391,16 @@ function buildWorldMap(){
   ov.addEventListener('wheel', (e)=>{ if(!worldMapOpen) return; e.preventDefault();   // scroll to zoom the globe (bigger globe → dense clusters spread out & stay legible)
     _globeZ = clampJS(_globeZ * (e.deltaY>0 ? 1.1 : 0.9), 1.7, 5.5);
     if(globeCam && !_diveZoom && !_globeRise) globeCam.position.set(0,0,_globeZ); }, { passive:false });
+  // PINCH-TO-ZOOM (mobile): two fingers spread/squeeze the globe, same range as the wheel. Suppresses the one-finger
+  // spin while pinching, and swallows the trailing tap so lifting fingers doesn't accidentally dive.
+  const _td=(a,b)=>Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+  ov.addEventListener('touchstart', (e)=>{ if(!worldMapOpen) return; if(e.touches.length===2){
+    _pinching=true; _globeDrag=null; _globeVel.x=_globeVel.y=0; _pinchD=_td(e.touches[0],e.touches[1])||1; _pinchZ=_globeZ; e.preventDefault(); } }, { passive:false });
+  ov.addEventListener('touchmove', (e)=>{ if(!worldMapOpen || !_pinching) return; if(e.touches.length===2){
+    const d=_td(e.touches[0],e.touches[1])||1; _globeZ=clampJS(_pinchZ*(_pinchD/d), 1.7, 5.5);   // spread fingers → smaller _globeZ → zoom in
+    if(globeCam && !_diveZoom && !_globeRise) globeCam.position.set(0,0,_globeZ); e.preventDefault(); } }, { passive:false });
+  const _pinchEnd=(e)=>{ if(e.touches && e.touches.length<2 && _pinching){ _pinching=false; _pinchSuppress=true; setTimeout(()=>{ _pinchSuppress=false; }, 350); } };
+  ov.addEventListener('touchend', _pinchEnd); ov.addEventListener('touchcancel', _pinchEnd);
   window.addEventListener('keydown', _gKey, true);    // capture phase so the sailing handler never sees globe keys
   buildGlobe();
 }
@@ -7423,14 +7435,16 @@ function openWorldMap(){ const ov=document.getElementById('worldmap'); if(!ov) r
   _globeIdle=0; _globeLevel=null; _globeFocus=REGION.id;                  // restart idle auto-level + focus the current region
   const _ob=document.getElementById('wm-open'); if(_ob) _ob.style.display='none';        // the globe is its own screen — hide the World button, Helm panel & skull
   const _pn=document.getElementById('panel'); if(_pn){ _wmPrevPanel=_pn.style.display; _pn.style.display='none'; }
-  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display='none'; }
+  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display='none';
+  if(_throttleEl) _throttleEl.style.display='none'; }   // throttle is a free-cam control — irrelevant on the globe
 function closeWorldMap(){ const ov=document.getElementById('worldmap'); if(ov) ov.classList.add('hidden');
   worldMapOpen=false;
   if(demoMode) return;                                  // demo manages its own chrome (panel/skull stay hidden; startDescent handles controls)
   if(controls) controls.enabled=_prevCtrlEnabled;
   const _ob=document.getElementById('wm-open'); if(_ob) _ob.style.display='';
   const _pn=document.getElementById('panel'); if(_pn) _pn.style.display=_wmPrevPanel;
-  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display=(_pn && _pn.style.display==='none')?'flex':'none'; }   // re-show the badge only if the panel was left collapsed
+  const _sk=document.getElementById('skullBtn'); if(_sk) _sk.style.display=(_pn && _pn.style.display==='none')?'flex':'none';   // re-show the badge only if the panel was left collapsed
+  if(_throttleEl) _throttleEl.style.display=(flyMode && _isTouchUI)?'block':'none'; }   // restore the free-cam throttle if we came back to fly mode
 // World button = a live snapshot of the globe as it looked right before the dive.
 let _thumbCanvas=null, _globeThumb=null, _thumbTick=0;
 function _grabGlobeFrame(){ if(_diveZoom) return; if((_thumbTick++ & 3)!==0) return;   // cheap GPU blit into a small canvas every 4th steady frame (no readback here)
