@@ -6505,7 +6505,7 @@ const REGION_META = {
   apo:       { tag:'Apo, Dauin & Siquijor',blurb:'Volcanic isles & clear reefs' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
-let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[], _comboLenses=[], _comboSections=[];
+let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[], _comboLenses=[], _comboSections=[], _seaLenses=[];
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
@@ -6603,8 +6603,9 @@ function buildRegionPatch(r){
     new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
   base.position.y=0.025; grp.add(base);
   const seaC=new THREE.Color(pal.sea), seaMat=new THREE.MeshStandardNodeMaterial({ roughness:0.3, metalness:0.0 });
+  const uSeaOff=uniform(new THREE.Vector2(0,0));                      // sea "shake": scrolls the ripple as the arcball turns (parallax, like the combined dioramas)
   {                                                                    // organic animated ripple: domain-warped, multi-directional travelling swells (no grid), driven by TSL time
-    const pp=uv().sub(vec2(0.5,0.5));
+    const pp=uv().sub(vec2(0.5,0.5)).add(uSeaOff);
     const warp=vec2( sin(pp.y.mul(7.0).add(time.mul(0.5))), sin(pp.x.mul(6.3).sub(time.mul(0.43))) ).mul(0.05);   // slow swirl that bends the wavefronts
     const q=pp.add(warp);
     const w1=sin( dot(q, vec2(0.92,0.39)).mul(33.0).sub(time.mul(1.7)) );      // three swells travelling at irregular angles → interfere organically
@@ -6617,6 +6618,7 @@ function buildRegionPatch(r){
     seaMat.colorNode=mix(baseC, crestC, pow(wn,2.0).mul(0.7));                 // brighten the crests
     seaMat.emissiveNode=baseC.mul(0.3).add(crestC.mul(wn.mul(0.14)));          // self-glow keeps the lagoon vivid + crest sparkle
   }
+  _seaLenses.push({ off:uSeaOff, n:latLonToVec(r.lat0||0, r.lon0||0, 1) });   // parallax-scroll the sea ripple with the globe
   const sea=new THREE.Mesh(new THREE.CircleGeometry(R, 128), seaMat);
   sea.rotation.x=-Math.PI/2; sea.position.y=0.052; grp.add(sea);
 
@@ -6696,7 +6698,7 @@ function buildGlobe(){
       } catch(_e){ c2.filter='grayscale(0.95) contrast(1.55) brightness(1.06)'; c2.drawImage(img,0,0); }   // fallback if readback is ever blocked
       const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; ocean.material.map=t; ocean.material.color.setScalar(1); ocean.material.needsUpdate=true; };
     img.src=window.WORLDMAP; }
-  _globePicks=[]; _regionGlows=[]; _regionLabels=[]; _regionDioramas=[];
+  _globePicks=[]; _regionGlows=[]; _regionLabels=[]; _regionDioramas=[]; _seaLenses=[];
   for (const r of Object.values(REGIONS)){
     const artCol=REGION_ART_COL[r.id]||0x86d8ff;
     const glow=_regionGlow(artCol); glow.mesh.position.copy(latLonToVec(r.lat0||0, r.lon0||0, GLOBE_R+0.01)); globeSpin.add(glow.mesh); _regionGlows.push({ id:r.id, mat:glow.mat });   // target highlight (billboard)
@@ -6971,6 +6973,9 @@ function updateGlobe(dt){
   const PAN=0.6;
   for (const L of _comboLenses){ const wn=L.cN.clone().applyQuaternion(globeSpin.quaternion);
     L.tex.offset.set(wn.x*PAN, wn.y*PAN); }
+  // singleton dioramas: scroll the sea ripple with the arcball too (shake the globe → shake the water)
+  for (const L of _seaLenses){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
+    L.off.value.set(wn.x*0.28, wn.y*0.28); }
   // FOCUS HIGHLIGHT for combined sections: the focused region's section lifts up over the others + glows
   for (const S of _comboSections){ const on=(S.id===_globeFocus), lift=on?0.05:0;
     S.mesh.position.y += ((S.baseY + lift) - S.mesh.position.y)*ease;
