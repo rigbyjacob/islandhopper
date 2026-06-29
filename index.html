@@ -6783,12 +6783,13 @@ function _emitSectionRegion(grp, id, geo, cx, cy, half, labelDir, R, ox, oz, cN,
   const lab=_globeLabel(me.tag, art); lab.scale.multiplyScalar(lblS);
   lab.position.set(ox+labelDir.x*R*1.22, 0.05, oz+labelDir.z*R*1.22); lab.material.opacity=0; grp.add(lab);
   _regionLabels.push({ id, spr:lab, n:cN.clone() });
-  // glow outline following the section's shape (additive region colour), hidden until focused
+  // glow outline following the section's shape (bright additive), hidden until focused
   const gpts=perim.map(([x,y])=> new THREE.Vector3(ox+x, 0, oz-y));
-  const gtube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(gpts, !!closed), gpts.length*2, R*0.045, 6, !!closed),
-    new THREE.MeshBasicMaterial({ color:art, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
-  gtube.position.y=0.024; grp.add(gtube);
-  _comboSections.push({ mesh:m, lab, glow:gtube, gmat:gtube.material, gY:0.024, id, baseY:0.017 });
+  const gcol=new THREE.Color(art).lerp(new THREE.Color(0xffffff), 0.45);   // brighten so the outline really reads
+  const gtube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(gpts, !!closed), gpts.length*2, R*0.075, 8, !!closed),
+    new THREE.MeshBasicMaterial({ color:gcol, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
+  gtube.position.y=0.03; grp.add(gtube);
+  _comboSections.push({ mesh:m, lab, glow:gtube, gmat:gtube.material, gY:0.03, id, baseY:0.017 });
 }
 // recursively lay a set of region ids into a disc at local (ox,oz) radius R: 2=yin-yang, 3-5=equal wedges,
 // >5 = split into ≤5 equal piles and recurse each pile into a smaller sub-disc within its section.
@@ -6977,11 +6978,11 @@ function updateGlobe(dt){
   for (const L of _seaLenses){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
     L.off.value.set(wn.x*0.28, wn.y*0.28); }
   // FOCUS HIGHLIGHT for combined sections: the focused region's section lifts up over the others + glows
-  for (const S of _comboSections){ const on=(S.id===_globeFocus), lift=on?0.05:0;
+  for (const S of _comboSections){ const on=(S.id===_globeFocus), lift=on?0.10:0;   // clear pop-up over the others
     S.mesh.position.y += ((S.baseY + lift) - S.mesh.position.y)*ease;
-    if (S.lab) S.lab.position.y += ((on?0.085:0.05) - S.lab.position.y)*ease;
+    if (S.lab) S.lab.position.y += ((on?0.13:0.05) - S.lab.position.y)*ease;
     if (S.glow) S.glow.position.y += ((S.gY + lift) - S.glow.position.y)*ease;
-    S.gmat.opacity += ((on?0.85:0) - S.gmat.opacity)*ease; }
+    S.gmat.opacity += ((on?1.0:0) - S.gmat.opacity)*ease; }
 }
 let _globeMoved=0;
 function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; _hoverId=null;
