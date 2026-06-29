@@ -4230,7 +4230,8 @@ function _raDecVec(raDeg, decDeg, out){ const ra=raDeg*Math.PI/180, dec=decDeg*M
 // equator = the XZ plane), then the whole object is tilted so its pole points at the real galactic north pole; added
 // to `parent` so it inherits the sidereal rotation. `opaNode` gates brightness (uNight for the sky, a constant for the
 // globe). Returns the Points so the caller can keep it.
-function _buildMilkyWayStars(parent, R, opaNode){
+function _buildMilkyWayStars(parent, R, opaNode, opts){
+  const bMul=(opts&&opts.bright)||1, sMul=(opts&&opts.sizeMul)||1;   // globe passes brighter/bigger so the arc reads behind the planet
   const N=9000, pos=new Float32Array(N*3), col=new Float32Array(N*3), siz=new Float32Array(N), ph=new Float32Array(N);
   const clump=(l)=> Math.max(0.10, Math.min(1, 0.55 + 0.30*Math.sin(l+0.5) + 0.22*Math.sin(l*2.3+1.7) + 0.15*Math.sin(l*5.1+4.0)));   // star-clouds along the band
   const gauss=()=> Math.sqrt(-2*Math.log(Math.random()+1e-9))*Math.cos(6.2831853*Math.random());
@@ -4247,9 +4248,9 @@ function _buildMilkyWayStars(parent, R, opaNode){
     const cb=Math.cos(b);
     pos[k*3]=cb*Math.cos(l)*R; pos[k*3+1]=Math.sin(b)*R; pos[k*3+2]=cb*Math.sin(l)*R;
     const warm=Math.random(); let r=0.60+0.34*warm, g2=0.68+0.16*warm, bl=0.97-0.20*warm;
-    const br = tight ? (0.5+Math.random()*0.85) : (0.22+Math.random()*0.4);
+    const br = (tight ? (0.5+Math.random()*0.85) : (0.22+Math.random()*0.4)) * bMul;
     col[k*3]=r*br; col[k*3+1]=g2*br; col[k*3+2]=bl*br;
-    siz[k]= (tight?1.2:0.9) + Math.random()*1.4;                       // SMALL points (≤~2.6px) so they stay discrete
+    siz[k]= ((tight?1.2:0.9) + Math.random()*1.4) * sMul;             // SMALL points (≤~2.6px) so they stay discrete
     ph[k]=Math.random()*6.2831853; k++;
   }
   const g=new THREE.BufferGeometry();
@@ -6992,13 +6993,13 @@ function buildGlobe(){
     for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(45+Math.random()*22); sp.set([v.x,v.y,v.z], i*3);
       const t=Math.random(); sc[i*3]=0.60+0.34*t; sc[i*3+1]=0.70+0.16*t; sc[i*3+2]=0.95-0.22*t; }
     const sg=new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(sp,3)); sg.setAttribute('color', new THREE.BufferAttribute(sc,3));
-    globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size:0.17, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false })));
+    globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size:1.8, sizeAttenuation:false, vertexColors:true, transparent:true, opacity:0.9, blending:THREE.AdditiveBlending, depthWrite:false })));   // crisp pixel-size stars (don't shrink to nothing at the star-shell distance)
     const NB=220, bp=new Float32Array(NB*3), bc=new Float32Array(NB*3);
     for (let i=0;i<NB;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(44+Math.random()*22); bp.set([v.x,v.y,v.z], i*3);
       const t=Math.random(); bc[i*3]=0.90+0.10*t; bc[i*3+1]=0.94+0.06*t; bc[i*3+2]=1.0-0.14*t; }
     const bg=new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(bp,3)); bg.setAttribute('color', new THREE.BufferAttribute(bc,3));
-    globeScene.add(new THREE.Points(bg, new THREE.PointsMaterial({ size:0.40, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:1.0, blending:THREE.AdditiveBlending, depthWrite:false })));
-    _buildMilkyWayStars(globeScene, 54, float(0.85)); }
+    globeScene.add(new THREE.Points(bg, new THREE.PointsMaterial({ size:3.4, sizeAttenuation:false, vertexColors:true, transparent:true, opacity:1.0, blending:THREE.AdditiveBlending, depthWrite:false })));   // crisp brighter stars
+    _buildMilkyWayStars(globeScene, 54, float(1.0), { bright:1.8, sizeMul:1.6 }); }   // brighter/bigger so a faint galactic arc reads behind the planet
   globeSpin=new THREE.Group(); globeScene.add(globeSpin);
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
   if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03;   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
