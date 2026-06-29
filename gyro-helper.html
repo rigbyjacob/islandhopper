@@ -46,7 +46,9 @@
   <h1>Gyro Look — 2D test</h1>
   <p>This is a throwaway harness to get the phone-orientation → camera mapping right before wiring it into Island Hopper. It draws a 2D horizon + compass that should move like a window into the world.</p>
   <button id="go">Enable motion &amp; start</button>
-  <p class="hint">iOS asks permission. Best in landscape. Nothing is saved or sent.</p>
+  <p class="hint">⚠️ Motion sensors only work in a <b>secure context</b>. Open this from the SAME address as the sim
+  (e.g. http://…:8080/gyro-helper.html) — NOT from a Google&nbsp;Drive preview or a downloaded file, which block the sensor.
+  iOS asks permission. Best in landscape. Nothing is saved or sent.</p>
 </div>
 <script>
 const cv=document.getElementById('c'), ctx=cv.getContext('2d');
@@ -91,18 +93,37 @@ function attitude(){
   return {heading,pitch,roll};
 }
 
-let headOff=0, invY=false;
+let headOff=0, invY=false, _lastTel=0, _telOK=false;
+// stream live state to the dev server (POST /telemetry → telemetry.json) so it can be polled while debugging
+function postTel(obj){ if(location.protocol==='file:') return; const now=performance.now(); if(now-_lastTel<180) return; _lastTel=now;
+  try{ fetch('/telemetry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)})
+    .then(r=>{_telOK=r.ok;}).catch(()=>{_telOK=false;}); }catch(_){ _telOK=false; } }
 document.getElementById('recenter').onclick=()=>{ headOff = attitude().heading; };
 document.getElementById('invY').onclick=(e)=>{ invY=!invY; e.target.textContent='Invert pitch: '+(invY?'on':'off'); };
 
 function norm(a){ while(a>Math.PI)a-=2*Math.PI; while(a<-Math.PI)a+=2*Math.PI; return a; }
 
 function draw(){
+  const cx=W/2, cy=H/2, pxPerRad=W/(Math.PI*0.9);   // ~ horizontal FOV ~162°? tune for feel
+  // No sensor data yet → don't draw the (misleading all-green) default attitude; show a clear status instead.
+  if (!have){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#0a1828'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#3a6e8c'; ctx.fillRect(0,cy-1,W,2);   // a neutral, centred horizon so it reads as "ready, waiting"
+    ctx.fillStyle='#ffd47a'; ctx.font='600 18px ui-sans-serif,system-ui'; ctx.textAlign='center';
+    ctx.fillText('Waiting for motion sensor…', cx, cy-40);
+    ctx.fillStyle='#9fc0d6'; ctx.font='13px ui-sans-serif,system-ui';
+    ctx.fillText('No deviceorientation events are arriving.', cx, cy-14);
+    ctx.fillText('Google Drive / file preview blocks the sensor.', cx, cy+34);
+    ctx.fillText('Open this from the SAME http://…:8080 address', cx, cy+54);
+    ctx.fillText('you use for the sim (a secure context).', cx, cy+74);
+    postTel({ have:false, events:evCount, secure:window.isSecureContext, screen:screenAngle() });
+    requestAnimationFrame(draw); return;
+  }
   const {heading,pitch,roll}=attitude();
   const hd=norm(heading-headOff);
   const pt=(invY?-pitch:pitch);
   ctx.clearRect(0,0,W,H);
-  const cx=W/2, cy=H/2, pxPerRad=W/(Math.PI*0.9);   // ~ horizontal FOV ~162°? tune for feel
   // draw the world panorama as a wide horizon band, panned by heading, pitched, rolled
   ctx.save();
   ctx.translate(cx,cy);
@@ -136,11 +157,14 @@ function draw(){
   document.getElementById('read').textContent =
     `α ${alpha.toFixed(0).padStart(4)}  β ${beta.toFixed(0).padStart(4)}  γ ${gamma.toFixed(0).padStart(4)}  screen ${orient}°\n`+
     `heading ${(hd/D2R).toFixed(0).padStart(4)}°  pitch ${(pt/D2R).toFixed(0).padStart(4)}°  roll ${(roll/D2R).toFixed(0).padStart(4)}°\n`+
-    (have?'':'(no orientation events yet)');
+    `events ${evCount}   secure ${window.isSecureContext}   tel ${_telOK?'ok':'—'}`;
+  postTel({ have:true, map:document.getElementById('map').value, a:+alpha.toFixed(1), b:+beta.toFixed(1), g:+gamma.toFixed(1),
+    screen:orient, heading:+(hd/D2R).toFixed(1), pitch:+(pt/D2R).toFixed(1), roll:+(roll/D2R).toFixed(1), events:evCount, invY });
   requestAnimationFrame(draw);
 }
 
-function onOri(e){ if(e.alpha==null&&e.beta==null&&e.gamma==null) return;
+let evCount=0;
+function onOri(e){ evCount++; if(e.alpha==null&&e.beta==null&&e.gamma==null) return;
   alpha=e.alpha||0; beta=e.beta||0; gamma=e.gamma||0; orient=screenAngle(); have=true; }
 
 document.getElementById('go').onclick=async ()=>{

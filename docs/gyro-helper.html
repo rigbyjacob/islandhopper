@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Gyro Look — 2D test harness</title>
+<style>
+  :root{ color-scheme:dark; }
+  html,body{ margin:0; height:100%; background:#06101c; color:#dfeaf6; overflow:hidden;
+    font:14px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
+  #c{ display:block; width:100vw; height:100vh; touch-action:none; }
+  #ui{ position:fixed; left:0; right:0; top:0; padding:10px 12px; pointer-events:none;
+    background:linear-gradient(#06101cdd,#06101c00); }
+  .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; pointer-events:auto; }
+  button,select{ background:#13283c; color:#dfeaf6; border:1px solid #2a577a; border-radius:8px;
+    padding:8px 12px; font:600 13px ui-sans-serif,system-ui; }
+  button:active{ background:#1c3a55; }
+  #read{ position:fixed; left:12px; bottom:12px; font:12px ui-monospace,monospace; white-space:pre;
+    background:#0a18288c; border:1px solid #21405a; border-radius:8px; padding:8px 10px; pointer-events:none; }
+  #start{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column;
+    gap:14px; background:#06101cf2; z-index:10; text-align:center; padding:24px; }
+  #start h1{ font-size:20px; margin:0; }
+  #start p{ max-width:30em; opacity:.8; margin:0; }
+  #start button{ font-size:16px; padding:12px 22px; }
+  .hint{ opacity:.65; font-size:12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div class="row">
+    <select id="map">
+      <option value="recipe">Mapping A — full recipe (DeviceOrientationControls)</option>
+      <option value="norot">Mapping B — recipe, ignore screen rotation</option>
+      <option value="simple">Mapping C — simple (heading=α, pitch=β−90, roll=γ)</option>
+      <option value="simpleNeg">Mapping D — simple, inverted pitch</option>
+    </select>
+    <button id="recenter">Recenter heading</button>
+    <button id="invY" data-on="0">Invert pitch: off</button>
+  </div>
+  <div class="row hint">Hold the phone up like a window and turn your body / tilt it. The world should pan as you turn, show sky when you tilt up, and the horizon should stay level (roll with the phone). Tell me which mapping feels right.</div>
+</div>
+<div id="read"></div>
+<div id="start">
+  <h1>Gyro Look — 2D test</h1>
+  <p>This is a throwaway harness to get the phone-orientation → camera mapping right before wiring it into Island Hopper. It draws a 2D horizon + compass that should move like a window into the world.</p>
+  <button id="go">Enable motion &amp; start</button>
+  <p class="hint">⚠️ Motion sensors only work in a <b>secure context</b>. Open this from the SAME address as the sim
+  (e.g. http://…:8080/gyro-helper.html) — NOT from a Google&nbsp;Drive preview or a downloaded file, which block the sensor.
+  iOS asks permission. Best in landscape. Nothing is saved or sent.</p>
+</div>
+<script>
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+let W=0,H=0,DPR=Math.min(2,window.devicePixelRatio||1);
+function resize(){ W=cv.clientWidth; H=cv.clientHeight; cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+addEventListener('resize',resize); resize();
+
+// ---- minimal quaternion math (no libraries) — [x,y,z,w] ----
+const D2R=Math.PI/180;
+function qFromEulerYXZ(bx,ay,gz){ // Three.js 'YXZ': euler (x=bx, y=ay, z=gz)
+  const c1=Math.cos(bx/2),s1=Math.sin(bx/2), c2=Math.cos(ay/2),s2=Math.sin(ay/2), c3=Math.cos(gz/2),s3=Math.sin(gz/2);
+  return [ s1*c2*c3 + c1*s2*s3,  c1*s2*c3 - s1*c2*s3,  c1*c2*s3 - s1*s2*c3,  c1*c2*c3 + s1*s2*s3 ];
+}
+function qMul(a,b){ const[ax,ay,az,aw]=a,[bx,by,bz,bw]=b; return [
+  aw*bx+ax*bw+ay*bz-az*by,  aw*by-ax*bz+ay*bw+az*bx,  aw*bz+ax*by-ay*bx+az*bw,  aw*bw-ax*bx-ay*by-az*bz ]; }
+function qAxisAngle(x,y,z,ang){ const s=Math.sin(ang/2); return [x*s,y*s,z*s,Math.cos(ang/2)]; }
+function rotV(q,v){ const[x,y,z,w]=q,[vx,vy,vz]=v;
+  const tx=2*(y*vz-z*vy), ty=2*(z*vx-x*vz), tz=2*(x*vy-y*vx);
+  return [ vx + w*tx + (y*tz-z*ty),  vy + w*ty + (z*tx-x*tz),  vz + w*tz + (x*ty-y*tx) ]; }
+const Q1=[-Math.SQRT1_2,0,0,Math.SQRT1_2];   // -90° about X — "camera looks out the back of the phone"
+
+let alpha=0,beta=0,gamma=0,orient=0, have=false;
+function screenAngle(){ return ((screen.orientation&&screen.orientation.angle)||window.orientation||0); }
+
+// compute heading/pitch/roll (radians) from the current orientation, per the selected mapping
+function attitude(){
+  const m=document.getElementById('map').value;
+  let heading,pitch,roll;
+  if (m==='simple' || m==='simpleNeg'){
+    heading = alpha*D2R;
+    pitch   = (beta-90)*D2R * (m==='simpleNeg'?-1:1);
+    roll    = gamma*D2R;
+  } else {
+    let q=qFromEulerYXZ(beta*D2R, alpha*D2R, -gamma*D2R);
+    q=qMul(q,Q1);
+    if (m!=='norot') q=qMul(q, qAxisAngle(0,0,1, -orient*D2R));
+    const f=rotV(q,[0,0,-1]), up=rotV(q,[0,1,0]), r=rotV(q,[1,0,0]);
+    heading = Math.atan2(f[0], f[2]);
+    pitch   = Math.asin(Math.max(-1,Math.min(1, f[1])));
+    roll    = Math.atan2(r[1], up[1]);
+  }
+  return {heading,pitch,roll};
+}
+
+let headOff=0, invY=false, _lastTel=0, _telOK=false;
+// stream live state to the dev server (POST /telemetry → telemetry.json) so it can be polled while debugging
+function postTel(obj){ if(location.protocol==='file:') return; const now=performance.now(); if(now-_lastTel<180) return; _lastTel=now;
+  try{ fetch('/telemetry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)})
+    .then(r=>{_telOK=r.ok;}).catch(()=>{_telOK=false;}); }catch(_){ _telOK=false; } }
+document.getElementById('recenter').onclick=()=>{ headOff = attitude().heading; };
+document.getElementById('invY').onclick=(e)=>{ invY=!invY; e.target.textContent='Invert pitch: '+(invY?'on':'off'); };
+
+function norm(a){ while(a>Math.PI)a-=2*Math.PI; while(a<-Math.PI)a+=2*Math.PI; return a; }
+
+function draw(){
+  const cx=W/2, cy=H/2, pxPerRad=W/(Math.PI*0.9);   // ~ horizontal FOV ~162°? tune for feel
+  // No sensor data yet → don't draw the (misleading all-green) default attitude; show a clear status instead.
+  if (!have){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#0a1828'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#3a6e8c'; ctx.fillRect(0,cy-1,W,2);   // a neutral, centred horizon so it reads as "ready, waiting"
+    ctx.fillStyle='#ffd47a'; ctx.font='600 18px ui-sans-serif,system-ui'; ctx.textAlign='center';
+    ctx.fillText('Waiting for motion sensor…', cx, cy-40);
+    ctx.fillStyle='#9fc0d6'; ctx.font='13px ui-sans-serif,system-ui';
+    ctx.fillText('No deviceorientation events are arriving.', cx, cy-14);
+    ctx.fillText('Google Drive / file preview blocks the sensor.', cx, cy+34);
+    ctx.fillText('Open this from the SAME http://…:8080 address', cx, cy+54);
+    ctx.fillText('you use for the sim (a secure context).', cx, cy+74);
+    postTel({ have:false, events:evCount, secure:window.isSecureContext, screen:screenAngle() });
+    requestAnimationFrame(draw); return;
+  }
+  const {heading,pitch,roll}=attitude();
+  const hd=norm(heading-headOff);
+  const pt=(invY?-pitch:pitch);
+  ctx.clearRect(0,0,W,H);
+  // draw the world panorama as a wide horizon band, panned by heading, pitched, rolled
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.rotate(-roll);                 // roll the whole scene opposite the phone so the horizon stays level w/ the world
+  ctx.translate(0, pt*pxPerRad);     // pitch: looking up moves the horizon down
+  // sky + ground
+  const big=Math.max(W,H)*2;
+  ctx.fillStyle='#1b3a5c'; ctx.fillRect(-big,-big,big*2,big);            // sky (above horizon)
+  ctx.fillStyle='#243018'; ctx.fillRect(-big,0,big*2,big);              // ground (below)
+  ctx.fillStyle='#3a6e8c'; ctx.fillRect(-big,-2,big*2,4);              // horizon line
+  // heading markers every 30°, labelled cardinals — x position = (markerHeading - hd)
+  ctx.font='13px ui-monospace,monospace'; ctx.textAlign='center';
+  for(let deg=0; deg<360; deg+=30){
+    const mh=deg*D2R; let dx=norm(mh-hd)*pxPerRad;
+    if (Math.abs(dx)>W) continue;
+    ctx.strokeStyle='#5b86a4'; ctx.beginPath(); ctx.moveTo(dx,-18); ctx.lineTo(dx,18); ctx.stroke();
+    const card={0:'N',90:'E',180:'S',270:'W'}[deg];
+    ctx.fillStyle=card?'#ffd47a':'#9fc0d6';
+    ctx.fillText(card||deg+'°', dx, -26);
+  }
+  // pitch ladder
+  ctx.textAlign='left'; ctx.strokeStyle='#46708c';
+  for(let p=-60;p<=60;p+=15){ if(!p) continue; const y=-p*D2R*pxPerRad;
+    ctx.beginPath(); ctx.moveTo(-40,y); ctx.lineTo(40,y); ctx.stroke();
+    ctx.fillStyle='#9fc0d6'; ctx.fillText(p+'°', 46, y+4); }
+  ctx.restore();
+  // fixed crosshair (where the phone points)
+  ctx.strokeStyle='#ffffffcc'; ctx.beginPath();
+  ctx.moveTo(cx-14,cy); ctx.lineTo(cx+14,cy); ctx.moveTo(cx,cy-14); ctx.lineTo(cx,cy+14); ctx.stroke();
+
+  document.getElementById('read').textContent =
+    `α ${alpha.toFixed(0).padStart(4)}  β ${beta.toFixed(0).padStart(4)}  γ ${gamma.toFixed(0).padStart(4)}  screen ${orient}°\n`+
+    `heading ${(hd/D2R).toFixed(0).padStart(4)}°  pitch ${(pt/D2R).toFixed(0).padStart(4)}°  roll ${(roll/D2R).toFixed(0).padStart(4)}°\n`+
+    `events ${evCount}   secure ${window.isSecureContext}   tel ${_telOK?'ok':'—'}`;
+  postTel({ have:true, map:document.getElementById('map').value, a:+alpha.toFixed(1), b:+beta.toFixed(1), g:+gamma.toFixed(1),
+    screen:orient, heading:+(hd/D2R).toFixed(1), pitch:+(pt/D2R).toFixed(1), roll:+(roll/D2R).toFixed(1), events:evCount, invY });
+  requestAnimationFrame(draw);
+}
+
+let evCount=0;
+function onOri(e){ evCount++; if(e.alpha==null&&e.beta==null&&e.gamma==null) return;
+  alpha=e.alpha||0; beta=e.beta||0; gamma=e.gamma||0; orient=screenAngle(); have=true; }
+
+document.getElementById('go').onclick=async ()=>{
+  try{
+    if (typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+      const r=await DeviceOrientationEvent.requestPermission(); if(r!=='granted'){ alert('Motion permission denied'); return; }
+    }
+  }catch(_){}
+  window.addEventListener('deviceorientation', onOri);
+  document.getElementById('start').style.display='none';
+  requestAnimationFrame(draw);
+};
+</script>
+</body>
+</html>

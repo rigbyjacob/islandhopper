@@ -8094,8 +8094,10 @@ function drawCompass(){
 <script>
 (function(){
   var host = location.hostname;
-  var local = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '[::1]' || host === '::1';
-  if (!local) { console.log('[live-reload] off (not localhost: "' + host + '")'); return; }
+  var local = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '[::1]' || host === '::1'
+    || /^(10|127)\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);   // also LAN IPs → live-reload works on the phone over Wi-Fi
+  if (location.protocol==='file:') return;   // only file:// is truly excluded
+  if (!local) { console.log('[live-reload] off (not localhost/LAN: "' + host + '")'); return; }
   console.log('[live-reload] watching reload.txt every 1s');
   var last = null;
   async function poll(){
