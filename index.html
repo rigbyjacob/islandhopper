@@ -6504,7 +6504,7 @@ const REGION_META = {
   exe:       { tag:'Exe & South Devon',    blurb:'Red sandstone cliffs & Lundy' },
   apo:       { tag:'Apo, Dauin & Siquijor',blurb:'Volcanic isles & clear reefs' },
 };
-let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
+let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null, globeSun=null, globeMoon=null;
 let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[], _comboLenses=[], _comboSections=[], _seaLenses=[];
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
@@ -6667,15 +6667,22 @@ function buildRegionPatch(r){
     geo.setIndex(idx); geo.computeVertexNormals();
     grp.add(new THREE.Mesh(geo, landMat));
   }
-  grp.traverse(o=>{ if(o.isMesh) o.userData.regionId=r.id; }); grp.userData.regionId=r.id;
+  grp.traverse(o=>{ if(o.isMesh){ o.userData.regionId=r.id; o.castShadow=true; o.receiveShadow=true; } }); grp.userData.regionId=r.id;
   return grp;
 }
 function buildGlobe(){
   globeScene=new THREE.Scene();
   globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,_globeZ);
-  globeScene.add(new THREE.HemisphereLight(0xf8fbff, 0x3c4757, 1.5));    // strong bright fill so EVERY diorama reads vivid (not muddy), wherever it sits on the planet
-  const dir=new THREE.DirectionalLight(0xfff4e2, 1.9); dir.position.set(2.5,2,3.5); globeScene.add(dir);    // warm sunny key light models the relief
-  const fill=new THREE.DirectionalLight(0xe0ecff, 0.9); fill.position.set(-2.5,-1.2,-2.0); globeScene.add(fill);   // cool back-fill lifts the shadow-side dioramas so none look dull
+  globeScene.add(new THREE.HemisphereLight(0xbcd0e6, 0x26303f, 0.8));    // sky fill — keeps the night side readable (moon adds more), while day/night still reads
+  // THE SUN — a real shadow-casting key light placed at the current UTC subsolar point (see _placeGlobeSun). It lives in
+  // globeScene (NOT globeSpin), so it's fixed in world space and the day/night terminator sweeps as you spin the globe.
+  globeSun=new THREE.DirectionalLight(0xfff4e2, 2.5); globeSun.castShadow=true;
+  globeSun.shadow.mapSize.set(2048,2048);
+  { const sc=globeSun.shadow.camera; sc.left=-1.35; sc.right=1.35; sc.top=1.35; sc.bottom=-1.35; sc.near=0.1; sc.far=12; sc.updateProjectionMatrix(); }
+  globeSun.shadow.bias=-0.0007; globeSun.shadow.normalBias=0.015;
+  globeScene.add(globeSun); globeScene.add(globeSun.target);
+  globeMoon=new THREE.DirectionalLight(0xb9c6ff, 1.1);                   // cool moonlight on the night side (anti-solar) — bright enough to read the dark-side dioramas
+  globeScene.add(globeMoon); globeScene.add(globeMoon.target);
   const sg=new THREE.BufferGeometry(), N=700, sp=new Float32Array(N*3);
   for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(40+Math.random()*25); sp.set([v.x,v.y,v.z], i*3); }
   sg.setAttribute('position', new THREE.BufferAttribute(sp,3));
@@ -6684,6 +6691,7 @@ function buildGlobe(){
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
   if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03; }   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
   const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R,360,180), new THREE.MeshStandardMaterial(oceanMatOpts));
+  ocean.castShadow=true; ocean.receiveShadow=true;   // displacement relief self-shadows + receives diorama shadows
   globeSpin.add(ocean);
   if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map → grayscale planet
       const cv=document.createElement('canvas'); cv.width=img.width; cv.height=img.height;
@@ -6777,7 +6785,7 @@ function _emitSectionRegion(grp, id, geo, cx, cy, half, labelDir, R, ox, oz, cN,
   const r=REGIONS[id], art=REGION_ART_COL[r?.id]||0x86d8ff;
   const tex=_regionThumb(r);
   const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map:tex }));
-  m.rotation.x=-Math.PI/2; m.position.set(ox,0.017,oz); m.userData.regionId=id; grp.add(m); _globePicks.push(m);
+  m.rotation.x=-Math.PI/2; m.position.set(ox,0.017,oz); m.userData.regionId=id; m.castShadow=true; grp.add(m); _globePicks.push(m);
   _comboLenses.push({ tex, cN });   // the section is a "lens" onto its region map; the map scrolls as the arcball turns
   const me=REGION_META[id]||{ tag:(r&&r.name)||id };
   const lab=_globeLabel(me.tag, art); lab.scale.multiplyScalar(lblS);
@@ -6844,7 +6852,7 @@ function _buildClusterDioramas(){
       const grp=new THREE.Group(); _placeOnSphereV(grp, cN, GLOBE_R-0.006); globeSpin.add(grp);
       const base=new THREE.Mesh(new THREE.CylinderGeometry(PR*1.06, PR*0.97, 0.018, 80),   // THIN plinth → seats flush like the single dioramas
         new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
-      base.position.y=0.006; grp.add(base);
+      base.position.y=0.006; base.receiveShadow=true; grp.add(base);
       _emitCluster(grp, g.map(m=>m.id), 0, 0, PR, cN, 0);                  // pile ≤5 → 2=yin-yang, 3-5=equal wedges
     }
   }
@@ -6976,6 +6984,7 @@ function updateGlobe(dt){
   // singleton dioramas: scroll the sea ripple with the arcball too (shake the globe → shake the water)
   for (const L of _seaLenses){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
     L.off.value.set(wn.x*0.28, wn.y*0.28); }
+  _updateGlobeSun();   // sun/moon rigid with the Earth → track the arcball spin
   // FOCUS HIGHLIGHT for combined sections: the focused region's section lifts up over the others + glows
   for (const S of _comboSections){ const on=(S.id===_globeFocus), lift=on?0.05:0;
     S.mesh.position.y += ((S.baseY + lift) - S.mesh.position.y)*ease;
@@ -7066,10 +7075,31 @@ function buildWorldMap(){
   window.addEventListener('keydown', _gKey, true);    // capture phase so the sailing handler never sees globe keys
   buildGlobe();
 }
+// the subsolar point (where the sun is directly overhead) for the current UTC date/time, as a unit dir in Earth-LOCAL frame
+function _subsolarDir(){
+  const now=new Date();
+  const doy=(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()) - Date.UTC(now.getUTCFullYear(),0,1))/86400000;
+  const decl=-23.44*Math.cos((2*Math.PI/365)*(doy+10));                   // solar declination (°)
+  const utc=now.getUTCHours()+now.getUTCMinutes()/60+now.getUTCSeconds()/3600;
+  const subLon=-(utc-12)*15;                                             // sun over Greenwich at 12:00 UTC, west 15°/hr
+  return latLonToVec(decl, subLon, 1);
+}
+// RIGID-BODY lighting: the sun/moon are fixed to the Earth's geography at the current UTC subsolar point and rotate
+// WITH the globe (tracked every frame). So each place's day/night is physically correct & consistent; spinning the
+// arcball just changes your viewing angle (rotate to the lit side to see sun + shadows). Moon = anti-solar fill.
+let _subSolarLocal=new THREE.Vector3(0,0,1);
+function _placeGlobeSun(){ _subSolarLocal.copy(_subsolarDir()); _updateGlobeSun(); }   // sample UTC once on open
+function _updateGlobeSun(){
+  if (!globeSun || !globeSpin) return;
+  const w=_subSolarLocal.clone().applyQuaternion(globeSpin.quaternion);
+  globeSun.position.copy(w).multiplyScalar(5); globeSun.target.position.set(0,0,0); globeSun.target.updateMatrixWorld();
+  if (globeMoon){ globeMoon.position.copy(w).multiplyScalar(-5); globeMoon.target.position.set(0,0,0); globeMoon.target.updateMatrixWorld(); }
+}
 function openWorldMap(){ const ov=document.getElementById('worldmap'); if(!ov) return; ov.classList.remove('hidden');
   worldMapOpen=true; _prevCtrlEnabled=controls?controls.enabled:false; if(controls) controls.enabled=false;
   _diveZoom=null; _globeVel.x=_globeVel.y=0;
   { const _n=latLonToVec(REGION.lat0||0, REGION.lon0||0, 1); globeSpin.quaternion.copy(_faceQuat(_n)); }   // centre the current region, north up — consistent every open (matches where idle-level settles → no post-arrival drift)
+  _placeGlobeSun();   // sun at the real UTC subsolar point, world-fixed for this open
   if (globeCam){ globeCam.position.set(0,0,1.05); globeCam.lookAt(0,0,0); }   // start zoomed IN, under the region colour…
   if (typeof _diveFade==='function') _diveFade(1, REGION.id);
   _globeRise={ t:0, dur:1.05, id:REGION.id };                            // …then get sucked back up to the world view (reverse dive)
