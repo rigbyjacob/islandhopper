@@ -3522,6 +3522,7 @@ const AUDIO_DEFAULTS = {
 };
 function _deepMerge(a,b){ for(const k in b){ if(b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])) a[k]=_deepMerge(a[k]||{},b[k]); else a[k]=b[k]; } return a; }
 let AUDIO_CFG = (()=>{ try{ const j=JSON.parse(localStorage.getItem('islandHopper.audio.v1')||'null'); const base=JSON.parse(JSON.stringify(AUDIO_DEFAULTS)); return j? _deepMerge(base, j) : base; }catch(_){ return JSON.parse(JSON.stringify(AUDIO_DEFAULTS)); } })();
+const EXTRA_SFX = false;   // ← plane engine / UFO beam / storm rain — OFF until tuned; set true to re-enable (soundboard tunes them regardless)
 let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null,
     _fireVoices=[], _fireIdx=0, _thunderVoices=[], _thunderIdx=0,
     _planeSrc=null, _ufoSrc=null, _rainSrc=null;
@@ -3557,7 +3558,7 @@ async function _initAudio(){
   const _atten=(pa,c)=>{ pa.setDistanceModel(c.model||'exponential'); pa.setRefDistance(c.ref||50); pa.setMaxDistance(c.max||1500); pa.setRolloffFactor(c.rolloff!=null?c.rolloff:1); };
   const _posSrc=(c)=>{ const anchor=new THREE.Object3D(); scene.add(anchor); const pa=new THREE.PositionalAudio(audioListener); _atten(pa,c); anchor.add(pa); return { anchor, pa }; };
   // --- PLANE engine — POSITIONAL, continuous drone at the plane (level rises a touch with airspeed) ---
-  { const c=AUDIO_CFG.plane, s=_posSrc(c);
+  if (EXTRA_SFX){ const c=AUDIO_CFG.plane, s=_posSrc(c);
     const eg=new T.Gain(0.0).connect(s.pa.panner);
     const elp=new T.Filter(430,'lowpass').connect(eg);
     const o1=new T.Oscillator(c.freq||72,'sawtooth').connect(elp); o1.start();
@@ -3566,7 +3567,7 @@ async function _initAudio(){
     _planeSrc={ ...s, gain:eg };
   }
   // --- UFO beam — POSITIONAL, sharply attenuated; ONLY audible while the scanner/tractor beam is on (gateBeam) ---
-  { const c=AUDIO_CFG.ufo, s=_posSrc(c);
+  if (EXTRA_SFX){ const c=AUDIO_CFG.ufo, s=_posSrc(c);
     const ug=new T.Gain(0.0).connect(s.pa.panner);
     const ulp=new T.Filter(460,'lowpass').connect(ug);
     const tg=new T.Gain(1).connect(ulp);
@@ -3577,7 +3578,7 @@ async function _initAudio(){
     _ufoSrc={ ...s, gain:ug };
   }
   // --- RAIN — POSITIONAL hiss at the stormiest cloud; ONLY when the storm effect is on (gateStorm) ---
-  { const c=AUDIO_CFG.rain, s=_posSrc(c);
+  if (EXTRA_SFX){ const c=AUDIO_CFG.rain, s=_posSrc(c);
     const rg=new T.Gain(0.0).connect(s.pa.panner);
     const rhp=new T.Filter({ type:'highpass', frequency:550 }).connect(rg);
     const rlp=new T.Filter(4800,'lowpass').connect(rhp);
