@@ -3501,16 +3501,26 @@ function buildTownMotifs(){
 }
 
 // ---- fireworks: the current target island celebrates the boat's visit (Sprite particle pool) ----
-// ---- AUDIO (very basic): a Tone.js tractor-beam hum that swells as you near the UFO. Tone is loaded lazily
-// from a CDN on the first user gesture (audio contexts require a gesture to start). ----
-let _audioInit=false, _ufoProxGain=null, _ufoBeamBoost=0;
+// ---- AUDIO (basic, Tone.js, loaded lazily from CDN on the first gesture). A gentle wind bed plays as the default
+// ambient; a creepy tractor-beam hum swells only near the UFO. All gated by the "Sounds" toggle (P.music). ----
+let _audioInit=false, _audioMaster=null, _ufoProxGain=null;
 async function _initAudio(){
   if (_audioInit) return; _audioInit=true;
   let T; try{ T = await import('https://cdn.jsdelivr.net/npm/tone@14.8.49/+esm'); }
   catch(e){ console.warn('[audio] Tone load failed', e); return; }
   try{ await T.start(); }catch(_){}
-  const out=new T.Gain(0); out.toDestination(); _ufoProxGain=out;          // proximity-driven master gain
-  const filt=new T.Filter(440,'lowpass').connect(out);
+  _audioMaster = new T.Gain(P.music===false ? 0 : 1).toDestination();      // master gate = the "Sounds" toggle
+  // --- gentle WIND ambient (the default, pleasant test bed): brown noise through a lowpass + a slowly swept
+  //     bandpass for gusts, with the level breathing in and out so it never sits flat ---
+  const windGain = new T.Gain(0.0).connect(_audioMaster);
+  const windLP   = new T.Filter(640, 'lowpass').connect(windGain);
+  const windBP   = new T.Filter({ type:'bandpass', frequency:500, Q:0.7 }).connect(windLP);
+  const windNoise= new T.Noise('brown').connect(windBP); windNoise.start();
+  new T.LFO({ frequency:0.08, min:300, max:880 }).connect(windBP.frequency).start();   // slow gusts sweep the band
+  new T.LFO({ frequency:0.05, min:0.05, max:0.13 }).connect(windGain.gain).start();    // breathe the level in/out
+  // --- UFO tractor beam (proximity-driven, kept) ---
+  _ufoProxGain = new T.Gain(0).connect(_audioMaster);
+  const filt=new T.Filter(440,'lowpass').connect(_ufoProxGain);
   const tremGain=new T.Gain(1).connect(filt);                              // tremolo pulses the "beam"
   const osc1=new T.Oscillator(56,'sawtooth').connect(tremGain); osc1.start();
   const osc2=new T.Oscillator(84,'sine').connect(tremGain);     osc2.start();
@@ -3627,7 +3637,11 @@ function _updateMusic(dt){
   else a.volume=_MUSIC_VOL;
   if (t >= d-0.05){ try{ a.pause(); }catch(_){} _musicEl=null; }   // done — plays only once
 }
-function setMusic(on){ P.music=!!on; if(!on) stopIntroMusic(); else { _musicPlayed=false; _musicStableT=0; playIntroMusic(); } saveSettings(); }   // toggle: off → silence; on → start now (the click itself satisfies autoplay)
+// "Sounds" master toggle — gates intro music AND the Tone.js audio (wind bed + UFO beam) via the master gain.
+function setMusic(on){ P.music=!!on;
+  if (on){ _initAudio(); }                                                 // the toggle click is a valid gesture → start audio
+  if (_audioMaster){ try{ _audioMaster.gain.rampTo(on?1:0, 0.3); }catch(_){} }
+  if(!on) stopIntroMusic(); else { _musicPlayed=false; _musicStableT=0; playIntroMusic(); } saveSettings(); }
 // if autoplay was blocked, kick the track off on the first user gesture
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev, ()=>{ if(_musicPending && P.music && !_musicPlayed) playIntroMusic(); }));
 
@@ -6072,7 +6086,7 @@ function buildPanel() {
   ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
   addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
   addToggle(s, 'Route path (wedge markers)', P, 'showPath');   // the ship/sub wedge route — independent of the debug view below
-  addToggle(s, 'Intro music', P, 'music', setMusic);
+  addToggle(s, 'Sounds', P, 'music', setMusic);
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
 
   // Fleet — view actions (moved from the old View section) + independent vehicles + Brady-Bunch grid
