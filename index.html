@@ -1860,8 +1860,8 @@ async function init() {
     else if (cineMode) updateCineCam(dt);
     else if (flyMode && !_descent) updateFlyCam(dt);   // the descent drives flyCam directly (position + quaternion slerp); don't let the yaw/pitch fly cam overwrite it
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
-    updateMoonMesh();   // pin the textured moon to its sky direction, camera-relative
-    _updateUfoAudio();  // tractor-beam hum tracks proximity to the UFO
+    updateMoonMesh();        // pin the textured moon to its sky direction, camera-relative
+    _updateAudioListener();  // 3D audio: listener follows the active camera, water anchored to the ship
     _updateMusic(dt);   // intro music: play once the follow cam settles, fade out before the end
     uCurveK.value = P.curveWorld ? 1/(2*P.curveRadius) : 0;   // "tiny planet" curvature strength (1/2R), 0 = flat
     { const _cc=(typeof activeCam!=='undefined'&&activeCam)?activeCam:camera; if(_cc) uCurveCenter.value.copy(_cc.position); }   // curve centre = the view camera (NOT the per-pass cameraPosition) so the shadow pass curves the terrain the same way
@@ -3501,52 +3501,65 @@ function buildTownMotifs(){
 }
 
 // ---- fireworks: the current target island celebrates the boat's visit (Sprite particle pool) ----
-// ---- AUDIO (basic, Tone.js, loaded lazily from CDN on the first gesture). Default ambient = gentle wind + water
-// lapping at the hull. The creepy UFO tractor-beam hum is built but OFF by default (flip UFO_AUDIO to re-enable).
-// All gated by the "Sounds" toggle (P.music). ----
-const UFO_AUDIO = false;                                                  // ← set true to bring back the proximity tractor-beam sound
-let _audioInit=false, _audioMaster=null, _ufoProxGain=null;
+// ---- AUDIO (Tone.js synths through THREE.PositionalAudio for true 3D sound; Tone shares THREE's AudioContext).
+// The listener follows the active camera. WIND is ambient (on the camera); WATER lapping is positional at the ship;
+// FIREWORK pops are positional one-shots at each island (the positional-audio test). All gated by "Sounds" (P.music). ----
+let _audioInit=false, audioListener=null, _waterAnchor=null, _fireVoices=[], _fireIdx=0;
 async function _initAudio(){
   if (_audioInit) return; _audioInit=true;
   let T; try{ T = await import('https://cdn.jsdelivr.net/npm/tone@14.8.49/+esm'); }
   catch(e){ console.warn('[audio] Tone load failed', e); return; }
+  const ctx = THREE.AudioContext.getContext();                            // ONE shared Web Audio context for three + Tone
+  try{ T.setContext(ctx); }catch(e){ console.warn('[audio] setContext', e); }
   try{ await T.start(); }catch(_){}
-  _audioMaster = new T.Gain(P.music===false ? 0 : 1).toDestination();      // master gate = the "Sounds" toggle
-  // --- gentle WIND ambient: brown noise through a lowpass + a slowly swept bandpass for gusts, breathing in/out ---
-  const windGain = new T.Gain(0.0).connect(_audioMaster);
+  audioListener = new THREE.AudioListener(); scene.add(audioListener);    // listener = the active camera (moved each frame)
+  audioListener.setMasterVolume(P.music===false ? 0 : 1);                 // "Sounds" master gate
+  const LIN = audioListener.getInput();
+  // --- WIND — ambient, tied to the camera (non-positional → straight to the listener input) ---
+  const windGain = new T.Gain(0.0);
   const windLP   = new T.Filter(640, 'lowpass').connect(windGain);
   const windBP   = new T.Filter({ type:'bandpass', frequency:500, Q:0.7 }).connect(windLP);
-  const windNoise= new T.Noise('brown').connect(windBP); windNoise.start();
+  new T.Noise('brown').connect(windBP).start();
   new T.LFO({ frequency:0.08, min:300, max:880 }).connect(windBP.frequency).start();   // slow gusts sweep the band
   new T.LFO({ frequency:0.05, min:0.05, max:0.13 }).connect(windGain.gain).start();    // breathe the level in/out
-  // --- WATER lapping at the hull: pink noise through a watery bandpass, with the level swelling rhythmically like
-  //     small waves slapping the side (two offset LFOs → irregular, not metronomic) ---
-  const watGain = new T.Gain(0.0).connect(_audioMaster);
+  windGain.connect(LIN);
+  // --- WATER lapping — POSITIONAL at the ship (anchor follows boat3 each frame) ---
+  _waterAnchor = new THREE.Object3D(); scene.add(_waterAnchor);
+  const waterPA = new THREE.PositionalAudio(audioListener);
+  waterPA.setRefDistance(45); waterPA.setMaxDistance(1500); waterPA.setRolloffFactor(0.9);
+  _waterAnchor.add(waterPA);
+  const watGain = new T.Gain(0.0);
   const watBP   = new T.Filter({ type:'bandpass', frequency:900, Q:0.55 }).connect(watGain);
-  const watNoise= new T.Noise('pink').connect(watBP); watNoise.start();
+  new T.Noise('pink').connect(watBP).start();
   new T.LFO({ frequency:0.22, min:760, max:1180 }).connect(watBP.frequency).start();    // gentle filter sway
-  new T.LFO({ frequency:0.40, min:0.0,  max:0.085 }).connect(watGain.gain).start();     // the lap (a wash every ~2.5s)
-  new T.LFO({ frequency:0.13, min:0.0,  max:0.045 }).connect(watGain.gain).start();     // a slower swell layered on top
-  // --- UFO tractor beam: built but silent by default (UFO_AUDIO flag) ---
-  if (UFO_AUDIO){
-    _ufoProxGain = new T.Gain(0).connect(_audioMaster);
-    const filt=new T.Filter(440,'lowpass').connect(_ufoProxGain);
-    const tremGain=new T.Gain(1).connect(filt);                            // tremolo pulses the "beam"
-    const osc1=new T.Oscillator(56,'sawtooth').connect(tremGain); osc1.start();
-    const osc2=new T.Oscillator(84,'sine').connect(tremGain);     osc2.start();
-    new T.LFO({frequency:5.5, min:50, max:64}).connect(osc1.frequency).start();   // warble (vibrato)
-    new T.LFO({frequency:9.0, min:0.35, max:1.0}).connect(tremGain.gain).start(); // throb
+  new T.LFO({ frequency:0.40, min:0.0,  max:0.6 }).connect(watGain.gain).start();       // the lap (a wash every ~2.5s)
+  new T.LFO({ frequency:0.13, min:0.0,  max:0.3 }).connect(watGain.gain).start();       // a slower swell layered on top
+  watGain.connect(waterPA.panner);
+  // --- FIREWORK pops — POSITIONAL one-shots, a round-robin pool of voices placed at each burst ---
+  for (let i=0;i<5;i++){
+    const anchor=new THREE.Object3D(); scene.add(anchor);
+    const pa=new THREE.PositionalAudio(audioListener);
+    pa.setRefDistance(70); pa.setMaxDistance(3000); pa.setRolloffFactor(0.8); anchor.add(pa);
+    const vGain=new T.Gain(1.0); vGain.connect(pa.panner);
+    const boom=new T.MembraneSynth({ pitchDecay:0.05, octaves:4, envelope:{ attack:0.001, decay:0.30, sustain:0, release:0.2 } }).connect(vGain);
+    const crackBP=new T.Filter({ type:'bandpass', frequency:2200, Q:0.8 }).connect(vGain);
+    const crack=new T.NoiseSynth({ noise:{ type:'white' }, envelope:{ attack:0.002, decay:0.22, sustain:0 } }).connect(crackBP);
+    _fireVoices.push({ anchor, boom, crack });
   }
 }
-function _updateUfoAudio(){
-  if (!UFO_AUDIO || !_ufoProxGain) return;
-  const ufo = (typeof FLEET!=='undefined') ? FLEET.find(v=>v.id==='ufo') : null;
-  if (!ufo || !ufo.pos || !activeCam){ _ufoProxGain.gain.rampTo(0, 0.25); return; }
-  const dx=activeCam.position.x-ufo.pos.x, dy=activeCam.position.y-ufo.pos.y, dz=activeCam.position.z-ufo.pos.z;
-  const d=Math.hypot(dx,dy,dz), near=240, far=900;
-  let g=clampJS(1-(d-near)/(far-near), 0, 1); g*=g;                        // ease-in falloff
-  const beam = (typeof ufoBeam!=='undefined' && ufoBeam && ufoBeam.material) ? clampJS(ufoBeam.material.opacity*2.0,0,1) : 0;
-  _ufoProxGain.gain.rampTo((0.40 + 0.25*beam) * g, 0.15);                  // louder while the beam fires
+// positional firework burst sound at a world point (round-robin through the voice pool)
+function _playFireworkAt(x,y,z){
+  if (!_fireVoices.length) return;
+  const v=_fireVoices[_fireIdx++ % _fireVoices.length];
+  v.anchor.position.set(x,y,z); v.anchor.updateMatrixWorld();
+  try{ v.boom.triggerAttackRelease('C2','8n'); v.crack.triggerAttackRelease('8n','+0.03'); }catch(_){}
+}
+// keep the listener glued to the active camera and the water anchored to the ship
+function _updateAudioListener(){
+  if (!audioListener || !activeCam) return;
+  activeCam.getWorldPosition(audioListener.position);
+  activeCam.getWorldQuaternion(audioListener.quaternion);
+  if (_waterAnchor) _waterAnchor.position.set(boat3.x, 1.0, boat3.z);
 }
 const FW_MAX = 300; let fwSprites = [], fwState = [], fwTimer = 0;
 function buildFireworks(){
@@ -3559,6 +3572,7 @@ function buildFireworks(){
   }
 }
 function spawnBurst(x,y,z){
+  _playFireworkAt(x,y,z);                             // positional firework pop at the burst point
   const ncol = 2 + (Math.random()*2|0), cols = [];   // 2–3 colours per shot
   for (let c=0;c<ncol;c++) cols.push(new THREE.Color().setHSL(Math.random(), 1.0, 0.5+Math.random()*0.22));
   const n = 32 + (Math.random()*30|0); let spawned=0;
@@ -3651,7 +3665,7 @@ function _updateMusic(dt){
 // "Sounds" master toggle — gates intro music AND the Tone.js audio (wind bed + UFO beam) via the master gain.
 function setMusic(on){ P.music=!!on;
   if (on){ _initAudio(); }                                                 // the toggle click is a valid gesture → start audio
-  if (_audioMaster){ try{ _audioMaster.gain.rampTo(on?1:0, 0.3); }catch(_){} }
+  if (audioListener){ try{ audioListener.setMasterVolume(on?1:0); }catch(_){} }
   if(!on) stopIntroMusic(); else { _musicPlayed=false; _musicStableT=0; playIntroMusic(); } saveSettings(); }
 // if autoplay was blocked, kick the track off on the first user gesture
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev, ()=>{ if(_musicPending && P.music && !_musicPlayed) playIntroMusic(); }));
