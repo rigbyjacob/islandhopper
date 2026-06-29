@@ -5833,7 +5833,7 @@ function updateFlyCam(dt){
     p.x+=fx*ts; p.y+=fy*ts; p.z+=fz*ts; }
   p.y=Math.max(p.y, seabedHeight(p.x,p.z)+2.5);                      // can dive UNDER the water now, but not through the seabed
   flyCam.position.copy(p);
-  if (!gyro) flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);                  // gyro already set the camera quaternion from the phone
+  flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
 }
 
 // ---- DEV camera hook: jump into flight mode and aim the camera anywhere (drive from the browser console). ----
