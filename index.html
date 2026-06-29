@@ -3648,12 +3648,15 @@ function updateBoatShadow(day){
 // Intro music — a random embedded track plays once the follow cam settles, then
 // fades out a few seconds before its end. Muteable (P.music), persisted, scenario-aware.
 // ============================================================================
-let _musicEl=null, _musicPlayed=false, _musicPending=false, _musicStableT=0;
+let _musicEl=null, _musicPlayed=false, _musicPending=false, _musicStableT=0, _lastTrack=-1;
 const _MUSIC_VOL=0.55, _MUSIC_FADE_IN=2.0, _MUSIC_FADE_OUT=3.5;
 function playIntroMusic(){
   if (!P.music || !Array.isArray(window.MUSIC) || !window.MUSIC.length) return;
   if (_musicEl){ try{ _musicEl.pause(); }catch(_){} _musicEl=null; }
-  const a=new Audio(window.MUSIC[(Math.random()*window.MUSIC.length)|0]); a.volume=0; _musicEl=a;
+  let idx=(Math.random()*window.MUSIC.length)|0;                          // no immediate repeats — pick a different track than last time
+  if (window.MUSIC.length>1){ while(idx===_lastTrack) idx=(Math.random()*window.MUSIC.length)|0; }
+  _lastTrack=idx;
+  const a=new Audio(window.MUSIC[idx]); a.volume=0; _musicEl=a;
   const pr=a.play();
   if (pr && pr.then){ pr.then(()=>{ _musicPlayed=true; _musicPending=false; }).catch(()=>{ _musicPending=true; _musicEl=null; }); }   // autoplay blocked → retry on first interaction
   else { _musicPlayed=true; }
