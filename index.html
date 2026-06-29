@@ -4701,8 +4701,12 @@ function buildOcean() {
 
     // ---- subsurface scattering: sunlight transmitted THROUGH backlit crests → teal-green glow (wrap + thickness) ----
     // strongest when looking toward the sun (waves lit from behind) and on the tallest crests (most "thickness").
-    const sssAmt = pow(clamp(dot(viewDir, sunDir), 0.0, 1.0), 2.5).mul(smoothstep(-0.2, 1.7, wh));
-    col.addAssign(vec3(0.05,0.42,0.34).mul(sssAmt).mul(uSunInt).mul(0.5));
+    // backlit = looking TOWARD the sun (so light comes through the wave from behind): dot(viewDir, -sunDir).
+    // Strongest at low sun (grazing → more thickness traversed) and on the tallest crests.
+    const sssBack = pow(clamp(dot(viewDir, sunDir.negate()), 0.0, 1.0), 2.2);
+    const sssLow  = float(0.45).add(oneMinus(clamp(uSunDir.y, 0.0, 1.0)).mul(0.55));   // grazing sun → up to 1.0
+    const sssAmt  = sssBack.mul(smoothstep(-0.2, 1.7, wh)).mul(sssLow);
+    col.addAssign(vec3(0.06,0.46,0.36).mul(sssAmt).mul(uSunInt).mul(1.05));
 
     // ukiyo-e is FLAT painted colour — under Hokusai suppress the glossy reflection so the woodblock palette reads.
     const hkFlat = oneMinus(uHokusai.mul(0.9));
@@ -4712,12 +4716,12 @@ function buildOcean() {
     // rising to ~1 at grazing angles (bright horizon sheen). This replaces the old flat sheen + fake sun lobes.
     const cosV = max(dot(n, viewDir), 0.0);
     const F0 = float(0.02);
-    const fres = F0.add(oneMinus(F0).mul(pow(oneMinus(cosV), 5.0)));
+    const fres = F0.add(float(0.62).sub(F0).mul(pow(oneMinus(cosV), 5.0)));   // cap grazing reflectance ~0.62 (full mirror read plasticky)
     const refl = reflect(viewDir.negate(), n);
     const rSky = mix(uHorizon, uZenith, smoothstep(-0.06, 0.55, refl.y.add(uHorizonDrop))).toVar();
     const sunV = normalize(vec3(uSunDir.x, uSunDir.y.sub(uHorizonDrop), uSunDir.z));
     const rsd = max(dot(refl, sunV), 0.0);
-    rSky.addAssign(uSunCol.mul(pow(rsd, 12.0).mul(0.55).add(pow(rsd, 340.0).mul(7.0))).mul(uSunInt));   // reflected sun: soft glow + sharp glint
+    rSky.addAssign(uSunCol.mul(pow(rsd, 12.0).mul(0.40).add(pow(rsd, 340.0).mul(3.2))).mul(uSunInt));   // reflected sun: softer glow + dimmer glint (less glossy)
     col.assign(mix(col, rSky, clamp(fres, 0.0, 1.0).mul(hkFlat)));
     // Van Gogh SEA: mirror the swirling Starry-Night sky along the RIPPLED reflection vector (refl carries the wave
     // normal, so the swirls/stars/moon wobble on the water) — the painting's village pond. Default; dev.vgSea(0) → impasto.
