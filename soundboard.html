@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Island Hopper — Sound Board</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; padding:22px; background:#0a1320; color:#dfeefb; font:14px ui-sans-serif, system-ui; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { opacity:.7; margin:0 0 18px; font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(330px,1fr)); gap:14px; }
+  .card { background:rgba(20,34,52,.7); border:1px solid rgba(140,200,255,.18); border-radius:12px; padding:14px; }
+  .card h2 { font-size:15px; margin:0 0 2px; display:flex; align-items:center; gap:8px; }
+  .card .kind { font-size:11px; opacity:.6; font-weight:400; }
+  .row { display:grid; grid-template-columns:120px 1fr 52px; align-items:center; gap:8px; margin:7px 0; }
+  .row label { font-size:12px; opacity:.85; }
+  .row input[type=range] { width:100%; }
+  .row .v { font-size:12px; text-align:right; opacity:.8; font-variant-numeric:tabular-nums; }
+  select, .row select { background:#10243a; color:#dfeefb; border:1px solid #2a5a78; border-radius:6px; padding:3px 6px; font:12px ui-sans-serif; }
+  .btns { display:flex; gap:8px; margin-top:10px; }
+  button { background:#1f4f86; color:#fff; border:1px solid #5b9fe6; border-radius:8px; padding:7px 12px; cursor:pointer; font:600 13px ui-sans-serif; }
+  button:hover { background:#2f7bd6; }
+  button.stop { background:#5a2a2a; border-color:#a85; }
+  button.on { background:#2f7bd6; }
+  .dist { margin-top:8px; padding-top:8px; border-top:1px dashed rgba(140,200,255,.18); }
+  .export { margin-top:22px; }
+  textarea { width:100%; height:200px; background:#0c1828; color:#cfe6f5; border:1px solid #2a5a78; border-radius:8px; padding:10px; font:12px ui-monospace, monospace; }
+  .toolbar { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; align-items:center; }
+  .note { opacity:.7; font-size:12px; }
+  .ok { color:#7fe0a8; }
+</style>
+</head>
+<body>
+<h1>Island Hopper — Sound Board</h1>
+<p class="sub">Tune each effect, reassign its target, and dial attenuation by ear (use the per-card <b>Listener distance</b> slider). Then <b>Save to app</b> (writes the same-origin localStorage the game reads on reload) or <b>Export JSON</b> to paste over <code>AUDIO_DEFAULTS</code> in index.html.</p>
+
+<div class="toolbar">
+  <button id="startBtn">▶ Enable audio</button>
+  <span class="note" id="status">click Enable audio first (browser gesture requirement)</span>
+</div>
+
+<div class="grid" id="cards"></div>
+
+<div class="export">
+  <div class="toolbar">
+    <button id="exportBtn">⤓ Export JSON</button>
+    <button id="saveBtn">💾 Save to app (localStorage)</button>
+    <button id="loadBtn">↺ Load app's saved config</button>
+    <button id="resetBtn" class="stop">Reset to defaults</button>
+    <span class="note" id="saveMsg"></span>
+  </div>
+  <textarea id="json" spellcheck="false"></textarea>
+</div>
+
+<script type="module">
+import * as Tone from 'https://cdn.jsdelivr.net/npm/tone@14.8.49/+esm';
+
+// ---- default config (mirror of index.html AUDIO_DEFAULTS) ----
+const DEFAULTS = {
+  wind:     { target:'camera',       gain:0.13 },
+  ocean:    { target:'cameraHeight', gain:0.35, underGain:0.51, fullH:6, silentH:80 },
+  plane:    { target:'plane',      gain:0.5, model:'exponential', ref:30,  max:700,  rolloff:1.8, freq:72 },
+  ufo:      { target:'ufo',        gain:0.6, model:'exponential', ref:28,  max:260,  rolloff:3.2, gateBeam:true },
+  rain:     { target:'stormCloud', gain:0.5, model:'exponential', ref:120, max:1500, rolloff:1.3, gateStorm:true },
+  firework: { target:'island',     gain:0.5, model:'exponential', ref:45,  max:900,  rolloff:2.2 },
+  thunder:  { target:'stormCloud', gain:0.9, model:'exponential', ref:240, max:6000, rolloff:0.8 },
+};
+const LS_KEY = 'islandHopper.audio.v1';
+const TARGETS = ['camera','cameraHeight','ship','plane','ufo','stormCloud','island'];
+const MODELS  = ['linear','inverse','exponential'];
+const POSITIONAL = { plane:1, ufo:1, rain:1, firework:1, thunder:1 };   // ocean/wind are ambient (no panner)
+const KIND = { wind:'loop', ocean:'loop', plane:'loop', ufo:'loop', rain:'loop', firework:'oneshot', thunder:'oneshot' };
+// slider ranges per param key
+const RANGE = {
+  gain:[0,1,0.01], underGain:[0,1,0.01], fullH:[0,60,1], silentH:[20,400,5],
+  ref:[1,500,1], max:[50,8000,50], rolloff:[0,6,0.1], freq:[20,300,1],
+};
+
+let CFG = structuredClone(DEFAULTS);
+try { const j = JSON.parse(localStorage.getItem(LS_KEY)||'null'); if (j) for (const k in CFG) Object.assign(CFG[k], j[k]||{}); } catch(_){}
+
+let ctx=null, started=false;
+const RUNTIME = {};   // id -> { playing, panner, gainNode, voices:[], dist }
+
+function startCtx(){
+  if (started) return; started=true;
+  Tone.start();
+  ctx = Tone.getContext().rawContext;
+  document.getElementById('status').innerHTML = '<span class="ok">audio enabled</span> — press Play on any card';
+}
+
+// position the panner for a card from its preview-distance (source to the right of the listener at origin)
+function applyPanner(id){
+  const r = RUNTIME[id]; if (!r || !r.panner) return; const c = CFG[id];
+  r.panner.distanceModel = c.model || 'exponential';
+  r.panner.refDistance = c.ref || 1;
+  r.panner.maxDistance = c.max || 10000;
+  r.panner.rolloffFactor = (c.rolloff!=null) ? c.rolloff : 1;
+  const d = r.dist || 0;
+  if (r.panner.positionX){ r.panner.positionX.value=d; r.panner.positionY.value=0; r.panner.positionZ.value=0; }
+  else r.panner.setPosition(d,0,0);
+}
+
+// build a sound's synth graph into `dest` (a native AudioNode). returns array of disposables (Tone nodes/native).
+function buildSynth(id, gainNode){
+  const c = CFG[id], out = gainNode, nodes=[];
+  const keep=(n)=>{ nodes.push(n); return n; };
+  if (id==='wind'){
+    const lp=keep(new Tone.Filter(640,'lowpass')); const bp=keep(new Tone.Filter({type:'bandpass',frequency:500,Q:0.7}));
+    const nz=keep(new Tone.Noise('brown')); nz.connect(bp); bp.connect(lp); lp.connect(out); nz.start();
+    keep(new Tone.LFO({frequency:0.08,min:300,max:880}).connect(bp.frequency).start());
+  } else if (id==='ocean'){
+    const lp=keep(new Tone.Filter(1400,'lowpass')); const bp=keep(new Tone.Filter({type:'bandpass',frequency:900,Q:0.55}));
+    const nz=keep(new Tone.Noise('pink')); nz.connect(bp); bp.connect(lp); lp.connect(out); nz.start();
+    keep(new Tone.LFO({frequency:0.22,min:760,max:1180}).connect(bp.frequency).start());
+    keep(new Tone.LFO({frequency:0.40,min:0.2,max:1.0}).connect(out.gain).start());
+  } else if (id==='plane'){
+    const lp=keep(new Tone.Filter(430,'lowpass')); lp.connect(out);
+    const o1=keep(new Tone.Oscillator(c.freq||72,'sawtooth')); o1.connect(lp); o1.start();
+    const o2=keep(new Tone.Oscillator((c.freq||72)*1.5,'sawtooth')); o2.connect(lp); o2.start();
+    keep(new Tone.LFO({frequency:7,min:(c.freq||72)-3,max:(c.freq||72)+3}).connect(o1.frequency).start());
+  } else if (id==='ufo'){
+    const lp=keep(new Tone.Filter(460,'lowpass')); const tg=keep(new Tone.Gain(1)); tg.connect(lp); lp.connect(out);
+    const o1=keep(new Tone.Oscillator(56,'sawtooth')); o1.connect(tg); o1.start();
+    const o2=keep(new Tone.Oscillator(84,'sine')); o2.connect(tg); o2.start();
+    keep(new Tone.LFO({frequency:5.5,min:50,max:64}).connect(o1.frequency).start());
+    keep(new Tone.LFO({frequency:9.0,min:0.4,max:1.0}).connect(tg.gain).start());
+  } else if (id==='rain'){
+    const lp=keep(new Tone.Filter(4800,'lowpass')); const hp=keep(new Tone.Filter({type:'highpass',frequency:550}));
+    const nz=keep(new Tone.Noise('white')); nz.connect(lp); lp.connect(hp); hp.connect(out); nz.start();
+    keep(new Tone.LFO({frequency:0.3,min:3200,max:5600}).connect(lp.frequency).start());
+  } else if (id==='firework'){
+    const boom=keep(new Tone.MembraneSynth({pitchDecay:0.03,octaves:3,envelope:{attack:0.001,decay:0.22,sustain:0,release:0.15}})); boom.connect(out);
+    const cbp=keep(new Tone.Filter({type:'bandpass',frequency:1500,Q:0.6})); cbp.connect(out);
+    const crack=keep(new Tone.NoiseSynth({noise:{type:'pink'},envelope:{attack:0.002,decay:0.16,sustain:0}})); crack.connect(cbp);
+    return { nodes, trigger:()=>{ boom.triggerAttackRelease('C2','8n',undefined,0.8); crack.triggerAttackRelease('8n','+0.03',0.5); } };
+  } else if (id==='thunder'){
+    const rlp=keep(new Tone.Filter(200,'lowpass')); rlp.connect(out);
+    const renv=keep(new Tone.AmplitudeEnvelope({attack:0.04,decay:0.7,sustain:0.3,release:1.8})); renv.connect(rlp);
+    keep(new Tone.Noise('brown')).connect(renv); nodes[nodes.length-1].start();
+    const cbp=keep(new Tone.Filter({type:'bandpass',frequency:1100,Q:0.5})); cbp.connect(out);
+    const cenv=keep(new Tone.AmplitudeEnvelope({attack:0.005,decay:0.16,sustain:0,release:0.3})); cenv.connect(cbp);
+    keep(new Tone.Noise('pink')).connect(cenv); nodes[nodes.length-1].start();
+    return { nodes, trigger:()=>{ renv.triggerAttackRelease(1.4,undefined,0.9); cenv.triggerAttackRelease(0.16,'+0.0',0.8); } };
+  }
+  return { nodes };
+}
+
+function stopSound(id){
+  const r=RUNTIME[id]; if (!r) return;
+  (r.nodes||[]).forEach(n=>{ try{ n.stop&&n.stop(); }catch(_){} try{ n.dispose&&n.dispose(); }catch(_){} });
+  try{ r.gainNode&&r.gainNode.dispose(); }catch(_){}
+  try{ r.panner&&r.panner.disconnect(); }catch(_){}
+  r.nodes=[]; r.gainNode=null; r.panner=null; r.playing=false; r.trigger=null;
+}
+
+function playSound(id){
+  startCtx(); if (!ctx) return;
+  stopSound(id);
+  const r = RUNTIME[id] || (RUNTIME[id]={dist: POSITIONAL[id]? (CFG[id].ref*1.2||40) : 0});
+  const gainNode = new Tone.Gain(CFG[id].gain);
+  let dest;
+  if (POSITIONAL[id]){
+    const panner = ctx.createPanner(); panner.panningModel='HRTF'; panner.connect(ctx.destination);
+    r.panner = panner; applyPanner(id);
+    gainNode.connect(panner);            // Tone gain → native panner
+  } else {
+    gainNode.toDestination();
+  }
+  const built = buildSynth(id, gainNode);
+  r.nodes = built.nodes; r.gainNode = gainNode; r.trigger = built.trigger; r.playing = true;
+}
+
+// ---- UI ----
+function fmt(v){ return (Math.round(v*100)/100).toString(); }
+function buildCards(){
+  const root=document.getElementById('cards'); root.innerHTML='';
+  for (const id of Object.keys(CFG)){
+    const c=CFG[id]; const card=document.createElement('div'); card.className='card';
+    const pos=!!POSITIONAL[id], kind=KIND[id];
+    card.innerHTML = `<h2>${id} <span class="kind">${pos?'positional':'ambient'} · ${kind}</span></h2>`;
+    // target
+    addSelect(card,'target',id,'target',TARGETS);
+    // params
+    for (const key of Object.keys(c)){
+      if (key==='target') continue;
+      if (key==='model'){ addSelect(card,'model',id,'model',MODELS); continue; }
+      if (typeof c[key]==='boolean'){ addCheck(card,key,id,key); continue; }
+      if (typeof c[key]==='number'){ addRange(card,key,id,key); continue; }
+    }
+    // preview distance for positional
+    if (pos){
+      const wrap=document.createElement('div'); wrap.className='dist';
+      const row=document.createElement('div'); row.className='row';
+      const maxD = Math.max(1000, (c.max||1000));
+      row.innerHTML=`<label>Listener dist</label><input type="range" min="0" max="${maxD}" step="1" value="${(RUNTIME[id]&&RUNTIME[id].dist)||Math.round((c.ref||40)*1.2)}"><div class="v"></div>`;
+      const inp=row.querySelector('input'), v=row.querySelector('.v'); v.textContent=inp.value;
+      inp.addEventListener('input',()=>{ v.textContent=inp.value; const r=RUNTIME[id]||(RUNTIME[id]={}); r.dist=+inp.value; applyPanner(id); });
+      wrap.appendChild(row); card.appendChild(wrap);
+    }
+    // buttons
+    const btns=document.createElement('div'); btns.className='btns';
+    if (kind==='loop'){
+      const b=document.createElement('button'); b.textContent='▶ Play';
+      b.onclick=()=>{ if (RUNTIME[id]&&RUNTIME[id].playing){ stopSound(id); b.textContent='▶ Play'; b.classList.remove('on'); } else { playSound(id); b.textContent='■ Stop'; b.classList.add('on'); } };
+      btns.appendChild(b);
+    } else {
+      const b=document.createElement('button'); b.textContent='💥 Trigger';
+      b.onclick=()=>{ startCtx(); if(!RUNTIME[id]||!RUNTIME[id].playing) playSound(id); RUNTIME[id]&&RUNTIME[id].trigger&&RUNTIME[id].trigger(); };
+      btns.appendChild(b);
+    }
+    card.appendChild(btns);
+    root.appendChild(card);
+  }
+  syncJSON();
+}
+function liveUpdate(id, key){
+  const r=RUNTIME[id]; if(!r||!r.playing) return;
+  if (key==='gain' && r.gainNode){ r.gainNode.gain.rampTo(CFG[id].gain,0.05); return; }
+  if (['ref','max','rolloff','model'].includes(key)){ applyPanner(id); return; }
+  // synth-internal change → rebuild to apply
+  if (KIND[id]==='loop'){ playSound(id); }
+}
+function addRange(card,label,id,key){
+  const [mn,mx,st]=RANGE[key]||[0,1,0.01];
+  const row=document.createElement('div'); row.className='row';
+  row.innerHTML=`<label>${label}</label><input type="range" min="${mn}" max="${mx}" step="${st}" value="${CFG[id][key]}"><div class="v">${fmt(CFG[id][key])}</div>`;
+  const inp=row.querySelector('input'), v=row.querySelector('.v');
+  inp.addEventListener('input',()=>{ CFG[id][key]=+inp.value; v.textContent=fmt(+inp.value); liveUpdate(id,key); syncJSON(); });
+  card.appendChild(row);
+}
+function addSelect(card,label,id,key,opts){
+  const row=document.createElement('div'); row.className='row';
+  const sel=document.createElement('select'); for(const o of opts){ const op=document.createElement('option'); op.value=o; op.textContent=o; sel.appendChild(op); } sel.value=CFG[id][key];
+  const l=document.createElement('label'); l.textContent=label; row.appendChild(l); row.appendChild(sel);
+  const sp=document.createElement('div'); sp.className='v'; row.appendChild(sp);
+  sel.addEventListener('change',()=>{ CFG[id][key]=sel.value; liveUpdate(id,key); syncJSON(); });
+  card.appendChild(row);
+}
+function addCheck(card,label,id,key){
+  const row=document.createElement('div'); row.className='row';
+  const l=document.createElement('label'); l.textContent=label;
+  const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!CFG[id][key];
+  cb.addEventListener('change',()=>{ CFG[id][key]=cb.checked; syncJSON(); });
+  row.appendChild(l); row.appendChild(cb); row.appendChild(document.createElement('div'));
+  card.appendChild(row);
+}
+function syncJSON(){ document.getElementById('json').value = JSON.stringify(CFG, null, 2); }
+
+document.getElementById('startBtn').onclick = startCtx;
+document.getElementById('exportBtn').onclick = ()=>{ syncJSON(); const blob=new Blob([JSON.stringify(CFG,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='audio-config.json'; a.click(); };
+document.getElementById('saveBtn').onclick = ()=>{ localStorage.setItem(LS_KEY, JSON.stringify(CFG));
+  const m=document.getElementById('saveMsg'); m.innerHTML='<span class="ok">saved — reload the game to hear it</span>'; setTimeout(()=>m.textContent='',4000); };
+document.getElementById('loadBtn').onclick = ()=>{ try{ const j=JSON.parse(localStorage.getItem(LS_KEY)||'null'); if(j){ CFG=structuredClone(DEFAULTS); for(const k in CFG) Object.assign(CFG[k], j[k]||{}); buildCards(); } }catch(_){} };
+document.getElementById('resetBtn').onclick = ()=>{ CFG=structuredClone(DEFAULTS); Object.keys(RUNTIME).forEach(stopSound); buildCards(); };
+
+buildCards();
+</script>
+</body>
+</html>
