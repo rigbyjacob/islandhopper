@@ -2270,6 +2270,7 @@ const FLEET = [];
 let fleetView = 'off';   // 'off' | 'ship' | 'sub' | 'plane' | 'ufo' | 'grid'
 const manualKeys = {};   // WASD/Q/E state for piloting the focused vehicle
 let _tiltOn=false, _tiltX=0, _tiltY=0;   // device-tilt steering: ON flag + screen-frame "downhill" direction (marble model), neutral-relative, ~sin units (+x=right, +y=down); consumed by piloting/fly (WASD) and the globe-roll
+let _devA=0, _devB=0, _devG=0, _devHas=false, _gyroAnchored=false, _gyroYawOff=0;   // raw device orientation (deg) for the free-cam "look through the phone" gyro view
 let _tiltCapable=false, _tiltToggleFn=null, _tiltFloatBtn=null, _tiltDemoBtn=null;   // one toggle drives two buttons: a floating one in normal play + one inside the demo bar (so they never overlap on small screens)
 function _tiltSyncUI(){ const lbl=_tiltOn?'⌖ Tilt ●':'⌖ Tilt';
   if(_tiltFloatBtn){ _tiltFloatBtn.classList.toggle('on',_tiltOn); _tiltFloatBtn.textContent=lbl; }
@@ -5781,18 +5782,33 @@ function setFly(on){
   const app=document.getElementById('app'); if(app) app.style.cursor = on ? 'grab' : '';
   if (ui.flyBtn) ui.flyBtn.textContent = on ? '✈ Flying — F to exit' : '✈ Fly the map (F)';
 }
+// device orientation (alpha/beta/gamma deg + screen angle) → a world quaternion, so the camera looks where the phone
+// points (standard DeviceOrientationControls recipe). Lets the free cam be a "window into the world" you turn around.
+const _zeeV=new THREE.Vector3(0,0,1), _q0g=new THREE.Quaternion(), _q1g=new THREE.Quaternion(-Math.SQRT1_2,0,0,Math.SQRT1_2), _eulerG=new THREE.Euler();
+function _deviceQuat(out, aDeg,bDeg,gDeg,orientDeg){ const R=Math.PI/180;
+  _eulerG.set(bDeg*R, aDeg*R, -gDeg*R, 'YXZ');               // device → world
+  out.setFromEuler(_eulerG); out.multiply(_q1g);            // camera looks out the back of the phone
+  out.multiply(_q0g.setFromAxisAngle(_zeeV, -orientDeg*R));  // account for screen rotation
+  return out; }
+const _gq=new THREE.Quaternion(), _gqOff=new THREE.Quaternion(), _gFwd=new THREE.Vector3();
 function updateFlyCam(dt){
   const K=flyState.keys, boost=K['shift']?2.6:1.0;
-  // MOBILE TILT → VIEW ROTATION (free cam): tilt left/right yaws, tilt fwd/back pitches. Movement is the throttle, not tilt.
-  if (_tiltOn && !worldMapOpen){
-    const RZ=0.05;
-    const tx = Math.abs(_tiltX)>RZ ? (_tiltX-Math.sign(_tiltX)*RZ) : 0;
-    const ty = Math.abs(_tiltY)>RZ ? (_tiltY-Math.sign(_tiltY)*RZ) : 0;
-    flyState.yaw  += tx * 1.7 * dt;                                                 // tilt right → pan right
-    flyState.pitch = clampJS(flyState.pitch + ty * 1.5 * dt, -1.45, 1.45);          // tilt top-edge-down → look down
+  let fx,fy,fz, gyro=false;
+  // MOBILE GYRO LOOK (free cam): the camera points exactly where the phone points — hold it up and turn around to look
+  // 360°, like a window into the world. Anchored on enable so the heading doesn't snap; movement follows the gaze.
+  if (_tiltOn && _devHas && !worldMapOpen){
+    gyro=true;
+    const orient=((screen.orientation&&screen.orientation.angle)||window.orientation||0);
+    _deviceQuat(_gq, _devA, _devB, _devG, orient);
+    if (!_gyroAnchored){ _gFwd.set(0,0,-1).applyQuaternion(_gq); _gyroYawOff = flyState.yaw - Math.atan2(_gFwd.z,_gFwd.x); _gyroAnchored=true; }
+    _gqOff.setFromAxisAngle(_UP, _gyroYawOff);               // world-up offset so we keep the heading you had when enabling
+    flyCam.quaternion.copy(_gqOff).multiply(_gq);
+    _gFwd.set(0,0,-1).applyQuaternion(flyCam.quaternion); fx=_gFwd.x; fy=_gFwd.y; fz=_gFwd.z;
+    flyState.yaw=Math.atan2(fz,fx); flyState.pitch=clampJS(Math.asin(clampJS(fy,-1,1)),-1.45,1.45);   // keep in sync for a clean hand-off when tilt turns off
+  } else {
+    const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
+    fx=cy*cp; fy=sp2; fz=sy*cp;                                  // forward
   }
-  const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
-  const fx=cy*cp, fy=sp2, fz=sy*cp;                                  // forward
   const rx=Math.cos(flyState.yaw+Math.PI/2), rz=Math.sin(flyState.yaw+Math.PI/2);   // right (horizontal)
   const p=flyState.pos;
   const fwd=K['w']||K['arrowup'], bk=K['s']||K['arrowdown'], lf=K['a']||K['arrowleft'], rt=K['d']||K['arrowright'];
@@ -5818,7 +5834,7 @@ function updateFlyCam(dt){
     p.x+=fx*ts; p.y+=fy*ts; p.z+=fz*ts; }
   p.y=Math.max(p.y, seabedHeight(p.x,p.z)+2.5);                      // can dive UNDER the water now, but not through the seabed
   flyCam.position.copy(p);
-  flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
+  if (!gyro) flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);                  // gyro already set the camera quaternion from the phone
 }
 
 // ---- DEV camera hook: jump into flight mode and aim the camera anywhere (drive from the browser console). ----
@@ -6187,6 +6203,7 @@ function initInput() {
     };
     const onOrient=(e)=>{
       if (e.beta==null && e.gamma==null) return;
+      _devA=(e.alpha!=null)?e.alpha:_devA; _devB=e.beta||0; _devG=e.gamma||0; _devHas=true;   // raw orientation for the free-cam gyro look
       const beta=e.beta||0, gamma=e.gamma||0, br=beta*D2R, gr=gamma*D2R, cb=Math.cos(br);
       const txp = cb*Math.sin(gr);                         // in-plane gravity toward the device's RIGHT edge (downhill-right), portrait frame
       const typ = Math.sin(br);                            // in-plane gravity toward the device's BOTTOM edge (downhill-down)
@@ -6203,7 +6220,7 @@ function initInput() {
       applyTiltControls();
     };
     _tiltToggleFn = async ()=>{                             // shared by the floating button + the demo-bar button
-      if (_tiltOn){ _tiltOn=false; window.removeEventListener('deviceorientation',onOrient); clearKeys(); _tiltX=_tiltY=0; _tiltSyncUI(); return; }
+      if (_tiltOn){ _tiltOn=false; window.removeEventListener('deviceorientation',onOrient); clearKeys(); _tiltX=_tiltY=0; _gyroAnchored=false; _tiltSyncUI(); return; }
       try{
         if (typeof DeviceOrientationEvent.requestPermission === 'function'){
           const r=await DeviceOrientationEvent.requestPermission();
@@ -7247,20 +7264,21 @@ function updateGlobe(dt){
     return; }
   if (!_globeDrag && !_globeLevel){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // flick momentum — fast pulls keep spinning, slow drags settle at once
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
-    _globeVel.x*=0.955; _globeVel.y*=0.955;                                              // gentle decay → a satisfying glide
+    _globeVel.x*=0.93; _globeVel.y*=0.93;                                                // friction → glide that settles (was 0.955; firmer so you can land on a spot)
     if(Math.abs(_globeVel.x)<5e-5) _globeVel.x=0; if(Math.abs(_globeVel.y)<5e-5) _globeVel.y=0; }
   // DEVICE-TILT ROLL: a marble on a tray. _tiltX/_tiltY = screen-frame downhill (sin units); the globe rolls
   // downhill while staying centred — tilt right → it rolls right (the left side rotates into view); flat → it stops.
   if (_tiltOn && worldMapOpen && !_globeDrag && !_diveZoom && !_globeRise && !_diveAfterSlerp){
-    const _dz=0.06, _cap=0.55, _rate=0.105;                                              // ~3.5° deadzone, ~33° clamp, roll speed
-    const _gx = Math.abs(_tiltX)>_dz ? clampJS(_tiltX,-_cap,_cap)-Math.sign(_tiltX)*_dz : 0;   // downhill-right → roll right (like dragging right)
-    const _gy = Math.abs(_tiltY)>_dz ? clampJS(_tiltY,-_cap,_cap)-Math.sign(_tiltY)*_dz : 0;   // downhill-down  → roll down  (like dragging down)
-    if (_gx||_gy){ const _f=(dt||0.016)*60;
-      // REVERSED from the marble-on-tray model (felt backwards): tilt right now brings the right side toward you
-      // (like pushing/dragging the globe in the tilt direction), which testers found more intuitive.
-      globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), -_gx*_rate*_f);
-      globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), -_gy*_rate*_f);
-      _globeIdle=0; _globeLevel=null; }                                                  // active tilt cancels the idle auto-level
+    const _dz=0.06, _cap=0.55, _rate=0.115;                                              // ~3.5° deadzone, ~33° clamp, roll speed
+    const _gx = Math.abs(_tiltX)>_dz ? clampJS(_tiltX,-_cap,_cap)-Math.sign(_tiltX)*_dz : 0;   // tilt right → roll right
+    const _gy = Math.abs(_tiltY)>_dz ? clampJS(_tiltY,-_cap,_cap)-Math.sign(_tiltY)*_dz : 0;   // tilt down  → roll down
+    // INERTIA: tilt sets a TARGET angular velocity that _globeVel eases toward, rather than rotating directly — so it
+    // builds up and glides down smoothly (the momentum block above applies + decays it = friction). Reversed dirs
+    // (tilt right brings the right side toward you), which testers preferred. Far easier to coast onto a region.
+    const _tvY = -_gx*_rate, _tvX = -_gy*_rate;
+    _globeVel.y += (_tvY - _globeVel.y) * 0.08;
+    _globeVel.x += (_tvX - _globeVel.x) * 0.08;
+    if (_gx||_gy){ _globeIdle=0; _globeLevel=null; }                                     // active tilt cancels the idle auto-level
   }
   // idle auto-level: after 30s untouched, ease the north pole back upright (arcball drag can leave the globe rolled/tilted)
   // while preserving the focal point (whatever is currently centred at the front stays centred).
