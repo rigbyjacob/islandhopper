@@ -719,9 +719,9 @@ if (window.APO) REGIONS.apo = Object.assign({}, window.APO, {
   cities: [ [123.305,9.307,24], [123.265,9.193,12], [123.515,9.214,12] ], cityLabels: [ ['Dumaguete',123.305,9.307],['Dauin',123.265,9.193],['Siquijor',123.515,9.214] ],
   defaults: { timeOfDay:11, atmosphere:0.25, windDirDeg:70, windStrength:9, waveHeight:0.5, stormOn:false, stormIntensity:0.0 },
 });
-// TEMP: hide regions still needing polish (data stays loaded; just drop them from the registry → off the globe,
-// not navigable). Re-enable by removing the id from this list.
-['faroe','skye','exe'].forEach(id=>{ delete REGIONS[id]; });
+// Hide regions still needing polish (data stays loaded; just drop them from the registry → off the globe,
+// not navigable). Add ids here to hide; empty = all regions enabled.
+[].forEach(id=>{ delete REGIONS[id]; });
 // Map bounds default to the island bounds + margin when a region doesn't specify them.
 for (const r of Object.values(REGIONS)){
   if (!r.map && r.islandPolys){ let a=1e9,b=-1e9,c=1e9,d=-1e9;
@@ -6713,57 +6713,93 @@ function buildGlobe(){
   _buildClusterDioramas();   // merge tight clusters into one subdivided "combined" diorama (no more overlap)
   faceRegion(REGION.id);
 }
-// When several region dioramas sit close enough to overlap on the globe, replace that cluster with ONE bigger plinth
-// split into equal pie sectors (2=halves, 3=thirds, 4=quarters, 5=fifths…), each sector a region: its sculpted
-// mini-scene + art-tinted slice, divided by black lines, label at the rim. Clicking a sector dives that region.
+// A flat top-down "rendering" of a region (sea + island silhouettes with a beach rim + soft shadow) → CanvasTexture,
+// used to texture each section of a combined diorama (so the section background IS a render of the region).
+function _regionThumb(r){
+  const S=256, cv=document.createElement('canvas'); cv.width=cv.height=S; const c=cv.getContext('2d');
+  const pal=_PAL[_BIOME[r.id]||'temp'], hex=v=>'#'+new THREE.Color(v).getHexString();
+  c.fillStyle=hex(pal.sea); c.fillRect(0,0,S,S);
+  const polys=(r.islandPolys||[]).map(p=>p.r||p.ring).filter(ring=>ring&&ring.length>=3);
+  if (polys.length){
+    let mnx=Infinity,mxx=-Infinity,mnz=Infinity,mxz=-Infinity;
+    for (const ring of polys) for (const v of ring){ mnx=Math.min(mnx,v[0]); mxx=Math.max(mxx,v[0]); mnz=Math.min(mnz,v[1]); mxz=Math.max(mxz,v[1]); }
+    const ext=Math.max(mxx-mnx,mxz-mnz)||1, ccx=(mnx+mxx)/2, ccz=(mnz+mxz)/2, sc=S*0.74/ext, P=v=>[S/2+(v[0]-ccx)*sc, S/2+(v[1]-ccz)*sc];
+    c.fillStyle='rgba(2,8,14,0.28)';                                        // soft drop shadow for relief
+    for (const ring of polys){ c.beginPath(); ring.forEach((v,i)=>{const q=P(v); i?c.lineTo(q[0]+5,q[1]+6):c.moveTo(q[0]+5,q[1]+6);}); c.closePath(); c.fill(); }
+    for (const ring of polys){ c.beginPath(); ring.forEach((v,i)=>{const q=P(v); i?c.lineTo(q[0],q[1]):c.moveTo(q[0],q[1]);}); c.closePath();
+      c.fillStyle=hex(pal.low); c.fill(); c.lineWidth=Math.max(2,S*0.012); c.strokeStyle=hex(pal.beach); c.stroke(); }
+  }
+  const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=4; return t;
+}
+// the S-curve dividing a yin-yang (top (0,R) → bottom (0,-R): upper lobe bulges +x, lower lobe bulges −x)
+function _yinSCurve(R, steps){ const pts=[];
+  for (let i=0;i<=steps;i++){ const a=Math.PI/2 - Math.PI*(i/steps); pts.push([Math.cos(a)*R/2, R/2 + Math.sin(a)*R/2]); }
+  for (let i=1;i<=steps;i++){ const a=Math.PI/2 + Math.PI*(i/steps); pts.push([Math.cos(a)*R/2, -R/2 + Math.sin(a)*R/2]); }
+  return pts;
+}
+function _yinShape(R, which){            // which 0 = right comma, 1 = left comma
+  const seg=30, outer=[];
+  for (let i=0;i<=seg;i++){ const a = which ? (Math.PI/2 + Math.PI*(i/seg)) : (Math.PI/2 - Math.PI*(i/seg)); outer.push([Math.cos(a)*R, Math.sin(a)*R]); }
+  const pts=outer.concat(_yinSCurve(R,22).slice().reverse());
+  const sh=new THREE.Shape(); sh.moveTo(pts[0][0],pts[0][1]); for (let i=1;i<pts.length;i++) sh.lineTo(pts[i][0],pts[i][1]); sh.closePath();
+  return sh;
+}
+function _remapShapeUV(geo, R){ const p=geo.attributes.position, uv=geo.attributes.uv;
+  for (let i=0;i<p.count;i++){ uv.setXY(i, (p.getX(i)+R)/(2*R), (p.getY(i)+R)/(2*R)); } uv.needsUpdate=true; }
+// When region dioramas sit close enough to overlap on the globe, merge that cluster into ONE small disc whose SECTIONS
+// are each textured with a render of that region (yin-yang for 2, equal pie wedges for 3–5), divided by black lines,
+// labels at the rim. Clicking a section dives that region.
 function _buildClusterDioramas(){
   const ds=_regionDioramas, N=ds.length; if (N<2) return;
-  const COS_TH=Math.cos(12*Math.PI/180);                                   // regions within ~12° cluster together
+  const COS_TH=Math.cos(9*Math.PI/180);                                    // tighter now the combined disc is small
   const adj=Array.from({length:N},()=>[]);
   for (let i=0;i<N;i++) for (let j=i+1;j<N;j++){ if (ds[i].n.dot(ds[j].n)>COS_TH){ adj[i].push(j); adj[j].push(i); } }
   const seen=new Array(N).fill(false);
-  const wd=(p)=>new THREE.Vector3(Math.cos(p),0,-Math.sin(p));             // CircleGeometry angle φ → world XZ dir (after the flat x=-90 rotation)
-  const TWO=Math.PI*2;
+  const wd=(p)=>new THREE.Vector3(Math.cos(p),0,-Math.sin(p)), TWO=Math.PI*2;
+  const lineMat=new THREE.MeshBasicMaterial({ color:0x05080d });
   for (let i=0;i<N;i++){
     if (seen[i]) continue; const comp=[]; const q=[i]; seen[i]=true;
     while (q.length){ const k=q.pop(); comp.push(k); for (const m of adj[k]) if(!seen[m]){ seen[m]=true; q.push(m); } }
-    if (comp.length<2) continue;                                            // singletons keep their normal diorama
+    if (comp.length<2) continue;
     const members=comp.map(k=>ds[k]);
-    const cN=new THREE.Vector3(); for (const d of members) cN.add(d.n); cN.normalize();   // cluster centroid direction
-    for (const d of members){                                              // hide the individual dioramas + remove them from pick/label lists
+    const cN=new THREE.Vector3(); for (const d of members) cN.add(d.n); cN.normalize();
+    for (const d of members){
       d.patch.visible=false; if(d.marker) d.marker.visible=false; if(d.glow) d.glow.visible=false; if(d.lab) d.lab.visible=false; d.clustered=true;
       let li=_regionLabels.findIndex(L=>L.id===d.id); if(li>=0) _regionLabels.splice(li,1);
       let p1=_globePicks.indexOf(d.patch); if(p1>=0) _globePicks.splice(p1,1);
       let p2=_globePicks.indexOf(d.marker); if(p2>=0) _globePicks.splice(p2,1);
     }
-    const n=members.length, PR=0.20+0.022*Math.min(n,6);                   // combined plinth radius (grows slightly with count)
-    const grp=new THREE.Group(); _placeOnSphereV(grp, cN, GLOBE_R-0.012); globeSpin.add(grp);
-    const base=new THREE.Mesh(new THREE.CylinderGeometry(PR*1.06, PR*0.95, 0.05, 96),
+    const n=members.length, PR=0.085 + 0.006*Math.min(n,5);                // SMALL — roughly a single diorama's footprint (wider only, not taller)
+    const grp=new THREE.Group(); _placeOnSphereV(grp, cN, GLOBE_R-0.006); globeSpin.add(grp);
+    const base=new THREE.Mesh(new THREE.CylinderGeometry(PR*1.06, PR*0.97, 0.018, 80),   // THIN plinth → seats flush like the single dioramas
       new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
-    base.position.y=0.02; grp.add(base);
-    const lineMat=new THREE.MeshBasicMaterial({ color:0x05080d });
-    for (let s=0;s<n;s++){
-      const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff, ac=new THREE.Color(art);
-      const a0=s/n*TWO, aMid=(s+0.5)/n*TWO;
-      const segMat=new THREE.MeshStandardNodeMaterial({ roughness:0.55, metalness:0.0 });   // art-tinted slice behind the islands
-      segMat.colorNode=vec3(ac.r,ac.g,ac.b).mul(0.45); segMat.emissiveNode=vec3(ac.r,ac.g,ac.b).mul(0.22);
-      const seg=new THREE.Mesh(new THREE.CircleGeometry(PR*0.98, 48, a0, TWO/n), segMat);
-      seg.rotation.x=-Math.PI/2; seg.position.y=0.052; grp.add(seg);
-      const patch=buildRegionPatch(r);
-      if (patch){ patch.scale.setScalar(clampJS(0.46-0.04*n, 0.16, 0.42));
-        patch.position.copy(wd(aMid).multiplyScalar(PR*0.5)).setY(0.052);
-        patch.userData.regionId=r.id; grp.add(patch); _globePicks.push(patch); }
-      const pick=new THREE.Mesh(new THREE.CircleGeometry(PR, 24, a0, TWO/n), new THREE.MeshBasicMaterial({ transparent:true, opacity:0, depthWrite:false }));
-      pick.rotation.x=-Math.PI/2; pick.position.y=0.085; pick.userData.regionId=r.id; grp.add(pick); _globePicks.push(pick);
-      const m=REGION_META[r.id]||{ tag:r.name||r.id };
-      const lab=_globeLabel(m.tag, art); lab.position.copy(wd(aMid).multiplyScalar(PR*1.14)).setY(0.12); lab.material.opacity=0; grp.add(lab);
-      _regionLabels.push({ id:r.id, spr:lab, n:cN.clone() });               // fades in/out with the cluster facing the camera
+    base.position.y=0.006; grp.add(base);
+    const addLabel=(r,art,dir)=>{ const m=REGION_META[r.id]||{ tag:r.name||r.id };
+      const lab=_globeLabel(m.tag, art); lab.scale.multiplyScalar(0.4);   // normal region-name size
+      lab.position.copy(dir.clone().multiplyScalar(PR*1.22)).setY(0.05); lab.material.opacity=0; grp.add(lab);
+      _regionLabels.push({ id:r.id, spr:lab, n:cN.clone() }); };
+    if (n===2){                                                            // ☯ true yin-yang: two interlocking commas, each a region render
+      for (let s=0;s<2;s++){ const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff;
+        const geo=new THREE.ShapeGeometry(_yinShape(PR, s), 30); _remapShapeUV(geo, PR);
+        const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map:_regionThumb(r) }));
+        m.rotation.x=-Math.PI/2; m.position.y=0.017; m.userData.regionId=r.id; grp.add(m); _globePicks.push(m);
+        addLabel(r, art, wd(s? Math.PI : 0));                              // left comma label left, right comma label right
+      }
+      const sp=_yinSCurve(PR,26).map(([x,y])=> new THREE.Vector3(x,0.021,-y));   // black S divider line
+      const tube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sp), 40, 0.0019, 5, false), lineMat); grp.add(tube);
+    } else {                                                               // equal pie wedges, each a region render slice
+      for (let s=0;s<n;s++){ const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff;
+        const a0=s/n*TWO, aMid=(s+0.5)/n*TWO;
+        const seg=new THREE.Mesh(new THREE.CircleGeometry(PR, 44, a0, TWO/n), new THREE.MeshBasicMaterial({ map:_regionThumb(r) }));
+        seg.rotation.x=-Math.PI/2; seg.position.y=0.017; seg.userData.regionId=r.id; grp.add(seg); _globePicks.push(seg);
+        addLabel(r, art, wd(aMid));
+      }
+      for (let s=0;s<n;s++){ const a=s/n*TWO;                              // black radial dividers
+        const bar=new THREE.Mesh(new THREE.BoxGeometry(PR, 0.003, 0.003), lineMat);
+        bar.position.copy(wd(a).multiplyScalar(PR*0.5)).setY(0.021); bar.rotation.y=a; grp.add(bar); }
     }
-    for (let s=0;s<n;s++){ const a=s/n*TWO;                                 // black radial dividers between sectors
-      const bar=new THREE.Mesh(new THREE.BoxGeometry(PR*0.98, 0.013, 0.013), lineMat);
-      bar.position.copy(wd(a).multiplyScalar(PR*0.49)).setY(0.085); bar.rotation.y=a; grp.add(bar); }
-    const ring=new THREE.Mesh(new THREE.TorusGeometry(PR*0.98, 0.009, 6, 72), lineMat);   // black rim ring (like the single-diorama keyline)
-    ring.rotation.x=Math.PI/2; ring.position.y=0.085; grp.add(ring);
+    const ring=new THREE.Mesh(new THREE.TorusGeometry(PR, 0.0011, 6, 80), lineMat);   // thin black rim ring (matches the single dioramas)
+    ring.rotation.x=Math.PI/2; ring.position.y=0.02; grp.add(ring);
   }
 }
 function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
