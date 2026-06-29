@@ -6980,7 +6980,7 @@ function buildGlobe(){
   globeScene.add(new THREE.HemisphereLight(0xaec2da, 0x222b39, 0.55));   // low neutral fill so the warm sun / cool moon colours dominate the grayscale Earth
   // THE SUN — a real shadow-casting key light placed at the current UTC subsolar point (see _placeGlobeSun). It lives in
   // globeScene (NOT globeSpin), so it's fixed in world space and the day/night terminator sweeps as you spin the globe.
-  globeSun=new THREE.DirectionalLight(0xffcc70, 2.7); globeSun.castShadow=true;   // golden sunlight tints the day side
+  globeSun=new THREE.DirectionalLight(0xffe8c8, 2.7); globeSun.castShadow=true;   // soft warm-white sunlight on the day side (was 0xffcc70 — too golden/orange)
   globeSun.shadow.mapSize.set(2048,2048);
   { const sc=globeSun.shadow.camera; sc.left=-1.35; sc.right=1.35; sc.top=1.35; sc.bottom=-1.35; sc.near=0.1; sc.far=12; sc.updateProjectionMatrix(); }
   globeSun.shadow.bias=-0.0007; globeSun.shadow.normalBias=0.015;
