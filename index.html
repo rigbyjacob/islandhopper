@@ -634,19 +634,19 @@ if (window.SOLOMON) REGIONS.solomon = Object.assign({}, window.SOLOMON, {
 if (window.ARAN) REGIONS.aran = Object.assign({}, window.ARAN, {
   relief: { escale:22, steep:0.70, ridge:1.8, lift:1.6 },
   tour: ['Inishmore','Inishmaan','Inisheer'],
-  seaTint: [0.82, 1.00, 1.05], foam: 0.62,
-  palette: { land: { seabed:0x2a6b7a, wetsand:0xa9a487, sand:0xcfc8a8, grass:0x5a7b46, forest:0x3a5630, rock:0x9a958a, cliff:0x76726a }, shrub: [0x4a6b38, 0x35501f] },
-  flora: { palms:false, density:0.55 },
+  seaTint: [0.50, 0.62, 0.80], foam: 0.62,    // Aran: cold steely Atlantic grey-blue (was near-neutral → looked turquoise)
+  palette: { land: { seabed:0x2a6b7a, wetsand:0xbdb69c, sand:0xd8d2bc, grass:0x8b9669, forest:0x707e55, rock:0xc6bfa8, cliff:0xa9a48e }, shrub: [0x7a8a52, 0x5e6e3e] },   // Aran: PALE grey limestone + thin grey-green grass (was dark green)
+  flora: { palms:false, density:0.18 },   // Aran: sparse — mostly bare limestone, few bushes (let the pale rock read)
   cities: [ [-9.661,53.123,16], [-9.753,53.132,10] ], cityLabels: [ ['Kilronan',-9.661,53.123],['Kilmurvey',-9.753,53.132] ],
   defaults: { timeOfDay:17, atmosphere:0.55, windDirDeg:225, windStrength:18, waveHeight:1.8, stormOn:false, stormIntensity:0.0 },
 });
 // ---- Faroe Islands (basalt sea-cliffs, fjords, low cloud) — resembles sweden (nord) ----
 if (window.FAROE) REGIONS.faroe = Object.assign({}, window.FAROE, {
-  relief: { escale:11, steep:0.90, ridge:2.6, lift:2.4 }, fog: 0.6,   // basalt sea-cliffs in low cloud
+  relief: { escale:11, steep:0.90, ridge:2.6, lift:2.4 }, fog: 0.38,   // basalt sea-cliffs in low cloud (eased so the emerald turf reads)
   tour: ['Streymoy','Vágar','Mykines','Eysturoy','Kalsoy','Borðoy','Viðoy','Suðuroy','Sandoy'],
-  seaTint: [0.78, 0.98, 1.06], foam: 0.85,
-  palette: { land: { seabed:0x21525e, wetsand:0x8f8a72, sand:0xb6ad90, grass:0x3f6b3a, forest:0x274d2a, rock:0x6f6a62, cliff:0x55514a }, shrub: [0x3a5e2e, 0x274018] },
-  flora: { palms:false, density:0.4 },
+  seaTint: [0.46, 0.58, 0.78], foam: 0.85,    // Faroe: deep slate North-Atlantic blue-grey
+  palette: { land: { seabed:0x21525e, wetsand:0x8f8a72, sand:0xb6ad90, grass:0x3f9a42, forest:0x2c7a33, rock:0x4a4742, cliff:0x35322d }, shrub: [0x3a8e38, 0x276b24] },   // Faroe: vivid EMERALD turf over dark basalt (was grey-green over grey rock)
+  flora: { palms:false, density:0.1 },   // Faroe: essentially treeless — bare emerald turf, almost no shrubs
   cities: [ [-6.77,62.01,24], [-6.59,62.23,16], [-7.31,62.07,10] ], cityLabels: [ ['Tórshavn',-6.77,62.01],['Klaksvík',-6.59,62.23],['Sørvágur',-7.31,62.07] ],
   defaults: { timeOfDay:8, atmosphere:0.75, windDirDeg:225, windStrength:22, waveHeight:2.4, stormOn:false, stormIntensity:0.0 },
 });
@@ -654,7 +654,7 @@ if (window.FAROE) REGIONS.faroe = Object.assign({}, window.FAROE, {
 if (window.SKYE) REGIONS.skye = Object.assign({}, window.SKYE, {
   relief: { escale:12, steep:0.85, ridge:2.4, lift:2.2 }, fog: 0.45,   // misty Hebridean light
   tour: ['Soay','Eigg','Muck','Rùm','Canna','Sanday','Raasay'],
-  seaTint: [0.82, 1.00, 1.06], foam: 0.6,
+  seaTint: [0.52, 0.64, 0.78], foam: 0.6,     // Skye: steely Hebridean loch grey-green
   palette: { land: { seabed:0x2a6b78, wetsand:0xa39e80, sand:0xcac2a2, grass:0x4f7440, forest:0x33512c, rock:0x8d887d, cliff:0x6b675f }, shrub: [0x456435, 0x2f4a1d] },
   flora: { palms:false, density:0.7 },
   cities: [ [-6.11,57.15,10], [-6.28,57.01,10], [-5.89,57.07,10] ], cityLabels: [ ['Elgol',-6.11,57.15],['Kinloch',-6.28,57.01],['Armadale',-5.89,57.07] ],
@@ -664,7 +664,7 @@ if (window.SKYE) REGIONS.skye = Object.assign({}, window.SKYE, {
 if (window.MONTAUK) REGIONS.montauk = Object.assign({}, window.MONTAUK, {
   relief: { escale:34, steep:0.45, ridge:1.3, lift:1.3 },
   tour: ['Gardiners','Plum Island','Block Island','Ram Island'],
-  seaTint: [0.84, 1.02, 1.04], foam: 0.5,
+  seaTint: [0.64, 0.76, 0.92], foam: 0.5,     // Montauk: cooler Atlantic blue (milder than the far north)
   palette: { land: { seabed:0x2c6f74, wetsand:0xc9bd92, sand:0xe6dcb4, grass:0x6a874a, forest:0x44602f, rock:0xa89b7e, cliff:0x9a8a6a }, shrub: [0x5a7a3a, 0x3f5526] },
   flora: { palms:false, density:0.8 },
   cities: [ [-71.95,41.04,16], [-72.29,41.00,12], [-73.66,40.59,16], [-73.13,40.63,12] ], cityLabels: [ ['Montauk',-71.95,41.04],['Sag Harbor',-72.29,41.00],['Long Beach',-73.66,40.59],['Fire Island',-73.13,40.63] ],
@@ -672,19 +672,19 @@ if (window.MONTAUK) REGIONS.montauk = Object.assign({}, window.MONTAUK, {
 });
 // ---- Kodiak Archipelago · Alaska (fjords, spruce ridges, fog) — resembles sweden (nord) ----
 if (window.KODIAK) REGIONS.kodiak = Object.assign({}, window.KODIAK, {
-  relief: { escale:13, steep:0.80, ridge:2.2, lift:2.2 }, fog: 0.65,   // cold Alaskan sea fog
+  relief: { escale:13, steep:0.80, ridge:2.2, lift:2.2 }, fog: 0.45,   // cold Alaskan sea fog (eased so the Emerald-Isle green reads)
   tour: ['Spruce','Whale','Afognak','Raspberry','Shuyak','Barren Islands'],
-  seaTint: [0.78, 0.96, 1.04], foam: 0.8,
-  palette: { land: { seabed:0x21525a, wetsand:0x8b8770, sand:0xb0a88c, grass:0x37602f, forest:0x1f3f21, rock:0x6a655c, cliff:0x504c45 }, shrub: [0x2f5226, 0x1d3815] },
+  seaTint: [0.48, 0.60, 0.72], foam: 0.8,     // Kodiak: cold green-grey Alaskan water
+  palette: { land: { seabed:0x21525a, wetsand:0x8b8770, sand:0xb0a88c, grass:0x3f7a34, forest:0x255227, rock:0x6a655c, cliff:0x504c45 }, shrub: [0x356026, 0x214018] },   // Kodiak: brighter "Emerald Isle" spruce green
   flora: { palms:false, density:1.1 },
   cities: [ [-152.41,57.79,20], [-152.50,57.92,10], [-152.88,57.87,10] ], cityLabels: [ ['Kodiak',-152.41,57.79],['Ouzinkie',-152.50,57.92],['Port Lions',-152.88,57.87] ],
   defaults: { timeOfDay:7, atmosphere:0.8, windDirDeg:135, windStrength:18, waveHeight:2.2, stormOn:false, stormIntensity:0.0 },
 });
 // ---- St. John's & Conception Bay · Newfoundland (rust/grey sea-cliffs, fog, cold Atlantic) — resembles sweden (nord) ----
 if (window.STJOHNS) REGIONS.stjohns = Object.assign({}, window.STJOHNS, {
-  relief: { escale:16, steep:0.78, ridge:2.0, lift:1.9 }, fog: 0.6,   // cold Atlantic sea fog
+  relief: { escale:16, steep:0.78, ridge:2.0, lift:1.9 }, fog: 0.45,   // cold Atlantic sea fog (eased so the land reads)
   tour: ['Bell Island'],
-  seaTint: [0.80, 0.98, 1.02], foam: 0.82,
+  seaTint: [0.46, 0.56, 0.74], foam: 0.82,    // Newfoundland: cold slate-navy Atlantic
   palette: { land: { seabed:0x24535b, wetsand:0x968a70, sand:0xb4a98a, grass:0x3c5e34, forest:0x274a28, rock:0x7a6f60, cliff:0x6a5a48 }, shrub: [0x355226, 0x243a16] },
   flora: { palms:false, density:0.7 },
   cities: [ [-52.712,47.561,26], [-52.852,47.617,12], [-52.985,47.525,12] ], cityLabels: [ ["St. John's",-52.712,47.561],['Portugal Cove',-52.852,47.617],['CBS',-52.985,47.525] ],
@@ -694,9 +694,9 @@ if (window.STJOHNS) REGIONS.stjohns = Object.assign({}, window.STJOHNS, {
 if (window.CAPECOD) REGIONS.capecod = Object.assign({}, window.CAPECOD, {
   relief: { escale:34, steep:0.45, ridge:1.3, lift:1.3 },
   tour: ['Nantucket','Muskeget',"Martha's Vineyard",'Cuttyhunk','Naushon'],
-  seaTint: [0.84, 1.00, 1.04], foam: 0.52,
-  palette: { land: { seabed:0x2a6c76, wetsand:0xcabd90, sand:0xe6ddb2, grass:0x6a8a48, forest:0x3f5a30, rock:0xada082, cliff:0x9c906e }, shrub: [0x5a7a38, 0x3f5524] },
-  flora: { palms:false, density:0.85 },
+  seaTint: [0.60, 0.74, 0.90], foam: 0.52,    // Cape Cod: New England slate blue-green
+  palette: { land: { seabed:0x2a6c76, wetsand:0xd8c898, sand:0xeaddae, grass:0xcabd86, forest:0x95a166, rock:0xc8bd9a, cliff:0xb0a684 }, shrub: [0x9aaa66, 0x6e7e44] },   // Cape Cod: pale SAND + sage dune-scrub (it's a sandbar, not forest)
+  flora: { palms:false, density:0.22 },   // Cape Cod: sparse pitch-pine/scrub so the pale sand reads (was dense forest)
   cities: [ [-70.186,42.051,16], [-70.283,41.653,16], [-70.099,41.284,14], [-70.513,41.389,12] ], cityLabels: [ ['Provincetown',-70.186,42.051],['Hyannis',-70.283,41.653],['Nantucket',-70.099,41.284],['Edgartown',-70.513,41.389] ],
   defaults: { timeOfDay:9, atmosphere:0.45, windDirDeg:225, windStrength:14, waveHeight:1.2, stormOn:false, stormIntensity:0.0 },
 });
@@ -704,7 +704,7 @@ if (window.CAPECOD) REGIONS.capecod = Object.assign({}, window.CAPECOD, {
 if (window.EXE) REGIONS.exe = Object.assign({}, window.EXE, {
   relief: { escale:20, steep:0.70, ridge:1.8, lift:1.7 },
   tour: ['Lundy'],
-  seaTint: [0.80, 0.98, 1.0], foam: 0.48,
+  seaTint: [0.56, 0.70, 0.82], foam: 0.48,    // Exe/Devon: muted English Channel grey-green
   palette: { land: { seabed:0x2b6470, wetsand:0xc6a578, sand:0xdcc299, grass:0x5e7e40, forest:0x3c5630, rock:0xb87a52, cliff:0x9c5a3e }, shrub: [0x517036, 0x394e22] },
   flora: { palms:false, density:0.8 },
   cities: [ [-3.413,50.620,16], [-3.467,50.581,12], [-3.494,50.546,12], [-3.525,50.462,16] ], cityLabels: [ ['Exmouth',-3.413,50.620],['Dawlish',-3.467,50.581],['Teignmouth',-3.494,50.546],['Torquay',-3.525,50.462] ],
@@ -5020,7 +5020,7 @@ function buildOcean() {
     const bUv = vec2( positionWorld.x.sub(BATHY_RGN.x0).div(BATHY_RGN.x1-BATHY_RGN.x0),
                       positionWorld.z.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0) );
     const depthN = texture(bathyTex, bUv).r;                                   // 0 surface → 1 deep(~60u compressed)
-    const depthCol = mix(vec3(0.34,0.82,0.90), vec3(0.04,0.16,0.40), clamp(depthN, 0.0, 1.0));   // shallow turquoise → deep blue
+    const depthCol = mix(vec3(0.34,0.82,0.90), vec3(0.04,0.16,0.40), clamp(depthN, 0.0, 1.0)).mul(uSeaTint);   // shallow turquoise → deep blue, cooled per region so the bathy overlay matches cold seas
     const cband = depthN.mul(13.0);                                            // iso-depth contour bands
     const cline = oneMinus(smoothstep(0.0, 0.16, abs(sin(cband.mul(3.14159265)))));
     // CIRCULAR border: radial fade centred on the islands (a natural round edge, not a hard rectangle),
@@ -5450,6 +5450,22 @@ let _heightTex=null;
 const uTerrBnd = uniform(new THREE.Vector4(0,0,1,1));   // x0,z0,x1,z1 world bounds of the height texture
 const _pb = { sea:uniform(new THREE.Vector3()), wet:uniform(new THREE.Vector3()), sand:uniform(new THREE.Vector3()),
               grass:uniform(new THREE.Vector3()), forest:uniform(new THREE.Vector3()), rock:uniform(new THREE.Vector3()), cliff:uniform(new THREE.Vector3()) };
+// Per-region terrain RAMP tuning (elevation/slope at which bare rock appears). Defaults reproduce the original look;
+// lush regions push rock higher so grass/forest climbs the slopes; sandy regions extend the sand band; Stockholm
+// exposes smooth granite on gentle slopes. Driven into the clipmap colour ramp via the _tp uniforms.
+const _tp = { sandTop:uniform(5.0), rockElev:uniform(13.0), rockSlope0:uniform(0.5), rockAmt:uniform(0.8), cliffSlope0:uniform(1.15) };
+const _TERRAIN = {   // cliffSlope0: slope at which dark CLIFF rock appears — raise it on "green" regions so turf/forest climbs steep slopes
+  capecod:{ sandTop:15,  rockElev:40, rockSlope0:1.3,  rockAmt:0.25 },   // glacial sandbar: sand-dominant, almost no bare rock
+  montauk:{ sandTop:9,   rockElev:30, rockSlope0:1.0,  rockAmt:0.40 },
+  faroe:  { sandTop:3.5, rockElev:34, rockSlope0:1.2,  rockAmt:0.30, cliffSlope0:1.75 },   // emerald turf climbs steep basalt; only near-vertical = dark cliff
+  solomon:{ sandTop:4,   rockElev:36, rockSlope0:1.2,  rockAmt:0.28, cliffSlope0:1.8 },    // unbroken rainforest, little bare rock
+  hawaii: { sandTop:4,   rockElev:30, rockSlope0:0.95, rockAmt:0.50, cliffSlope0:1.6 },
+  skye:   { sandTop:4,   rockElev:20, rockSlope0:0.8,  rockAmt:0.55, cliffSlope0:1.5 },
+  kodiak: { sandTop:4,   rockElev:26, rockSlope0:0.95, rockAmt:0.45, cliffSlope0:1.6 },    // emerald spruce up the slopes
+  stjohns:{ sandTop:3.5, rockElev:18, rockSlope0:0.8,  rockAmt:0.5,  cliffSlope0:1.45 },
+  aran:   { sandTop:3,   rockElev:7,  rockSlope0:0.55, rockAmt:0.7  },   // flat pale limestone shows readily (palette is pale)
+  sweden: { sandTop:3,   rockElev:9,  rockSlope0:0.32, rockAmt:0.6  },   // expose smooth granite on low rounded rock
+};
 function _v3(hex,d){ const c=new THREE.Color(hex??d); return new THREE.Vector3(c.r,c.g,c.b); }
 function bakeHeightTex(){
   let a=1e9,b=-1e9,c=1e9,d=-1e9; for (const p of ISLAND_POLYS) for (const v of p.r){ a=Math.min(a,v[0]);b=Math.max(b,v[0]);c=Math.min(c,v[1]);d=Math.max(d,v[1]); }
@@ -5464,6 +5480,8 @@ function bakeHeightTex(){
   const LP=(REGION.palette&&REGION.palette.land)||{};
   _pb.sea.value=_v3(LP.seabed,0x14506b); _pb.wet.value=_v3(LP.wetsand,0xa98c52); _pb.sand.value=_v3(LP.sand,0xe6d6a8);
   _pb.grass.value=_v3(LP.grass,0x4f8a3c); _pb.forest.value=_v3(LP.forest,0x2f6630); _pb.rock.value=_v3(LP.rock,0x7d756a); _pb.cliff.value=_v3(LP.cliff,0x564f47);
+  const T=_TERRAIN[REGION.id]||{};   // per-region rock-ramp tuning (defaults preserve original look)
+  _tp.sandTop.value=T.sandTop??5.0; _tp.rockElev.value=T.rockElev??13.0; _tp.rockSlope0.value=T.rockSlope0??0.5; _tp.rockAmt.value=T.rockAmt??0.8; _tp.cliffSlope0.value=T.cliffSlope0??1.15;
 }
 function _hAt(x,z){ return texture(_heightTex, vec2( x.sub(uTerrBnd.x).div(uTerrBnd.z.sub(uTerrBnd.x)), z.sub(uTerrBnd.y).div(uTerrBnd.w.sub(uTerrBnd.y)) )).r; }
 // tiny TSL value-noise / fbm for the in-shader colour grain + micro-normal shimmer
@@ -5505,11 +5523,11 @@ function buildClipmapTerrain(){
     const wx=positionWorld.x, wz=positionWorld.z;
     const h=_hAt(wx,wz), hL=_hAt(wx.sub(e),wz), hR=_hAt(wx.add(e),wz), hD=_hAt(wx,wz.sub(e)), hU=_hAt(wx,wz.add(e));
     const slope=length(vec2(hR.sub(hL).div(e.mul(2)), hU.sub(hD).div(e.mul(2))));
-    let land=mix(_pb.sand, _pb.grass, smoothstep(1.4,5.0,h));
-    land=mix(land, _pb.forest, smoothstep(5.0,13.0,h));
-    land=mix(land, _pb.rock, smoothstep(13.0,19.0,h));
-    land=mix(land, _pb.rock, smoothstep(0.5,1.1,slope).mul(0.8));
-    land=mix(land, _pb.cliff, smoothstep(1.15,1.85,slope).mul(0.9));
+    let land=mix(_pb.sand, _pb.grass, smoothstep(1.4, _tp.sandTop, h));
+    land=mix(land, _pb.forest, smoothstep(_tp.sandTop, _tp.rockElev, h));
+    land=mix(land, _pb.rock, smoothstep(_tp.rockElev, _tp.rockElev.add(6.0), h));
+    land=mix(land, _pb.rock, smoothstep(_tp.rockSlope0, _tp.rockSlope0.add(0.6), slope).mul(_tp.rockAmt));
+    land=mix(land, _pb.cliff, smoothstep(_tp.cliffSlope0, _tp.cliffSlope0.add(0.7), slope).mul(0.9));
     let shore=mix(_pb.sea, _pb.wet, smoothstep(0.2,0.7,h)); shore=mix(shore, _pb.sand, smoothstep(0.75,1.4,h));
     let col=mix(_pb.sea, shore, smoothstep(0.2,0.35,h));
     col=mix(col, land, smoothstep(1.4,1.6,h));

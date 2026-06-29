@@ -165,4 +165,17 @@ These patterns recur across many regions; fixing them lifts the whole set at onc
 **Best matches:** Thailand (Phang Nga), Hạ Long, El Nido, Hawaii & Cape Cod & Montauk (structure), Japan, Stockholm.
 **Most-wanted fixes:** cold-water tint (#1) and per-region land palettes for Cape Cod (sand), Faroe (emerald), Aran (pale limestone), Solomon (jungle), Hawaii (lava/arid).
 
+---
+
+## Fixes applied (follow-up pass)
+
+Implemented the three systemic levers + targeted per-region tuning:
+
+1. **Cold-water tint** ✅ — strengthened per-region `seaTint` for Aran, Faroe, Skye, Kodiak, Newfoundland, Cape Cod, Montauk, Exe (Sweden was already cool), and made the bathymetry depth-overlay respect the tint so it stays cold too. Cold seas now read steely blue-grey instead of turquoise. *Verified: Aran, Cape Cod, Faroe water clearly cooler.*
+2. **Per-region rock thresholds** ✅ — parameterized the clipmap ramp (sand-band top, forest→rock elevation, slope-rock onset+amount, and cliff-slope onset) with a `_TERRAIN` config. Lush regions (Faroe, Solomon, Hawaii, Skye, Kodiak) now keep grass/forest up the slopes; Stockholm exposes granite lower; sandy regions extend the sand band. Defaults reproduce the original look for untuned regions.
+3. **Per-region land palettes + flora density** ✅ — Aran → pale limestone (+ sparse flora), Cape Cod → pale sand + sage scrub (+ sparse flora), Faroe → emerald turf over dark basalt (+ near-treeless), Kodiak → brighter "Emerald Isle" spruce. Eased the heavy fog on Faroe / Kodiak / Newfoundland so the land colour reads.
+
+**Verified improvements:** Aran (pale limestone + cold water), Cape Cod (pale sand + sage, cooler water), Faroe (cooler water, lighter fog, emerald on the flanks).
+**Still partial:** Faroe/Skye peaks stay dark — their `relief` config makes very spiky terrain so the upper slopes exceed even the raised cliff threshold (realistic for basalt peaks, but full-emerald would need a less-spiky relief pass). Hawaii lava/arid and town-colour signatures remain future work.
+
 
