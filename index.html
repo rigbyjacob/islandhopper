@@ -1939,6 +1939,10 @@ async function init() {
 const uSunDir  = uniform(new THREE.Vector3(0.4, 0.8, 0.3));
 const uSunCol  = uniform(new THREE.Vector3(1, 0.96, 0.85));
 const uSunInt  = uniform(1.0);
+// ---- ALIEN-PLANET skin (cosmetic world theme, on top of any region): a 2nd sun + violet/teal sky + thick-gas sea ----
+const uAlien    = uniform(0.0);                              // 0 = Earth, 1 = alien (eased)
+const uSun2Dir  = uniform(new THREE.Vector3(-0.5, 0.5, -0.4));
+const uSun2Col  = uniform(new THREE.Vector3(1.0, 0.45, 0.5));   // a smaller ruddy companion sun
 const uZenith  = uniform(new THREE.Vector3(0.12, 0.43, 0.78));
 const uHorizon = uniform(new THREE.Vector3(0.76, 0.88, 0.96));
 const uGradeSat  = uniform(1.0);                       // art-style scene saturation for the WATER shader (1=normal, 0=gray)
@@ -6673,15 +6677,15 @@ function buildRegionPatch(r){
 function buildGlobe(){
   globeScene=new THREE.Scene();
   globeCam=new THREE.PerspectiveCamera(38, window.innerWidth/window.innerHeight, 0.1, 100); globeCam.position.set(0,0,_globeZ);
-  globeScene.add(new THREE.HemisphereLight(0xbcd0e6, 0x26303f, 0.8));    // sky fill — keeps the night side readable (moon adds more), while day/night still reads
+  globeScene.add(new THREE.HemisphereLight(0xaec2da, 0x222b39, 0.55));   // low neutral fill so the warm sun / cool moon colours dominate the grayscale Earth
   // THE SUN — a real shadow-casting key light placed at the current UTC subsolar point (see _placeGlobeSun). It lives in
   // globeScene (NOT globeSpin), so it's fixed in world space and the day/night terminator sweeps as you spin the globe.
-  globeSun=new THREE.DirectionalLight(0xfff4e2, 2.5); globeSun.castShadow=true;
+  globeSun=new THREE.DirectionalLight(0xffcc70, 2.7); globeSun.castShadow=true;   // golden sunlight tints the day side
   globeSun.shadow.mapSize.set(2048,2048);
   { const sc=globeSun.shadow.camera; sc.left=-1.35; sc.right=1.35; sc.top=1.35; sc.bottom=-1.35; sc.near=0.1; sc.far=12; sc.updateProjectionMatrix(); }
   globeSun.shadow.bias=-0.0007; globeSun.shadow.normalBias=0.015;
   globeScene.add(globeSun); globeScene.add(globeSun.target);
-  globeMoon=new THREE.DirectionalLight(0xb9c6ff, 1.1);                   // cool moonlight on the night side (anti-solar) — bright enough to read the dark-side dioramas
+  globeMoon=new THREE.DirectionalLight(0x9fc0ff, 1.25);                  // silvery moonlight tints the night side (anti-solar), bright enough to read the dark-side dioramas
   globeScene.add(globeMoon); globeScene.add(globeMoon.target);
   const sg=new THREE.BufferGeometry(), N=700, sp=new Float32Array(N*3);
   for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(40+Math.random()*25); sp.set([v.x,v.y,v.z], i*3); }
@@ -6689,7 +6693,8 @@ function buildGlobe(){
   globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color:0xbcd4ff, size:0.16, sizeAttenuation:true, transparent:true, opacity:0.85 })));
   globeSpin=new THREE.Group(); globeScene.add(globeSpin);
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
-  if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03; }   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
+  if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03;   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
+    oceanMatOpts.bumpMap=dt; oceanMatOpts.bumpScale=3.5; }   // perturb normals from the height map so the relief actually catches the sun/moon (slope shading + crisp terminator) — displacement alone keeps flat radial normals
   const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R,360,180), new THREE.MeshStandardMaterial(oceanMatOpts));
   ocean.castShadow=true; ocean.receiveShadow=true;   // displacement relief self-shadows + receives diorama shadows
   globeSpin.add(ocean);
@@ -6793,7 +6798,7 @@ function _emitSectionRegion(grp, id, geo, cx, cy, half, labelDir, R, ox, oz, cN,
   _regionLabels.push({ id, spr:lab, n:cN.clone() });
   // glow outline following the section's shape (additive region colour), hidden until focused
   const gpts=perim.map(([x,y])=> new THREE.Vector3(ox+x, 0, oz-y));
-  const gtube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(gpts, !!closed), gpts.length*2, R*0.045, 6, !!closed),
+  const gtube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(gpts, !!closed), gpts.length*2, R*0.022, 6, !!closed),
     new THREE.MeshBasicMaterial({ color:art, transparent:true, opacity:0, blending:THREE.AdditiveBlending, depthWrite:false }));
   gtube.position.y=0.024; grp.add(gtube);
   _comboSections.push({ mesh:m, lab, glow:gtube, gmat:gtube.material, gY:0.024, id, baseY:0.017 });
