@@ -309,6 +309,7 @@ const P = {
   tideOn: true,
   stormOn: false, stormIntensity: 0.05,
   fog: 0,             // extra fog/haze added on top of the region's own fog (0 = none → 1 = pea-soup)
+  alien: false,       // ALIEN-planet cosmetic skin: 2nd ruddy sun, violet sky, toxic-green gas sea (on top of any region)
   volcanoAuto: false,   // periodic self-triggering eruptions (like the storm switch)
   waveHeight: 1.0,    // sea state / swell amplitude — independent of storm (low enough islands stay afloat)
   paused: false,
@@ -2028,7 +2029,7 @@ const uTargetCol  = uniform(new THREE.Vector3(1,0.5,0.15));
 const uTargetGlow = uniform(0.0);
 const uTargetRad  = uniform(120.0);
 
-let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, seaSkirt, oceanMat;
+let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, sun2Light, seaSkirt, oceanMat;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
 const _sunScreen = new THREE.Vector3();   // sun projected to NDC each frame (god rays)
 const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3(), _shSun=new THREE.Vector3();
@@ -2060,6 +2061,11 @@ function buildSky() {
     // through as a deep-red ball instead of a white moon. Broad warm halo stays.
     const glow = pow(sd, 13.0).mul(0.30).add(pow(sd, 280.0).mul(mix(7.0, 1.4, uWarm)));
     col.addAssign(uSunCol.mul(glow).mul(uSunInt));
+    // ALIEN: violet/indigo sky shift + a ruddy COMPANION sun (only when uAlien>0)
+    col.assign(mix(col, col.mul(vec3(0.72,0.52,1.15)).add(vec3(0.05,0.0,0.12)), uAlien));
+    const sun2V = normalize(vec3(uSun2Dir.x, uSun2Dir.y.sub(uHorizonDrop), uSun2Dir.z));
+    const s2 = max(dot(vd, sun2V), 0.0);
+    col.addAssign(uSun2Col.mul(pow(s2,14.0).mul(0.30).add(pow(s2,340.0).mul(5.0))).mul(uAlien));
     // moon — small cool disk + faint halo, rises at night
     const moonV = normalize(vec3(uMoonDir.x, uMoonDir.y.sub(uHorizonDrop), uMoonDir.z));
     const md = max(dot(vd, moonV), 0.0);
@@ -2167,6 +2173,8 @@ function buildLights() {
   // soft cool moonlight — a second directional light that fades in at night (no shadows, keeps it cheap)
   moonLight = new THREE.DirectionalLight(0xb9c6ff, 0.0);
   moonLight.position.set(-300, 500, -260); scene.add(moonLight); scene.add(moonLight.target);
+  sun2Light = new THREE.DirectionalLight(0xff6678, 0.0);   // alien companion sun key light (no shadow; intensity rises with uAlien)
+  sun2Light.position.set(-400, 400, -300); scene.add(sun2Light); scene.add(sun2Light.target);
   hemiLight = new THREE.HemisphereLight(0xbfe6ff, 0x35506b, 0.9); scene.add(hemiLight);
 }
 
@@ -2957,6 +2965,13 @@ function updateEnvironment(dt) {
     moonLight.position.set(boat3.x + _moon.x*Dm, Math.max(_moon.y,0.1)*Dm + 60, boat3.z + _moon.z*Dm);
     moonLight.target.position.set(boat3.x, 0, boat3.z); moonLight.target.updateMatrixWorld();
   }
+  // ALIEN skin: ease the theme in/out, place the companion sun (offset in azimuth from the main sun) + its key light
+  uAlien.value += ((P.alien?1:0) - uAlien.value) * 0.08;
+  { const ca=Math.cos(2.3), sa=Math.sin(2.3);
+    uSun2Dir.value.set(_sun.x*ca - _sun.z*sa, _sun.y*0.55+0.18, _sun.x*sa + _sun.z*ca).normalize();
+    if (sun2Light){ sun2Light.intensity = uAlien.value * 1.9;
+      sun2Light.position.set(boat3.x + uSun2Dir.value.x*600, uSun2Dir.value.y*600+40, boat3.z + uSun2Dir.value.z*600);
+      sun2Light.target.position.set(boat3.x, 0, boat3.z); sun2Light.target.updateMatrixWorld(); } }
   if (islandLightsGroup) {
     islandLightsGroup.visible = uNight.value > 0.02;
     if (islandLightsGroup.visible){
@@ -4833,7 +4848,8 @@ function buildOcean() {
                         positionWorld.z.sub(BATHY_RGN.z0).div(BATHY_RGN.z1-BATHY_RGN.z0) );
     const _coastN = texture(bathyTex, clamp(_shUV, vec2(0.0), vec2(1.0))).g;   // distance to nearest coast (0 shore → 1 far)
     const _distFade = oneMinus(smoothstep(0.42, 0.85, _coastN));               // full across the lagoon/near-shore water → tapers out only in the DEEP open sea (middle ground: not clipped at the shore, not infinite)
-    oceanMat.colorNode = oceanColor().mul( _sunShadowMul(_distFade) );
+    const _ocb = oceanColor().mul( _sunShadowMul(_distFade) );
+    oceanMat.colorNode = mix(_ocb, _ocb.mul(vec3(0.5,0.95,0.78)).add(vec3(0.0,0.03,0.02)), uAlien.mul(0.6));   // ALIEN: thick green/teal "gas" sea (gentle so it doesn't blow out at the horizon)
   }
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
@@ -6245,6 +6261,7 @@ function buildPanel() {
   ui.rainTog = addToggle(s, 'Rain on lens (storms)', P, 'rainLens', (on)=>{ if (on) enableRain(); else disableRain(); });
   ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
   addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
+  addToggle(s, 'Alien planet (2 suns)', P, 'alien');
   addToggle(s, 'Route path (wedge markers)', P, 'showPath');   // the ship/sub wedge route — independent of the debug view below
   addToggle(s, 'Sounds', P, 'music', setMusic);
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
