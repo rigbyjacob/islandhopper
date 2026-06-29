@@ -7365,7 +7365,14 @@ function _gPointerMove(e){ if(!worldMapOpen || _pinching) return;
   globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), dy*0.0045);
   _globeVel.y=clampJS(_globeVel.y*0.35 + dx*0.0011*0.65, -0.05, 0.05);   // smoothed, speed-scaled flick velocity (capped)
   _globeVel.x=clampJS(_globeVel.x*0.35 + dy*0.0011*0.65, -0.05, 0.05); }
-function _gPointerUp(){ _globeDrag=null; }
+function _gPointerUp(e){
+  // TAP detection on pointerup (more reliable on touch than the synthetic 'click', which pointer-capture + touch-action
+  // often swallows): a near-stationary release that wasn't a pinch dives the region under it, else the centred one.
+  if (worldMapOpen && !_pinching && !_pinchSuppress && _globeMoved<8 && e && e.clientX!=null && !_diveZoom && !_globeRise && !_diveAfterSlerp){
+    const id=_globeRegionAt(e) || _globeFocus; if(id) travelToRegion(id);
+  }
+  _globeDrag=null;
+}
 function _gClick(e){ if(!worldMapOpen || _globeMoved>10 || _pinchSuppress) return;   // a real tap (not the end of a spin/pinch)
   // tap a region marker to dive; if the tap misses the small marker (common on touch), fall back to the FOCUSED
   // (centred) region — so on mobile you spin a region to centre, then just tap to dive in.
