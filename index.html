@@ -6505,7 +6505,7 @@ const REGION_META = {
   apo:       { tag:'Apo, Dauin & Siquijor',blurb:'Volcanic isles & clear reefs' },
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
-let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[];
+let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[], _comboLenses=[];
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
@@ -6752,7 +6752,49 @@ function _remapUVCentered(geo, cx, cy, half){ const p=geo.attributes.position, u
 // When region dioramas sit close enough to overlap on the globe, merge that cluster into ONE small disc whose SECTIONS
 // are each textured with a render of that region (yin-yang for 2, equal pie wedges for 3–5), divided by black lines,
 // labels at the rim. Clicking a section dives that region.
+const _CLINE=new THREE.MeshBasicMaterial({ color:0x05080d });   // black divider/ring material
+function _splitEqual(arr,k){ const out=Array.from({length:k},()=>[]); arr.forEach((x,i)=>out[i%k].push(x)); return out; }
+// emit ONE region into a section mesh (geo centered at origin), UV-centered so the region fills the section, + pick + label
+function _emitSectionRegion(grp, id, geo, cx, cy, half, labelDir, R, ox, oz, cN, lblS){
+  _remapUVCentered(geo, cx, cy, half);
+  const r=REGIONS[id], art=REGION_ART_COL[r?.id]||0x86d8ff;
+  const tex=_regionThumb(r);
+  const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map:tex }));
+  m.rotation.x=-Math.PI/2; m.position.set(ox,0.017,oz); m.userData.regionId=id; grp.add(m); _globePicks.push(m);
+  _comboLenses.push({ tex, cN });   // the section is a "lens" onto its region map; the map scrolls as the arcball turns
+  const me=REGION_META[id]||{ tag:(r&&r.name)||id };
+  const lab=_globeLabel(me.tag, art); lab.scale.multiplyScalar(lblS);
+  lab.position.set(ox+labelDir.x*R*1.22, 0.05, oz+labelDir.z*R*1.22); lab.material.opacity=0; grp.add(lab);
+  _regionLabels.push({ id, spr:lab, n:cN.clone() });
+}
+// recursively lay a set of region ids into a disc at local (ox,oz) radius R: 2=yin-yang, 3-5=equal wedges,
+// >5 = split into ≤5 equal piles and recurse each pile into a smaller sub-disc within its section.
+function _emitCluster(grp, ids, ox, oz, R, cN, depth){
+  const n=ids.length, TWO=Math.PI*2, wd=(p)=>new THREE.Vector3(Math.cos(p),0,-Math.sin(p)), lblS=depth>0?0.30:0.40;
+  const ring=()=>{ const t=new THREE.Mesh(new THREE.TorusGeometry(R, 0.0011, 6, 80), _CLINE); t.rotation.x=Math.PI/2; t.position.set(ox,0.02,oz); grp.add(t); };
+  if (n===1){ _emitSectionRegion(grp, ids[0], new THREE.CircleGeometry(R, 44), 0, 0, R*0.8, new THREE.Vector3(0,0,1), R, ox, oz, cN, lblS); ring(); return; }
+  let k, piles;
+  if (n<=5){ k=n; piles=ids.map(x=>[x]); } else { k=Math.min(5, Math.ceil(n/5)); piles=_splitEqual(ids, k); }
+  if (k===2){
+    for (let s=0;s<2;s++){ const cx=(s?-1:1)*R*0.42;
+      if (piles[s].length===1) _emitSectionRegion(grp, piles[s][0], new THREE.ShapeGeometry(_yinShape(R,s),30), cx, 0, R*0.72, wd(s?Math.PI:0), R, ox, oz, cN, lblS);
+      else _emitCluster(grp, piles[s], ox+cx, oz, R*0.46, cN, depth+1);
+    }
+    const sp=_yinSCurve(R,26).map(([x,y])=> new THREE.Vector3(ox+x,0.021,oz-y));
+    grp.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sp),40,0.0019,5,false), _CLINE));
+  } else {
+    for (let s=0;s<k;s++){ const a0=s/k*TWO, aMid=(s+0.5)/k*TWO, dir=wd(aMid);
+      if (piles[s].length===1) _emitSectionRegion(grp, piles[s][0], new THREE.CircleGeometry(R,44,a0,TWO/k), Math.cos(aMid)*R*0.55, Math.sin(aMid)*R*0.55, R*0.6, dir, R, ox, oz, cN, lblS);
+      else _emitCluster(grp, piles[s], ox+dir.x*R*0.5, oz+dir.z*R*0.5, R*0.32, cN, depth+1);
+    }
+    for (let s=0;s<k;s++){ const a=s/k*TWO, d=wd(a);
+      const bar=new THREE.Mesh(new THREE.BoxGeometry(R, 0.003, 0.003), _CLINE);
+      bar.position.set(ox+d.x*R*0.5, 0.021, oz+d.z*R*0.5); bar.rotation.y=a; grp.add(bar); }
+  }
+  ring();
+}
 function _buildClusterDioramas(){
+  _comboLenses=[];
   const ds=_regionDioramas, N=ds.length; if (N<2) return;
   const COS_TH=Math.cos(9*Math.PI/180);                                    // tighter now the combined disc is small
   const adj=Array.from({length:N},()=>[]);
@@ -6772,38 +6814,12 @@ function _buildClusterDioramas(){
       let p1=_globePicks.indexOf(d.patch); if(p1>=0) _globePicks.splice(p1,1);
       let p2=_globePicks.indexOf(d.marker); if(p2>=0) _globePicks.splice(p2,1);
     }
-    const n=members.length, PR=0.085 + 0.006*Math.min(n,5);                // SMALL — roughly a single diorama's footprint (wider only, not taller)
+    const PR=0.085 + 0.006*Math.min(members.length,5);                     // SMALL — roughly a single diorama's footprint (wider only, not taller)
     const grp=new THREE.Group(); _placeOnSphereV(grp, cN, GLOBE_R-0.006); globeSpin.add(grp);
     const base=new THREE.Mesh(new THREE.CylinderGeometry(PR*1.06, PR*0.97, 0.018, 80),   // THIN plinth → seats flush like the single dioramas
       new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
     base.position.y=0.006; grp.add(base);
-    const addLabel=(r,art,dir)=>{ const m=REGION_META[r.id]||{ tag:r.name||r.id };
-      const lab=_globeLabel(m.tag, art); lab.scale.multiplyScalar(0.4);   // normal region-name size
-      lab.position.copy(dir.clone().multiplyScalar(PR*1.22)).setY(0.05); lab.material.opacity=0; grp.add(lab);
-      _regionLabels.push({ id:r.id, spr:lab, n:cN.clone() }); };
-    if (n===2){                                                            // ☯ true yin-yang: two interlocking commas, each a region render
-      for (let s=0;s<2;s++){ const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff;
-        const geo=new THREE.ShapeGeometry(_yinShape(PR, s), 30); _remapUVCentered(geo, (s?-1:1)*PR*0.42, 0, PR*0.72);   // center each region in its comma
-        const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map:_regionThumb(r) }));
-        m.rotation.x=-Math.PI/2; m.position.y=0.017; m.userData.regionId=r.id; grp.add(m); _globePicks.push(m);
-        addLabel(r, art, wd(s? Math.PI : 0));                              // left comma label left, right comma label right
-      }
-      const sp=_yinSCurve(PR,26).map(([x,y])=> new THREE.Vector3(x,0.021,-y));   // black S divider line
-      const tube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sp), 40, 0.0019, 5, false), lineMat); grp.add(tube);
-    } else {                                                               // equal pie wedges, each a region render slice
-      for (let s=0;s<n;s++){ const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff;
-        const a0=s/n*TWO, aMid=(s+0.5)/n*TWO;
-        const sgeo=new THREE.CircleGeometry(PR, 44, a0, TWO/n); _remapUVCentered(sgeo, Math.cos(aMid)*PR*0.55, Math.sin(aMid)*PR*0.55, PR*0.6);   // center each region in its wedge
-        const seg=new THREE.Mesh(sgeo, new THREE.MeshBasicMaterial({ map:_regionThumb(r) }));
-        seg.rotation.x=-Math.PI/2; seg.position.y=0.017; seg.userData.regionId=r.id; grp.add(seg); _globePicks.push(seg);
-        addLabel(r, art, wd(aMid));
-      }
-      for (let s=0;s<n;s++){ const a=s/n*TWO;                              // black radial dividers
-        const bar=new THREE.Mesh(new THREE.BoxGeometry(PR, 0.003, 0.003), lineMat);
-        bar.position.copy(wd(a).multiplyScalar(PR*0.5)).setY(0.021); bar.rotation.y=a; grp.add(bar); }
-    }
-    const ring=new THREE.Mesh(new THREE.TorusGeometry(PR, 0.0011, 6, 80), lineMat);   // thin black rim ring (matches the single dioramas)
-    ring.rotation.x=Math.PI/2; ring.position.y=0.02; grp.add(ring);
+    _emitCluster(grp, members.map(m=>m.id), 0, 0, PR, cN, 0);              // recursive: 2=yin-yang, 3-5=wedges, >5=piles→nested
   }
 }
 function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
@@ -6925,6 +6941,11 @@ function updateGlobe(dt){
     const tgt=clampJS((wn.z-0.1)/0.35, 0, 1);
     L.spr.material.opacity += (tgt - L.spr.material.opacity)*ease;
     L.spr.visible = L.spr.material.opacity > 0.02; }
+  // LENS PARALLAX: each combined sub-diorama is a window onto its region map; scroll the map as the arcball turns,
+  // like a magnifier pulled across a chart (centred when the cluster faces front, panning as it rotates off-centre).
+  const PAN=0.6;
+  for (const L of _comboLenses){ const wn=L.cN.clone().applyQuaternion(globeSpin.quaternion);
+    L.tex.offset.set(wn.x*PAN, wn.y*PAN); }
 }
 let _globeMoved=0;
 function _gPointerDown(e){ if(!worldMapOpen) return; _globeDrag={x:e.clientX,y:e.clientY}; _globeMoved=0; _globeVel.x=_globeVel.y=0; _hoverId=null;
