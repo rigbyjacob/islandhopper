@@ -7,7 +7,11 @@
 <style>
   :root { color-scheme: dark; --pad: 12px; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #06121f;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  /* taps on the canvas/UI must NOT start a text selection (the iOS/Android "select / copy" popup was eating taps and
+     covering the tilt/fullscreen buttons). Re-enable selection only inside real text fields. */
+  input, textarea { -webkit-user-select: text; user-select: text; }
   #app { position: fixed; inset: 0; background: #000; }
   canvas { display: block; }
 
@@ -5793,22 +5797,17 @@ function _deviceQuat(out, aDeg,bDeg,gDeg,orientDeg){ const R=Math.PI/180;
 const _gq=new THREE.Quaternion(), _gqOff=new THREE.Quaternion(), _gFwd=new THREE.Vector3();
 function updateFlyCam(dt){
   const K=flyState.keys, boost=K['shift']?2.6:1.0;
-  let fx,fy,fz, gyro=false;
-  // MOBILE GYRO LOOK (free cam): the camera points exactly where the phone points — hold it up and turn around to look
-  // 360°, like a window into the world. Anchored on enable so the heading doesn't snap; movement follows the gaze.
+  // MOBILE TILT → incremental view look (free cam): tilt left/right pans, tilt fwd/back pitches. (The full "gyro window"
+  // mapping is being dialled in separately in gyro-helper.html — this incremental version is the functional fallback.)
   if (_tiltOn && _devHas && !worldMapOpen){
-    gyro=true;
-    const orient=((screen.orientation&&screen.orientation.angle)||window.orientation||0);
-    _deviceQuat(_gq, _devA, _devB, _devG, orient);
-    if (!_gyroAnchored){ _gFwd.set(0,0,-1).applyQuaternion(_gq); _gyroYawOff = flyState.yaw - Math.atan2(_gFwd.z,_gFwd.x); _gyroAnchored=true; }
-    _gqOff.setFromAxisAngle(_UP, _gyroYawOff);               // world-up offset so we keep the heading you had when enabling
-    flyCam.quaternion.copy(_gqOff).multiply(_gq);
-    _gFwd.set(0,0,-1).applyQuaternion(flyCam.quaternion); fx=_gFwd.x; fy=_gFwd.y; fz=_gFwd.z;
-    flyState.yaw=Math.atan2(fz,fx); flyState.pitch=clampJS(Math.asin(clampJS(fy,-1,1)),-1.45,1.45);   // keep in sync for a clean hand-off when tilt turns off
-  } else {
-    const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
-    fx=cy*cp; fy=sp2; fz=sy*cp;                                  // forward
+    const RZ=0.05;
+    const tx = Math.abs(_tiltX)>RZ ? (_tiltX-Math.sign(_tiltX)*RZ) : 0;
+    const ty = Math.abs(_tiltY)>RZ ? (_tiltY-Math.sign(_tiltY)*RZ) : 0;
+    flyState.yaw  += tx * 1.7 * dt;
+    flyState.pitch = clampJS(flyState.pitch + ty * 1.5 * dt, -1.45, 1.45);
   }
+  const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
+  const fx=cy*cp, fy=sp2, fz=sy*cp;                                  // forward
   const rx=Math.cos(flyState.yaw+Math.PI/2), rz=Math.sin(flyState.yaw+Math.PI/2);   // right (horizontal)
   const p=flyState.pos;
   const fwd=K['w']||K['arrowup'], bk=K['s']||K['arrowdown'], lf=K['a']||K['arrowleft'], rt=K['d']||K['arrowright'];
@@ -7264,7 +7263,7 @@ function updateGlobe(dt){
     return; }
   if (!_globeDrag && !_globeLevel){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // flick momentum — fast pulls keep spinning, slow drags settle at once
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
-    _globeVel.x*=0.93; _globeVel.y*=0.93;                                                // friction → glide that settles (was 0.955; firmer so you can land on a spot)
+    _globeVel.x*=0.945; _globeVel.y*=0.945;                                              // friction → a weightier glide that still settles
     if(Math.abs(_globeVel.x)<5e-5) _globeVel.x=0; if(Math.abs(_globeVel.y)<5e-5) _globeVel.y=0; }
   // DEVICE-TILT ROLL: a marble on a tray. _tiltX/_tiltY = screen-frame downhill (sin units); the globe rolls
   // downhill while staying centred — tilt right → it rolls right (the left side rotates into view); flat → it stops.
@@ -7276,8 +7275,8 @@ function updateGlobe(dt){
     // builds up and glides down smoothly (the momentum block above applies + decays it = friction). Reversed dirs
     // (tilt right brings the right side toward you), which testers preferred. Far easier to coast onto a region.
     const _tvY = -_gx*_rate, _tvX = -_gy*_rate;
-    _globeVel.y += (_tvY - _globeVel.y) * 0.08;
-    _globeVel.x += (_tvX - _globeVel.x) * 0.08;
+    _globeVel.y += (_tvY - _globeVel.y) * 0.055;   // gentler ease → more inertia (weightier build-up & glide)
+    _globeVel.x += (_tvX - _globeVel.x) * 0.055;
     if (_gx||_gy){ _globeIdle=0; _globeLevel=null; }                                     // active tilt cancels the idle auto-level
   }
   // idle auto-level: after 30s untouched, ease the north pole back upright (arcball drag can leave the globe rolled/tilted)
@@ -7369,7 +7368,11 @@ function _gPointerUp(e){
   // TAP detection on pointerup (more reliable on touch than the synthetic 'click', which pointer-capture + touch-action
   // often swallows): a near-stationary release that wasn't a pinch dives the region under it, else the centred one.
   if (worldMapOpen && !_pinching && !_pinchSuppress && _globeMoved<8 && e && e.clientX!=null && !_diveZoom && !_globeRise && !_diveAfterSlerp){
-    const id=_globeRegionAt(e) || _globeFocus; if(id) travelToRegion(id);
+    const id=_globeRegionAt(e) || _globeFocus;
+    try{ console.log('[globe tap]', { x:Math.round(e.clientX), y:Math.round(e.clientY), moved:Math.round(_globeMoved), hit:_globeRegionAt(e), focus:_globeFocus, dive:id }); }catch(_){}
+    if(id) travelToRegion(id);
+  } else if (worldMapOpen && e && e.clientX!=null){
+    try{ console.log('[globe up — no tap]', { moved:Math.round(_globeMoved), pinching:_pinching, suppress:_pinchSuppress }); }catch(_){}
   }
   _globeDrag=null;
 }
