@@ -72,6 +72,8 @@
     border-radius: 11px; background: rgba(8,18,30,.5); backdrop-filter: blur(8px); border: 1px solid rgba(140,200,255,.22);
     color: #cfe2f5; font: 600 18px ui-sans-serif, system-ui; user-select: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   #fsbtn.on { background: rgba(40,120,90,.62); border-color: rgba(120,255,190,.5); color: #eafff4; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 116; opacity: 0;
+    background: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 32%, rgba(2,4,10,.55) 76%, rgba(1,2,6,.92) 100%); }
   #demobar .demo-nav { font-size: 22px; line-height: 1; padding: 2px 9px; cursor: pointer; opacity: .7; border-radius: 8px; user-select: none; }
   #demobar .demo-nav:hover { opacity: 1; background: rgba(140,200,255,.14); }
   #demobar .demo-mid { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
@@ -638,7 +640,7 @@ if (window.ARAN) REGIONS.aran = Object.assign({}, window.ARAN, {
 });
 // ---- Faroe Islands (basalt sea-cliffs, fjords, low cloud) — resembles sweden (nord) ----
 if (window.FAROE) REGIONS.faroe = Object.assign({}, window.FAROE, {
-  relief: { escale:11, steep:0.90, ridge:2.6, lift:2.4 },
+  relief: { escale:11, steep:0.90, ridge:2.6, lift:2.4 }, fog: 0.6,   // basalt sea-cliffs in low cloud
   tour: ['Streymoy','Vágar','Mykines','Eysturoy','Kalsoy','Borðoy','Viðoy','Suðuroy','Sandoy'],
   seaTint: [0.78, 0.98, 1.06], foam: 0.85,
   palette: { land: { seabed:0x21525e, wetsand:0x8f8a72, sand:0xb6ad90, grass:0x3f6b3a, forest:0x274d2a, rock:0x6f6a62, cliff:0x55514a }, shrub: [0x3a5e2e, 0x274018] },
@@ -648,7 +650,7 @@ if (window.FAROE) REGIONS.faroe = Object.assign({}, window.FAROE, {
 });
 // ---- Small Isles & Skye · Inner Hebrides (Cuillin peaks, sea-lochs, misty light) — resembles sweden (temp) ----
 if (window.SKYE) REGIONS.skye = Object.assign({}, window.SKYE, {
-  relief: { escale:12, steep:0.85, ridge:2.4, lift:2.2 },
+  relief: { escale:12, steep:0.85, ridge:2.4, lift:2.2 }, fog: 0.45,   // misty Hebridean light
   tour: ['Soay','Eigg','Muck','Rùm','Canna','Sanday','Raasay'],
   seaTint: [0.82, 1.00, 1.06], foam: 0.6,
   palette: { land: { seabed:0x2a6b78, wetsand:0xa39e80, sand:0xcac2a2, grass:0x4f7440, forest:0x33512c, rock:0x8d887d, cliff:0x6b675f }, shrub: [0x456435, 0x2f4a1d] },
@@ -668,7 +670,7 @@ if (window.MONTAUK) REGIONS.montauk = Object.assign({}, window.MONTAUK, {
 });
 // ---- Kodiak Archipelago · Alaska (fjords, spruce ridges, fog) — resembles sweden (nord) ----
 if (window.KODIAK) REGIONS.kodiak = Object.assign({}, window.KODIAK, {
-  relief: { escale:13, steep:0.80, ridge:2.2, lift:2.2 },
+  relief: { escale:13, steep:0.80, ridge:2.2, lift:2.2 }, fog: 0.65,   // cold Alaskan sea fog
   tour: ['Spruce','Whale','Afognak','Raspberry','Shuyak','Barren Islands'],
   seaTint: [0.78, 0.96, 1.04], foam: 0.8,
   palette: { land: { seabed:0x21525a, wetsand:0x8b8770, sand:0xb0a88c, grass:0x37602f, forest:0x1f3f21, rock:0x6a655c, cliff:0x504c45 }, shrub: [0x2f5226, 0x1d3815] },
@@ -678,7 +680,7 @@ if (window.KODIAK) REGIONS.kodiak = Object.assign({}, window.KODIAK, {
 });
 // ---- St. John's & Conception Bay · Newfoundland (rust/grey sea-cliffs, fog, cold Atlantic) — resembles sweden (nord) ----
 if (window.STJOHNS) REGIONS.stjohns = Object.assign({}, window.STJOHNS, {
-  relief: { escale:16, steep:0.78, ridge:2.0, lift:1.9 },
+  relief: { escale:16, steep:0.78, ridge:2.0, lift:1.9 }, fog: 0.6,   // cold Atlantic sea fog
   tour: ['Bell Island'],
   seaTint: [0.80, 0.98, 1.02], foam: 0.82,
   palette: { land: { seabed:0x24535b, wetsand:0x968a70, sand:0xb4a98a, grass:0x3c5e34, forest:0x274a28, rock:0x7a6f60, cliff:0x6a5a48 }, shrub: [0x355226, 0x243a16] },
@@ -1837,6 +1839,7 @@ async function init() {
     if (P.lodTerrain) updateClipmapTerrain();   // resample the focus-centred clipmap rings as the boat moves
     if (_descent){ _descent.t += dt/_descent.dur; const k=Math.min(_descent.t,1);
       _diveFade(Math.max(0, 1 - k/0.20), REGION.id);                                   // clear the cloud cover FAST → reveal the establishing shot first
+      _setVignette((1-k)*(1-k)*0.85);                                                  // hand off from the zoom-in peak → ease the vignette open as we settle
       // Dive straight onto whatever the Director is filming: the ship by default, or the focused vehicle (demo sticky
       // camera) — so a dive into e.g. the Plane scenario descends right onto the plane instead of the ship-then-cut.
       const _ds=(typeof dirSubjectId!=='undefined'&&dirSubjectId!=='ship')?FLEET.find(v=>v.id===dirSubjectId):null;
@@ -1852,11 +1855,13 @@ async function init() {
       flyCam.position.copy(flyState.pos); flyCam.quaternion.copy(_descent.fromQuat).slerp(_toQ, e);
       const _f=new THREE.Vector3(0,0,-1).applyQuaternion(flyCam.quaternion);            // keep flyState in sync for a clean hand-off at the end
       flyState.yaw=Math.atan2(_f.z,_f.x); flyState.pitch=clampJS(Math.asin(clampJS(_f.y,-1,1)),-1.45,1.45);
-      if (k>=1){ _descent=null; setFly(false); if(_descentReturnView==='cine') setCine(true); else if(_descentReturnView==='fps') setView(true); _diveFade(0); } }   // land in the usual follow cam
+      if (k>=1){ _descent=null; setFly(false); if(_descentReturnView==='cine') setCine(true); else if(_descentReturnView==='fps') setView(true); _diveFade(0); _setVignette(0); } }   // land in the usual follow cam
     if (fpsMode) updateFpsCam(t);
     else if (cineMode) updateCineCam(dt);
     else if (flyMode && !_descent) updateFlyCam(dt);   // the descent drives flyCam directly (position + quaternion slerp); don't let the yaw/pitch fly cam overwrite it
     activeCam = fpsMode ? fpsCam : (cineMode ? cineCam : (flyMode ? flyCam : camera));
+    updateMoonMesh();   // pin the textured moon to its sky direction, camera-relative
+    _updateUfoAudio();  // tractor-beam hum tracks proximity to the UFO
     _updateMusic(dt);   // intro music: play once the follow cam settles, fade out before the end
     uCurveK.value = P.curveWorld ? 1/(2*P.curveRadius) : 0;   // "tiny planet" curvature strength (1/2R), 0 = flat
     { const _cc=(typeof activeCam!=='undefined'&&activeCam)?activeCam:camera; if(_cc) uCurveCenter.value.copy(_cc.position); }   // curve centre = the view camera (NOT the per-pass cameraPosition) so the shadow pass curves the terrain the same way
@@ -1959,7 +1964,9 @@ const uEnvFreq = uniform(1/430); // envelope spatial frequency (low → groups s
 const uTime    = uniform(0);     // shared wave clock = clock.elapsedTime, so the GPU surface and the JS sampler (boat, foam fingers) agree in phase (TSL `time` runs on a different clock → fingers lag)
 const uMoonDir = uniform(new THREE.Vector3(0, 1, 0));
 const uMoonCol = uniform(new THREE.Vector3(0.72, 0.80, 1.0));
-const uMoonInt = uniform(0.0);   // moon glow/disk strength (rises at night)
+const uMoonInt = uniform(0.0);   // moon glow/halo strength in the sky shader (rises at night, dims with phase)
+const uMoonUp  = uniform(0.0);   // textured-moon disk visibility — night × altitude, INDEPENDENT of phase (so a new moon still shows as a faint dark disk)
+const uMoonPhase = uniform(1.0); // 0 = new → 0.5 = half → 1 = full; drives the terminator on the textured moon
 const uBathy   = uniform(0.0);   // bathymetry overlay strength (0 off → 1 on)
 const uContour = uniform(0.0);   // iso-depth contour LINES strength — independent of the bathymetry ramp
 const uCurveK  = uniform(0.0);   // "tiny planet" world curvature: world Y drops by dist²·uCurveK from the curve centre (0 = flat)
@@ -2028,7 +2035,7 @@ const C = {
   ltNight:new THREE.Color(0x3b4f86),  ltDay:new THREE.Color(0xfff2da),  ltGold:new THREE.Color(0xff9a52),
   stormGray:new THREE.Color(0x3c444e),   // darker so heavy storms genuinely dim the sky
 };
-const _cZen=new THREE.Color(), _cHor=new THREE.Color(), _cSun=new THREE.Color(), _cLight=new THREE.Color();
+const _cZen=new THREE.Color(), _cHor=new THREE.Color(), _cSun=new THREE.Color(), _cLight=new THREE.Color(), _fogPale=new THREE.Color();
 
 function buildSky() {
   const geo = new THREE.SphereGeometry(5200, 40, 24);
@@ -2052,7 +2059,7 @@ function buildSky() {
     const moonV = normalize(vec3(uMoonDir.x, uMoonDir.y.sub(uHorizonDrop), uMoonDir.z));
     const md = max(dot(vd, moonV), 0.0);
     const vgNight = uVangogh.mul(smoothstep(0.12, -0.10, uSunDir.y.sub(uHorizonDrop)));   // Starry-Night sky active (vangogh + sun down)
-    const mglow = pow(md, 40.0).mul(0.12).add(pow(md, 1400.0).mul(6.0));
+    const mglow = pow(md, 40.0).mul(0.10).add(pow(md, 320.0).mul(0.7));   // soft halo only — the textured moon mesh draws the disk itself
     col.addAssign(uMoonCol.mul(mglow).mul(uMoonInt).mul(oneMinus(vgNight)));   // ordinary moon suppressed under the Van Gogh sky (a warm one is drawn below)
     // ---- ATMOSPHERE: warm horizon haze — a glowing band hugging the horizon, brightest toward the sun and swelling
     // at sunset (uWarm), scaled by the Atmosphere slider. Reliable golden-hour glow, independent of god-ray contrast.
@@ -2061,6 +2068,20 @@ function buildSky() {
     const haze   = hzBand.mul(mix(float(0.22), float(1.0), pow(azSun, 2.2))).mul(uAtmo).mul(uWarm.mul(0.75).add(0.25));
     col.assign(mix(col, uSunCol.mul(1.15), clamp(haze.mul(0.7), 0.0, 0.82)));
 
+    // ---- CIRRUS STREAKS: wispy horizontal cloud bands, drifting; white by day, warm at golden hour ----
+    const drift  = time.mul(0.006);
+    const sc     = vec2(vd.x.mul(1.4).add(vd.z.mul(0.6)).add(drift), vd.y.add(uHorizonDrop).mul(7.0));
+    const streak = _nfbm2(sc);
+    const skyWin = smoothstep(0.04, 0.42, vd.y.add(uHorizonDrop)).mul(smoothstep(0.96, 0.55, vd.y));   // mid-sky band only
+    const cloudMask = smoothstep(0.56, 0.82, streak).mul(skyWin).mul(uAtmo.mul(0.5).add(0.4));
+    const cloudCol  = mix(vec3(0.85,0.88,0.93), uSunCol.mul(1.12), uWarm);
+    col.assign(mix(col, cloudCol, cloudMask.mul(0.34)));
+    // ---- SUNSET STRIATIONS: alternating warm/dusky horizontal bands hugging the horizon, sunrise/sunset only ----
+    const bands    = sin(vd.y.add(uHorizonDrop).mul(34.0).add(2.0)).mul(0.5).add(0.5);
+    const striMask = smoothstep(0.24, -0.02, vd.y.add(uHorizonDrop)).mul(uWarm).mul(uAtmo.mul(0.7).add(0.3));
+    const striCol  = mix(uSunCol, vec3(0.78,0.44,0.56), bands);
+    col.assign(mix(col, striCol.mul(1.1), striMask.mul(bands).mul(0.26)));
+
     // ---- Van Gogh "Starry Night" sky (uVangogh, only when the sun is down) — swirls, stars & moon, shared with the sea reflection ----
     col.assign(mix(col, _vgSkyNight(vd), vgNight));
     return col;
@@ -2068,6 +2089,52 @@ function buildSky() {
   skyMesh = new THREE.Mesh(geo, skyMat); skyMesh.renderOrder = -10;
   skyMesh.position.set(MAP.cx, 0, MAP.cz); scene.add(skyMesh);
   fog = new THREE.Fog(0xbfe0f0, 1500, 4200); scene.fog = fog;
+  buildMoon();
+}
+// procedural grey moon: limb-darkened base + maria + craters → a CanvasTexture
+function makeMoonTexture(){
+  const S=256, cv=document.createElement('canvas'); cv.width=cv.height=S; const c=cv.getContext('2d');
+  const g=c.createRadialGradient(S*0.42,S*0.42,S*0.08, S*0.5,S*0.5,S*0.52);
+  g.addColorStop(0,'#dde1ea'); g.addColorStop(0.7,'#c6cbd5'); g.addColorStop(1,'#a6abb6');
+  c.fillStyle=g; c.fillRect(0,0,S,S);
+  c.globalAlpha=0.5;                                                  // maria (dark seas)
+  for(const [x,y,r,col] of [[0.42,0.40,0.20,'#888fa0'],[0.58,0.56,0.15,'#8d94a4'],[0.50,0.28,0.10,'#939aa9'],[0.36,0.60,0.10,'#8c92a2'],[0.66,0.38,0.08,'#969cab']]){
+    const rg=c.createRadialGradient(x*S,y*S,1, x*S,y*S,r*S); rg.addColorStop(0,col); rg.addColorStop(1,'rgba(0,0,0,0)');
+    c.fillStyle=rg; c.beginPath(); c.arc(x*S,y*S,r*S,0,7); c.fill(); }
+  c.globalAlpha=0.55;                                                 // craters: bright rim + dark floor
+  for(let i=0;i<46;i++){ const x=Math.random()*S,y=Math.random()*S,r=1.5+Math.random()*7;
+    if(Math.hypot(x-S/2,y-S/2)>S*0.46) continue;
+    c.fillStyle='rgba(255,255,255,0.5)'; c.beginPath(); c.arc(x-r*0.2,y-r*0.2,r,0,7); c.fill();
+    c.fillStyle='rgba(58,62,72,0.5)'; c.beginPath(); c.arc(x+r*0.15,y+r*0.15,r*0.68,0,7); c.fill(); }
+  c.globalAlpha=1;
+  const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; return t;
+}
+let moonMesh=null; const _mdir=new THREE.Vector3();
+function buildMoon(){
+  const tex=makeMoonTexture();
+  const mat=new THREE.MeshBasicNodeMaterial({ transparent:true, depthWrite:false }); mat.fog=false;
+  const uvv=uv(), p=uvv.sub(0.5).mul(2.0);                            // centered −1..1
+  const r2=p.x.mul(p.x).add(p.y.mul(p.y));
+  const disk=smoothstep(1.0, 0.90, r2);                              // soft-edged round mask
+  const nz=float(1.0).sub(r2).max(0.0).sqrt();                       // sphere z (fake normal)
+  const a=oneMinus(uMoonPhase).mul(Math.PI);                        // phase → light angle: full=0 (toward viewer), new=π (behind)
+  const ndl=p.x.mul(sin(a)).negate().add(nz.mul(cos(a)));           // n·L; x negated because the billboard faces the camera (mirrors local x) → waxing lit on the right, matching the slider handle
+  const shade=smoothstep(-0.12, 0.14, ndl).mul(0.95).add(0.06);     // terminator + faint earthshine
+  mat.colorNode=texture(tex, uvv).xyz.mul(uMoonCol).mul(shade).mul(1.7);   // bright silver so it reads as a real moon at night
+  mat.opacityNode=disk.mul(clamp(uMoonUp.mul(1.4), 0.0, 1.0));
+  moonMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
+  moonMesh.renderOrder=-8; moonMesh.frustumCulled=false; scene.add(moonMesh);
+}
+// keep the moon pinned to its sky direction, camera-relative (no parallax), billboarded & phase-correct
+function updateMoonMesh(){
+  if(!moonMesh) return;
+  moonMesh.visible = uMoonUp.value > 0.02;
+  if(!moonMesh.visible || !activeCam) return;
+  _mdir.set(uMoonDir.value.x, uMoonDir.value.y - uHorizonDrop.value, uMoonDir.value.z).normalize();
+  // anchor on the sky dome (centred at the map), so the textured disk lines up exactly with the dome's moon halo
+  moonMesh.position.set(MAP.cx + _mdir.x*5000, _mdir.y*5000, MAP.cz + _mdir.z*5000);
+  moonMesh.lookAt(activeCam.position);
+  moonMesh.scale.set(340,340,1);
 }
 // a big calm sea plane filling out to the horizon (so the wave-ocean's edge never shows white)
 function buildSeaSkirt() {
@@ -2873,9 +2940,12 @@ function updateEnvironment(dt) {
   // night fraction and how high the moon is, dimmed by storm cloud.
   _moon.set(-Math.sin(phi), Math.cos(phi), -0.28).normalize();
   const moonPhase = (P.moonPhase!=null) ? P.moonPhase : 1.0;       // 0 = new moon (dark sky, best stars) → 1 = full moon
-  const moonStr = uNight.value * clampJS(_moon.y, 0, 1) * (1 - 0.7*localStorm) * moonPhase;
+  const moonUp = uNight.value * clampJS(_moon.y, 0, 1) * (1 - 0.7*localStorm);   // moon-is-up (disk visibility), phase-independent
+  const moonStr = moonUp * moonPhase;
   uMoonDir.value.copy(_moon);
   uMoonInt.value = moonStr;
+  uMoonUp.value = moonUp;
+  uMoonPhase.value = moonPhase;
   if (moonLight){
     moonLight.intensity = moonStr * 0.6;
     const Dm = 780;
@@ -2897,9 +2967,12 @@ function updateEnvironment(dt) {
   }
 
   if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
+    // locale fog: foggy regions (Faroe/Kodiak/St.John's/Skye) carry a fog weight → paler, closer haze.
+    const rFog = (typeof REGION!=='undefined' && REGION && REGION.fog) ? REGION.fog : 0;
+    if (rFog>0){ const db=uDayBright.value; _fogPale.setRGB(0.62*db+0.20, 0.66*db+0.20, 0.70*db+0.22); fog.color.lerp(_fogPale, rFog*0.55); }
     // tiny-planet: push the haze out so it recedes PAST the curved horizon instead of banding across it as a flat line
     const fF = P.curveWorld ? 1.55 : 1, fN = P.curveWorld ? 1.3 : 1;
-    fog.near=lerp(1500,560,localStorm)*fN; fog.far=lerp(4200,1900,localStorm)*fF; }
+    fog.near=lerp(lerp(1500,820,rFog),560,localStorm)*fN; fog.far=lerp(lerp(4200,2400,rFog),1900,localStorm)*fF; }
   if (seaSkirt){ const db=uDayBright.value; seaSkirt.material.color.setRGB(0.03*db,0.16*db,0.28*db);
     seaSkirt.position.x=controls.target.x; seaSkirt.position.z=controls.target.z; }
 
@@ -3428,6 +3501,32 @@ function buildTownMotifs(){
 }
 
 // ---- fireworks: the current target island celebrates the boat's visit (Sprite particle pool) ----
+// ---- AUDIO (very basic): a Tone.js tractor-beam hum that swells as you near the UFO. Tone is loaded lazily
+// from a CDN on the first user gesture (audio contexts require a gesture to start). ----
+let _audioInit=false, _ufoProxGain=null, _ufoBeamBoost=0;
+async function _initAudio(){
+  if (_audioInit) return; _audioInit=true;
+  let T; try{ T = await import('https://cdn.jsdelivr.net/npm/tone@14.8.49/+esm'); }
+  catch(e){ console.warn('[audio] Tone load failed', e); return; }
+  try{ await T.start(); }catch(_){}
+  const out=new T.Gain(0); out.toDestination(); _ufoProxGain=out;          // proximity-driven master gain
+  const filt=new T.Filter(440,'lowpass').connect(out);
+  const tremGain=new T.Gain(1).connect(filt);                              // tremolo pulses the "beam"
+  const osc1=new T.Oscillator(56,'sawtooth').connect(tremGain); osc1.start();
+  const osc2=new T.Oscillator(84,'sine').connect(tremGain);     osc2.start();
+  new T.LFO({frequency:5.5, min:50, max:64}).connect(osc1.frequency).start();   // warble (vibrato)
+  new T.LFO({frequency:9.0, min:0.35, max:1.0}).connect(tremGain.gain).start(); // throb
+}
+function _updateUfoAudio(){
+  if (!_ufoProxGain) return;
+  const ufo = (typeof FLEET!=='undefined') ? FLEET.find(v=>v.id==='ufo') : null;
+  if (!ufo || !ufo.pos || !activeCam){ _ufoProxGain.gain.rampTo(0, 0.25); return; }
+  const dx=activeCam.position.x-ufo.pos.x, dy=activeCam.position.y-ufo.pos.y, dz=activeCam.position.z-ufo.pos.z;
+  const d=Math.hypot(dx,dy,dz), near=240, far=900;
+  let g=clampJS(1-(d-near)/(far-near), 0, 1); g*=g;                        // ease-in falloff
+  const beam = (typeof ufoBeam!=='undefined' && ufoBeam && ufoBeam.material) ? clampJS(ufoBeam.material.opacity*2.0,0,1) : 0;
+  _ufoProxGain.gain.rampTo((0.40 + 0.25*beam) * g, 0.15);                  // louder while the beam fires
+}
 const FW_MAX = 300; let fwSprites = [], fwState = [], fwTimer = 0;
 function buildFireworks(){
   const tex = makeDotTexture();
@@ -5592,6 +5691,10 @@ function initInput() {
   });
   window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; manualKeys[e.key.toLowerCase()] = false; });
 
+  // start audio on the first user gesture (browsers require it); fires once
+  const _audioKick=()=>{ _initAudio(); window.removeEventListener('pointerdown',_audioKick); window.removeEventListener('keydown',_audioKick); window.removeEventListener('touchstart',_audioKick); };
+  window.addEventListener('pointerdown',_audioKick); window.addEventListener('keydown',_audioKick); window.addEventListener('touchstart',_audioKick);
+
   // ---- MOBILE TILT STEERING: tilt the device to drive like WASD (toggle button, default OFF; iOS asks permission) ----
   (function setupTiltSteer(){
     const hasOrient = (typeof DeviceOrientationEvent !== 'undefined');
@@ -6444,6 +6547,12 @@ function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
 // ---- globe→world DIVE: fly the globe camera straight into the clicked patch, fade to the region colour, then
 //      hand off to the sailing world which descends from high orbit (no warp/reload for the current region) ----
 let _diveZoom=null, _globeRise=null, _diveAfterSlerp=null, _descent=null, _descentReturnView='cine', _diveQuat=null;
+// cinematic dive vignette: darkens the frame edges, ramping UP as we plunge toward the surface and
+// easing back DOWN as we settle over the region — masks the scene-swap seam.
+let _vigEl=null;
+function _setVignette(v){ v=clampJS(v,0,1);
+  if(!_vigEl){ _vigEl=document.createElement('div'); _vigEl.id='vignette'; document.body.appendChild(_vigEl); }
+  _vigEl.style.opacity=v.toFixed(3); }
 function _diveFade(a, id){ a=clampJS(a,0,1); let f=document.getElementById('dive-fade');
   if(!f){ f=document.createElement('div'); f.id='dive-fade'; f.style.cssText='position:fixed;inset:0;z-index:60;pointer-events:none;opacity:0;overflow:hidden;';
     const inner=document.createElement('div'); inner.style.cssText='position:absolute;inset:-40%;will-change:transform,opacity;'; f.appendChild(inner); document.body.appendChild(f); }
@@ -6489,6 +6598,7 @@ function updateGlobe(dt){
   if (_diveZoom){ _diveZoom.t += (dt||0.016)/_diveZoom.dur; const k=Math.min(_diveZoom.t,1), e=k*k;   // accelerate toward the surface
     globeCam.position.set(0,0, _globeZ-(_globeZ-1.05)*e); globeCam.lookAt(0,0,0);
     _diveFade(Math.max(0,(k-0.72)/0.28), _diveZoom.id);                               // hold the clear globe view until we're almost ON the surface, THEN the cloud rushes in over the last ~28% — the diorama reads as a portal into the world
+    _setVignette(e*0.85);                                                             // tighten the vignette as we accelerate toward the surface (peaks at the swap)
     if (k>=1){ const d=_diveZoom; _diveZoom=null; _diveLand(d); }   // leave the cam zoomed in (no snap back to the full globe — that flashed the old view); openWorldMap/_globeRise reset it on the next visit
     return; }
   if (!_globeDrag && !_globeLevel){ globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _globeVel.y);   // flick momentum — fast pulls keep spinning, slow drags settle at once
