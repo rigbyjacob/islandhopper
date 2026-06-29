@@ -622,7 +622,7 @@ if (window.ELNIDO) REGIONS.elnido = Object.assign({}, window.ELNIDO, {
 });
 // ---- Solomon Is. · Gizo & Kolombangara (high volcanic rainforest, reef lagoons) — resembles hawaii ----
 if (window.SOLOMON) REGIONS.solomon = Object.assign({}, window.SOLOMON, {
-  relief: { escale:13, steep:0.82, ridge:2.2, lift:2.1 },
+  relief: { escale:13, steep:0.50, ridge:0.40, lift:2.1 },   // Solomon: broad SMOOTH stratovolcano cone (Kolombangara), not jagged ridges
   tour: ['Ghizo','Kennedy','Mbabanga','Kolombangara'],
   seaTint: [0.80, 1.10, 1.12], foam: 0.45,
   palette: { land: { seabed:0x1d86a0, wetsand:0xc6a766, sand:0xe6dcb6, grass:0x357a2e, forest:0x1d521f, rock:0x6a5f54, cliff:0x4e463c }, shrub: [0x2f7a26, 0x1d5a1a] },
@@ -632,7 +632,7 @@ if (window.SOLOMON) REGIONS.solomon = Object.assign({}, window.SOLOMON, {
 });
 // ---- Aran Islands · Galway Bay mouth (grey karst, Atlantic cliffs, drystone walls) — resembles sweden (temp) ----
 if (window.ARAN) REGIONS.aran = Object.assign({}, window.ARAN, {
-  relief: { escale:22, steep:0.70, ridge:1.8, lift:1.6 },
+  relief: { escale:26, steep:0.05, ridge:0.12, lift:1.3 },   // Aran: near-FLAT limestone pavement (Burren at sea) — tabletop islands, not ridged hills
   tour: ['Inishmore','Inishmaan','Inisheer'],
   seaTint: [0.50, 0.62, 0.80], foam: 0.62,    // Aran: cold steely Atlantic grey-blue (was near-neutral → looked turquoise)
   palette: { land: { seabed:0x2a6b7a, wetsand:0xbdb69c, sand:0xd8d2bc, grass:0x8b9669, forest:0x707e55, rock:0xc6bfa8, cliff:0xa9a48e }, shrub: [0x7a8a52, 0x5e6e3e] },   // Aran: PALE grey limestone + thin grey-green grass (was dark green)
@@ -672,7 +672,7 @@ if (window.MONTAUK) REGIONS.montauk = Object.assign({}, window.MONTAUK, {
 });
 // ---- Kodiak Archipelago · Alaska (fjords, spruce ridges, fog) — resembles sweden (nord) ----
 if (window.KODIAK) REGIONS.kodiak = Object.assign({}, window.KODIAK, {
-  relief: { escale:13, steep:0.80, ridge:2.2, lift:2.2 }, fog: 0.45,   // cold Alaskan sea fog (eased so the Emerald-Isle green reads)
+  relief: { escale:13, steep:0.60, ridge:1.1, lift:2.2 }, fog: 0.45,   // Kodiak: rugged but glacier-ROUNDED mountains, not razor ridges; cold sea fog (eased)
   tour: ['Spruce','Whale','Afognak','Raspberry','Shuyak','Barren Islands'],
   seaTint: [0.48, 0.60, 0.72], foam: 0.8,     // Kodiak: cold green-grey Alaskan water
   palette: { land: { seabed:0x21525a, wetsand:0x8b8770, sand:0xb0a88c, grass:0x3f7a34, forest:0x255227, rock:0x6a655c, cliff:0x504c45 }, shrub: [0x356026, 0x214018] },   // Kodiak: brighter "Emerald Isle" spruce green
@@ -682,7 +682,7 @@ if (window.KODIAK) REGIONS.kodiak = Object.assign({}, window.KODIAK, {
 });
 // ---- St. John's & Conception Bay · Newfoundland (rust/grey sea-cliffs, fog, cold Atlantic) — resembles sweden (nord) ----
 if (window.STJOHNS) REGIONS.stjohns = Object.assign({}, window.STJOHNS, {
-  relief: { escale:16, steep:0.78, ridge:2.0, lift:1.9 }, fog: 0.45,   // cold Atlantic sea fog (eased so the land reads)
+  relief: { escale:16, steep:0.40, ridge:0.7, lift:1.9 }, fog: 0.45,   // Newfoundland: rolling rocky barrens + rounded headlands (Signal Hill), not alpine spires; cold sea fog (eased)
   tour: ['Bell Island'],
   seaTint: [0.46, 0.56, 0.74], foam: 0.82,    // Newfoundland: cold slate-navy Atlantic
   palette: { land: { seabed:0x24535b, wetsand:0x968a70, sand:0xb4a98a, grass:0x3c5e34, forest:0x274a28, rock:0x7a6f60, cliff:0x6a5a48 }, shrub: [0x355226, 0x243a16] },
@@ -692,7 +692,7 @@ if (window.STJOHNS) REGIONS.stjohns = Object.assign({}, window.STJOHNS, {
 });
 // ---- Cape Cod & the Islands · Massachusetts (sandy moraine, dunes, barrier beaches) — resembles japan (temp) ----
 if (window.CAPECOD) REGIONS.capecod = Object.assign({}, window.CAPECOD, {
-  relief: { escale:34, steep:0.45, ridge:1.3, lift:1.3 },
+  relief: { escale:34, steep:0.18, ridge:0.35, lift:1.3 },   // Cape Cod: flat glacial sandbar — low dunes/moraine, not hills
   tour: ['Nantucket','Muskeget',"Martha's Vineyard",'Cuttyhunk','Naushon'],
   seaTint: [0.60, 0.74, 0.90], foam: 0.52,    // Cape Cod: New England slate blue-green
   palette: { land: { seabed:0x2a6c76, wetsand:0xd8c898, sand:0xeaddae, grass:0xcabd86, forest:0x95a166, rock:0xc8bd9a, cliff:0xb0a684 }, shrub: [0x9aaa66, 0x6e7e44] },   // Cape Cod: pale SAND + sage dune-scrub (it's a sandbar, not forest)
@@ -702,7 +702,7 @@ if (window.CAPECOD) REGIONS.capecod = Object.assign({}, window.CAPECOD, {
 });
 // ---- Exe Estuary & South Devon + Lundy · UK (red sandstone cliffs, estuary flats, granite Lundy) — resembles japan (temp) ----
 if (window.EXE) REGIONS.exe = Object.assign({}, window.EXE, {
-  relief: { escale:20, steep:0.70, ridge:1.8, lift:1.7 },
+  relief: { escale:20, steep:0.22, ridge:0.40, lift:1.7 },   // Exe/Devon: gentle rolling farmland + low red cliffs (Lundy is a flat plateau), not steep ridges
   tour: ['Lundy'],
   seaTint: [0.56, 0.70, 0.82], foam: 0.48,    // Exe/Devon: muted English Channel grey-green
   palette: { land: { seabed:0x2b6470, wetsand:0xc6a578, sand:0xdcc299, grass:0x5e7e40, forest:0x3c5630, rock:0xb87a52, cliff:0x9c5a3e }, shrub: [0x517036, 0x394e22] },
@@ -712,7 +712,7 @@ if (window.EXE) REGIONS.exe = Object.assign({}, window.EXE, {
 });
 // ---- Apo I., Dauin & Siquijor · Bohol Sea (volcanic isles, clear reef-fringed turquoise) — resembles caribbean (trop) ----
 if (window.APO) REGIONS.apo = Object.assign({}, window.APO, {
-  relief: { escale:14, steep:0.82, ridge:2.0, lift:2.0 },
+  relief: { escale:14, steep:0.42, ridge:0.6, lift:2.0 },   // Apo/Dauin/Siquijor: low gentle volcanic + raised-coral, not jagged
   tour: ['Apo I.','Sumilon'],
   seaTint: [0.82, 1.12, 1.16], foam: 0.4,
   palette: { land: { seabed:0x1f9ab0, wetsand:0xcaa86a, sand:0xeadfba, grass:0x3f8a3a, forest:0x256127, rock:0x9a8f7a, cliff:0x7c7060 }, shrub: [0x39882f, 0x256b22] },
