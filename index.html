@@ -1943,7 +1943,7 @@ const uSunInt  = uniform(1.0);
 // ---- ALIEN-PLANET skin (cosmetic world theme, on top of any region): a 2nd sun + violet/teal sky + thick-gas sea ----
 const uAlien    = uniform(0.0);                              // 0 = Earth, 1 = alien (eased)
 const uSun2Dir  = uniform(new THREE.Vector3(-0.5, 0.5, -0.4));
-const uSun2Col  = uniform(new THREE.Vector3(1.0, 0.45, 0.5));   // a smaller ruddy companion sun
+const uSun2Col  = uniform(new THREE.Vector3(0.50, 0.70, 1.05));   // a hot blue-white companion sun (cooler than the warm primary)
 const uZenith  = uniform(new THREE.Vector3(0.12, 0.43, 0.78));
 const uHorizon = uniform(new THREE.Vector3(0.76, 0.88, 0.96));
 const uGradeSat  = uniform(1.0);                       // art-style scene saturation for the WATER shader (1=normal, 0=gray)
@@ -1960,7 +1960,17 @@ function _sunShadowMul(gate){
   const u = ss.x.div(ss.w), v = ss.y.div(ss.w);
   let inside = smoothstep(0.0, 0.03, min(u.mul(oneMinus(u)), v.mul(oneMinus(v))));   // u*(1-u) is >0 only for 0<u<1 → 0 outside the map, 1 inside (soft margin)
   if (gate) inside = inside.mul(gate);
-  return oneMinus( oneMinus(shadow(sunLight)).mul(uShadowK).mul(inside) );
+  let mul = oneMinus( oneMinus(shadow(sunLight)).mul(uShadowK).mul(inside) );
+  // ALIEN: the companion sun casts its own shadow set. Same manual sample + footprint mask, but scaled by uAlien
+  // (zero on Earth → no effect) and a touch softer (the companion is the dimmer star).
+  if (sun2Light && sun2Light.castShadow){
+    const ss2 = lightShadowMatrix(sun2Light).mul(vec4(positionWorld.x, positionWorld.y, positionWorld.z, float(1)));
+    const u2 = ss2.x.div(ss2.w), v2 = ss2.y.div(ss2.w);
+    let in2 = smoothstep(0.0, 0.03, min(u2.mul(oneMinus(u2)), v2.mul(oneMinus(v2))));
+    if (gate) in2 = in2.mul(gate);
+    mul = mul.mul( oneMinus( oneMinus(shadow(sun2Light)).mul(uShadowK.mul(0.75)).mul(in2).mul(uAlien) ) );
+  }
+  return mul;
 }
 const uNight   = uniform(0.0);   // 0 day → 1 deep night (drives island lights)
 const uSea     = uniform(1.0);   // global wave-amplitude multiplier (storm-reactive); mirrors CPU seaAmp
@@ -2032,7 +2042,7 @@ const uTargetRad  = uniform(120.0);
 let skyMat, skyMesh, fog, sunLight, hemiLight, moonLight, sun2Light, seaSkirt, oceanMat;
 const _sun = new THREE.Vector3(0.4, 0.8, 0.3), _moon = new THREE.Vector3(0, 1, 0);
 const _sunScreen = new THREE.Vector3();   // sun projected to NDC each frame (god rays)
-const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3(), _shSun=new THREE.Vector3();
+const _shFwd=new THREE.Vector3(), _shUp=new THREE.Vector3(), _shRight=new THREE.Vector3(), _shCtr=new THREE.Vector3(), _shSun=new THREE.Vector3(), _shSun2=new THREE.Vector3();
 const _shFocus=new THREE.Vector3(), _shCamFwd=new THREE.Vector3();   // smoothed point the shadow frustum centres on (where the active camera looks at the sea)
 const C = {
   zenNight:new THREE.Color(0x05070f), zenDay:new THREE.Color(0x1d6fc6), zenGold:new THREE.Color(0x3a3570),
@@ -2121,6 +2131,8 @@ function makeMoonTexture(){
   const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; return t;
 }
 let moonMesh=null; const _mdir=new THREE.Vector3();
+let _alienMoons=[]; const _amdir=new THREE.Vector3();   // 2 extra moons that appear only in alien mode, each on its own orbit
+const _bx=new THREE.Vector3(), _by=new THREE.Vector3(), _bz=new THREE.Vector3(), _UP=new THREE.Vector3(0,1,0);
 function buildMoon(){
   const tex=makeMoonTexture();
   const mat=new THREE.MeshBasicNodeMaterial({ transparent:true, depthWrite:false }); mat.fog=false;
@@ -2135,17 +2147,65 @@ function buildMoon(){
   mat.opacityNode=disk.mul(clamp(uMoonUp.mul(1.4), 0.0, 1.0));
   moonMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
   moonMesh.renderOrder=-8; moonMesh.frustumCulled=false; scene.add(moonMesh);
+  // --- ALIEN companion moons: lit for real by BOTH suns (warm primary + cool companion), so each shows a live
+  //     terminator/crescent that tracks the suns instead of a fixed sticker. Per-moon light-dir uniforms are filled
+  //     each frame (sun dirs projected into the moon's billboard frame). Phase slider intentionally ignored here. ---
+  const _mkAlienMoon=(albedo, orbit, scale)=>{
+    const l1=uniform(new THREE.Vector3(0.5,0.3,0.8)), l2=uniform(new THREE.Vector3(-0.5,0.3,0.8));   // dir TO each sun, in billboard space
+    const m2=new THREE.MeshBasicNodeMaterial({ transparent:true, depthWrite:false }); m2.fog=false;
+    const ndl1=p.x.mul(l1.x).add(p.y.mul(l1.y)).add(nz.mul(l1.z));   // n·L for each sun
+    const ndl2=p.x.mul(l2.x).add(p.y.mul(l2.y)).add(nz.mul(l2.z));
+    const t1=smoothstep(-0.04, 0.42, ndl1), t2=smoothstep(-0.04, 0.42, ndl2);
+    const lit=vec3(0.05,0.06,0.10)                                   // faint starlight/ambient on the dark side
+      .add(vec3(1.0,0.85,0.60).mul(t1.mul(1.05)))                    // warm primary sun
+      .add(uSun2Col.mul(t2.mul(0.85)));                              // cool blue companion sun
+    m2.colorNode=texture(tex, uvv).xyz.mul(vec3(albedo[0],albedo[1],albedo[2])).mul(lit).mul(1.45);
+    m2.opacityNode=disk.mul(clamp(uAlien.mul(1.6), 0.0, 1.0));
+    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1), m2);
+    mesh.renderOrder=-8; mesh.frustumCulled=false; mesh.visible=false;
+    mesh.userData={orbit, scale, l1, l2}; scene.add(mesh); _alienMoons.push(mesh);
+  };
+  _mkAlienMoon([1.05,0.92,0.84], {speed:0.050, phase:0.0, tilt:0.50, yaw:0.85}, 230);   // larger rocky moon (warm-grey albedo)
+  _mkAlienMoon([0.86,0.92,1.05], {speed:0.082, phase:2.3, tilt:1.15, yaw:-1.45}, 150);  // small pale-blue moon
+}
+function _moonOrbitDir(tSec, o, out){
+  const ang=tSec*o.speed + o.phase;
+  let x=Math.cos(ang), y=0, z=Math.sin(ang);
+  const ct=Math.cos(o.tilt), st=Math.sin(o.tilt);   // incline the orbital plane about X
+  const y2=y*ct - z*st, z2=y*st + z*ct;
+  const cy=Math.cos(o.yaw), sy=Math.sin(o.yaw);     // swing the plane about Y
+  return out.set(x*cy - z2*sy, y2, x*sy + z2*cy).normalize();
 }
 // keep the moon pinned to its sky direction, camera-relative (no parallax), billboarded & phase-correct
 function updateMoonMesh(){
   if(!moonMesh) return;
   moonMesh.visible = uMoonUp.value > 0.02;
-  if(!moonMesh.visible || !activeCam) return;
-  _mdir.set(uMoonDir.value.x, uMoonDir.value.y - uHorizonDrop.value, uMoonDir.value.z).normalize();
-  // anchor on the sky dome (centred at the map), so the textured disk lines up exactly with the dome's moon halo
-  moonMesh.position.set(MAP.cx + _mdir.x*5000, _mdir.y*5000, MAP.cz + _mdir.z*5000);
-  moonMesh.lookAt(activeCam.position);
-  moonMesh.scale.set(340,340,1);
+  if(moonMesh.visible && activeCam){
+    _mdir.set(uMoonDir.value.x, uMoonDir.value.y - uHorizonDrop.value, uMoonDir.value.z).normalize();
+    // anchor on the sky dome (centred at the map), so the textured disk lines up exactly with the dome's moon halo
+    moonMesh.position.set(MAP.cx + _mdir.x*5000, _mdir.y*5000, MAP.cz + _mdir.z*5000);
+    moonMesh.lookAt(activeCam.position);
+    moonMesh.scale.set(340,340,1);
+  }
+  // alien companion moons — only when the alien skin is on; each rides its own slow orbit
+  if(_alienMoons.length && activeCam){
+    const tSec=performance.now()*0.001, show=uAlien.value>0.35;
+    for(const m of _alienMoons){
+      _moonOrbitDir(tSec, m.userData.orbit, _amdir);
+      m.visible = show && _amdir.y > -0.12;
+      if(!m.visible) continue;
+      const dy=_amdir.y - uHorizonDrop.value;
+      m.position.set(MAP.cx + _amdir.x*5000, dy*5000, MAP.cz + _amdir.z*5000);
+      m.lookAt(activeCam.position);
+      m.scale.set(m.userData.scale, m.userData.scale, 1);
+      // light by BOTH suns: project each sun's sky direction into this moon's billboard basis (+z=toCam, +x=up×z, +y=z×x)
+      _bz.copy(activeCam.position).sub(m.position).normalize();
+      _bx.crossVectors(_UP, _bz).normalize(); _by.crossVectors(_bz, _bx);
+      const s1=uSunDir.value, s2=uSun2Dir.value, u=m.userData;
+      u.l1.value.set(s1.dot(_bx), s1.dot(_by), s1.dot(_bz));
+      u.l2.value.set(s2.dot(_bx), s2.dot(_by), s2.dot(_bz));
+    }
+  }
 }
 // a big calm sea plane filling out to the horizon (so the wave-ocean's edge never shows white)
 function buildSeaSkirt() {
@@ -2173,8 +2233,14 @@ function buildLights() {
   // soft cool moonlight — a second directional light that fades in at night (no shadows, keeps it cheap)
   moonLight = new THREE.DirectionalLight(0xb9c6ff, 0.0);
   moonLight.position.set(-300, 500, -260); scene.add(moonLight); scene.add(moonLight.target);
-  sun2Light = new THREE.DirectionalLight(0xff6678, 0.0);   // alien companion sun key light (no shadow; intensity rises with uAlien)
+  sun2Light = new THREE.DirectionalLight(0x9fc0ff, 0.0);   // alien companion sun key light — cool blue-white
   sun2Light.position.set(-400, 400, -300); scene.add(sun2Light); scene.add(sun2Light.target);
+  // Companion sun ALSO casts shadows so alien scenes show two shadow directions. castShadow stays on permanently
+  // (keeps the WebGPU shadow map allocated, same as the primary sun); intensity is 0 on Earth so no second shadow
+  // shows there, and the custom terrain/ocean shading scales its shadow term by uAlien (see _sunShadowMul).
+  sun2Light.castShadow = true; sun2Light.shadow.mapSize.set(2048, 2048);
+  { const sc2=sun2Light.shadow.camera; sc2.left=-700; sc2.right=700; sc2.top=700; sc2.bottom=-700; sc2.near=1; sc2.far=3000; sc2.updateProjectionMatrix(); }
+  sun2Light.shadow.bias = -0.0006; sun2Light.shadow.normalBias = 2.2;
   hemiLight = new THREE.HemisphereLight(0xbfe6ff, 0x35506b, 0.9); scene.add(hemiLight);
 }
 
@@ -2965,10 +3031,13 @@ function updateEnvironment(dt) {
     moonLight.position.set(boat3.x + _moon.x*Dm, Math.max(_moon.y,0.1)*Dm + 60, boat3.z + _moon.z*Dm);
     moonLight.target.position.set(boat3.x, 0, boat3.z); moonLight.target.updateMatrixWorld();
   }
-  // ALIEN skin: ease the theme in/out, place the companion sun (offset in azimuth from the main sun) + its key light
+  // ALIEN skin: ease the theme in/out, place the companion sun + its key light.
+  // The companion rides its OWN orbit: a different period & phase, and an orbital plane inclined well off the
+  // primary's (the main sun sweeps along X with a near-fixed depth; the companion swings through DEPTH and keeps to
+  // the upper sky) — so the two never face each other and trace clearly different arcs (~off-perpendicular planes).
   uAlien.value += ((P.alien?1:0) - uAlien.value) * 0.08;
-  { const ca=Math.cos(2.3), sa=Math.sin(2.3);
-    uSun2Dir.value.set(_sun.x*ca - _sun.z*sa, _sun.y*0.55+0.18, _sun.x*sa + _sun.z*ca).normalize();
+  { const phi2 = phi*0.9 + 1.9;
+    uSun2Dir.value.set( Math.sin(phi2)*0.5, Math.abs(Math.cos(phi2))*0.6 + 0.25, Math.cos(phi2) ).normalize();
     if (sun2Light){ sun2Light.intensity = uAlien.value * 1.9;
       sun2Light.position.set(boat3.x + uSun2Dir.value.x*600, uSun2Dir.value.y*600+40, boat3.z + uSun2Dir.value.z*600);
       sun2Light.target.position.set(boat3.x, 0, boat3.z); sun2Light.target.updateMatrixWorld(); } }
@@ -3040,6 +3109,16 @@ function updateEnvironment(dt) {
   _shCtr.copy(_shRight).multiplyScalar(a).addScaledVector(_shUp, b).addScaledVector(_shFwd, f);
   sunLight.position.copy(_shCtr).addScaledVector(_shSun, D);
   sunLight.target.position.copy(_shCtr); sunLight.target.updateMatrixWorld();
+  // Companion sun's shadow camera: fit the same region box, aimed down the companion's ray (grazing-clamped like the
+  // primary so it never shines up from under the seabed). Reuses the region-centre/standoff computed above.
+  if (sun2Light && sun2Light.castShadow){
+    const sc2=sun2Light.shadow.camera;
+    if (Math.abs(sc2.right-_halfR) > 1){ sc2.left=-_halfR; sc2.right=_halfR; sc2.top=_halfR; sc2.bottom=-_halfR;
+      sc2.near=Math.max(1, D-_halfR*1.7); sc2.far=D+_halfR*1.7; sc2.updateProjectionMatrix(); }
+    _shSun2.copy(uSun2Dir.value); if (_shSun2.y < 0.07){ _shSun2.y=0.07; _shSun2.normalize(); }
+    sun2Light.position.set(_cxR + _shSun2.x*D, _shSun2.y*D, _czR + _shSun2.z*D);
+    sun2Light.target.position.set(_cxR, 0, _czR); sun2Light.target.updateMatrixWorld();
+  }
   // Keep castShadow STABLE (never toggle off at night): in the WebGPU path, disabling castShadow frees
   // sunLight.shadow.map, and re-enabling it on a day-time scene before the map is reallocated makes
   // updateShadow read a null map → "Cannot read properties of null (reading 'depthTexture')" every frame
@@ -4154,6 +4233,39 @@ function buildStarMap(){
   mat.opacityNode=uNight.mul(oneMinus(attribute('atw')).add(attribute('atw').mul(tw.mul(0.5).add(0.5))));
   const pts=new THREE.Points(g, mat); pts.frustumCulled=false; pts.renderOrder=-9; grp.add(pts);
 
+  // ---- FAINT FILL: a deep dusting of dim background stars between the catalogue stars, so the open-ocean sky reads
+  //      as the densest, least light-polluted sky anywhere (thousands of pinpricks, not a sparse scatter). ----
+  { const NF=3000, fp=new Float32Array(NF*3), fc=new Float32Array(NF*3), fs=new Float32Array(NF), fph=new Float32Array(NF);
+    for(let i=0;i<NF;i++){ const u=Math.random()*2-1, th=Math.random()*Math.PI*2, rr=Math.sqrt(1-u*u);
+      const x=rr*Math.cos(th), y=rr*Math.sin(th), z=u;
+      fp[i*3]=x*STAR_R; fp[i*3+1]=y*STAR_R; fp[i*3+2]=z*STAR_R;
+      const t=Math.random(); fc[i*3]=0.62+0.30*t; fc[i*3+1]=0.70+0.16*t; fc[i*3+2]=0.92-0.20*t;   // cool→warm tints
+      fs[i]=1.1+Math.random()*1.7; fph[i]=Math.random()*6.2832; }
+    const fg=new THREE.BufferGeometry();
+    fg.setAttribute('position', new THREE.BufferAttribute(fp,3)); fg.setAttribute('acolor', new THREE.BufferAttribute(fc,3));
+    fg.setAttribute('asize', new THREE.BufferAttribute(fs,1)); fg.setAttribute('aphase', new THREE.BufferAttribute(fph,1));
+    const fm=new THREE.PointsNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
+    fm.sizeNode=attribute('asize'); fm.colorNode=attribute('acolor','vec3');
+    const ftw=sin(uTime.mul(3.3).add(attribute('aphase'))).mul(0.5).add(0.5);
+    fm.opacityNode=uNight.mul(float(0.40).add(ftw.mul(0.35)));
+    const fpts=new THREE.Points(fg, fm); fpts.frustumCulled=false; fpts.renderOrder=-9; grp.add(fpts); }
+
+  // ---- SHOOTING STARS: a small pool of meteors that streak occasionally across the night sky ----
+  const meteors=[];
+  for(let i=0;i<3;i++){
+    const seg=12, mp=new Float32Array(seg*3), mc=new Float32Array(seg*3);
+    for(let k=0;k<seg;k++){ const a=k/(seg-1); mc[k*3]=1.0; mc[k*3+1]=0.95; mc[k*3+2]=0.8; }   // (alpha handled via per-vertex fade in size? use opacity node + tail attr)
+    const mg=new THREE.BufferGeometry(); mg.setAttribute('position', new THREE.BufferAttribute(mp,3));
+    const tail=new Float32Array(seg); for(let k=0;k<seg;k++) tail[k]=k/(seg-1);   // 0 head → 1 tail
+    mg.setAttribute('atail', new THREE.BufferAttribute(tail,1));
+    const mm=new THREE.LineBasicNodeMaterial({ transparent:true, depthTest:false, depthWrite:false, blending:THREE.AdditiveBlending });
+    const uMet=uniform(0.0);   // 0..1 brightness of this meteor flash
+    mm.colorNode=vec3(1.0,0.96,0.85).mul(oneMinus(attribute('atail')));   // bright head → faded tail
+    mm.opacityNode=uMet.mul(oneMinus(attribute('atail')));
+    const line=new THREE.Line(mg, mm); line.frustumCulled=false; line.renderOrder=-8; line.visible=false; grp.add(line);
+    meteors.push({ line, geo:mg, seg, uMet, next:performance.now()+Math.random()*6000, t:0, dur:0, from:new THREE.Vector3(), to:new THREE.Vector3() });
+  }
+
   // ---- constellation line-figures: only down to rank 2 (the Little-Dipper floor) — skip the obscure rank-3.
   //      rank-1 (the LABELLED ones) get THICK GLOWY tubes; rank-2 get thin starlight edges. ----
   const conGrp=new THREE.Group(); conGrp.name='constellations'; grp.add(conGrp);   // lines+tubes+labels → one toggleable group (stars stay on)
@@ -4196,7 +4308,7 @@ function buildStarMap(){
     sp.position.set(_v.x*STAR_R*0.98, _v.y*STAR_R*0.98, _v.z*STAR_R*0.98); sp.renderOrder=21; conGrp.add(sp); labs.push(sp);
   }
 
-  scene.add(grp); starMap={ grp, labs, con:conGrp };
+  scene.add(grp); starMap={ grp, labs, con:conGrp, meteors };
 }
 
 const _scC0=new THREE.Vector3(), _scC1=new THREE.Vector3(), _scC2=new THREE.Vector3(), _scM=new THREE.Matrix4();
@@ -4220,6 +4332,27 @@ function updateStarMap(){
   _scC0.set(-st, cp*ct, sp*ct); _scC1.set(ct, cp*st, sp*st); _scC2.set(0, sp, -cp);  // equatorial → local horizontal (world y-up, north=-Z)
   _scM.makeBasis(_scC0,_scC1,_scC2); starMap.grp.quaternion.setFromRotationMatrix(_scM);
   for (const s of starMap.labs) s.material.opacity = uNight.value*0.9;
+  // shooting stars — each meteor waits a random spell, then streaks a short arc with a fading tail
+  if (starMap.meteors){ const now=performance.now();
+    for (const M of starMap.meteors){
+      if (M.dur===0){                                   // idle → maybe spawn
+        if (now>=M.next){
+          M.from.set(Math.random()*2-1, 0.35+Math.random()*0.6, Math.random()*2-1).normalize().multiplyScalar(STAR_R);
+          const dir=new THREE.Vector3(Math.random()*2-1, -(0.2+Math.random()*0.4), Math.random()*2-1).normalize();
+          M.to.copy(M.from).addScaledVector(dir, STAR_R*(0.30+Math.random()*0.25));
+          M.dur=420+Math.random()*360; M.t=0; M.line.visible=true;
+        }
+      } else {                                          // animating
+        M.t+=16; const k=Math.min(1, M.t/M.dur);
+        const pos=M.geo.attributes.position.array, seg=M.seg, tailFrac=0.18;
+        for(let i=0;i<seg;i++){ const f=i/(seg-1); const kk=Math.max(0, k - f*tailFrac);   // head at k, tail trails behind
+          pos[i*3]  =M.from.x+(M.to.x-M.from.x)*kk; pos[i*3+1]=M.from.y+(M.to.y-M.from.y)*kk; pos[i*3+2]=M.from.z+(M.to.z-M.from.z)*kk; }
+        M.geo.attributes.position.needsUpdate=true;
+        M.uMet.value = uNight.value * Math.sin(Math.min(1,k)*Math.PI);   // fade in then out over the streak
+        if (k>=1){ M.dur=0; M.line.visible=false; M.uMet.value=0; M.next=now+2500+Math.random()*9000; }
+      }
+    }
+  }
 }
 
 function buildLabels(){
@@ -4855,8 +4988,13 @@ function buildOcean() {
     // ALIEN: map the sea by BRIGHTNESS onto a bounded teal ramp (not a multiply) so highlights/sparkle/SSS can't blow
     // out into a garish magenta/green band at the horizon — it stays a thick, even toxic-teal "gas".
     const _ocLum = clamp(_ocb.r.mul(0.3).add(_ocb.g.mul(0.59)).add(_ocb.b.mul(0.11)).mul(1.25), 0.0, 1.0);
-    const _alienSea = mix(vec3(0.03,0.20,0.17), vec3(0.12,0.52,0.42), _ocLum);
-    oceanMat.colorNode = mix(_ocb, _alienSea, uAlien.mul(0.78));
+    // ALIEN sea = TOXIC GREEN, not turquoise. Two ramps blended by distance-to-coast (_coastN, 0 shore→1 deep):
+    // the near/lagoon water is a deep sickly green; the DISTANT open sea glows into a brighter radioactive
+    // yellow-green so the toxic look reads strongest far out (where the user wanted it).
+    const _alienNear = mix(vec3(0.03,0.13,0.05), vec3(0.16,0.42,0.09), _ocLum);
+    const _alienFar  = mix(vec3(0.05,0.19,0.04), vec3(0.36,0.72,0.07), _ocLum);
+    const _alienSea  = mix(_alienNear, _alienFar, clamp(_coastN, 0.0, 1.0));
+    oceanMat.colorNode = mix(_ocb, _alienSea, uAlien.mul(0.82));
   }
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
@@ -6717,10 +6855,17 @@ function buildGlobe(){
   globeScene.add(globeSun); globeScene.add(globeSun.target);
   globeMoon=new THREE.DirectionalLight(0x9fc0ff, 1.25);                  // silvery moonlight tints the night side (anti-solar), bright enough to read the dark-side dioramas
   globeScene.add(globeMoon); globeScene.add(globeMoon.target);
-  const sg=new THREE.BufferGeometry(), N=700, sp=new Float32Array(N*3);
-  for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(40+Math.random()*25); sp.set([v.x,v.y,v.z], i*3); }
-  sg.setAttribute('position', new THREE.BufferAttribute(sp,3));
-  globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color:0xbcd4ff, size:0.16, sizeAttenuation:true, transparent:true, opacity:0.85 })));
+  // rich starfield: a dense faint dusting + a sparse layer of brighter, tinted stars
+  { const N=2000, sp=new Float32Array(N*3), sc=new Float32Array(N*3);
+    for (let i=0;i<N;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(45+Math.random()*22); sp.set([v.x,v.y,v.z], i*3);
+      const t=Math.random(); sc[i*3]=0.60+0.34*t; sc[i*3+1]=0.70+0.16*t; sc[i*3+2]=0.95-0.22*t; }
+    const sg=new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(sp,3)); sg.setAttribute('color', new THREE.BufferAttribute(sc,3));
+    globeScene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size:0.17, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false })));
+    const NB=220, bp=new Float32Array(NB*3), bc=new Float32Array(NB*3);
+    for (let i=0;i<NB;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(44+Math.random()*22); bp.set([v.x,v.y,v.z], i*3);
+      const t=Math.random(); bc[i*3]=0.90+0.10*t; bc[i*3+1]=0.94+0.06*t; bc[i*3+2]=1.0-0.14*t; }
+    const bg=new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(bp,3)); bg.setAttribute('color', new THREE.BufferAttribute(bc,3));
+    globeScene.add(new THREE.Points(bg, new THREE.PointsMaterial({ size:0.40, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:1.0, blending:THREE.AdditiveBlending, depthWrite:false }))); }
   globeSpin=new THREE.Group(); globeScene.add(globeSpin);
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
   if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03;   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
