@@ -3489,6 +3489,19 @@ function makePalm(o){   // o: {trunkH, lean, nf, frondLen, droop, trunkR}
   }
   return mergeGeos(geos);
 }
+// ALIEN foliage albedo: take the (style-graded) vertex color and, by uAlien, remap its brightness onto a cool
+// crystalline ramp (dark violet → bright cyan) so palms/shrubs read as alien flora instead of Earth green. At
+// uAlien=0 it returns the vertex color unchanged, so Earth + the style re-grade are untouched.
+function _alienFloraLum(){ const vc=attribute('color','vec3');
+  return clamp(vc.r.mul(0.3).add(vc.g.mul(0.59)).add(vc.b.mul(0.11)).mul(1.25), 0.0, 1.0); }
+function _alienFloraColor(){
+  const vc = attribute('color','vec3');
+  const alien = mix(vec3(0.16,0.14,0.31), vec3(0.46,0.86,0.92), _alienFloraLum());   // dark violet trunks → bright crystal-cyan foliage
+  return mix(vc, alien, uAlien);
+}
+// faint bioluminescent self-glow on the FOLIAGE (scales with leaf luminance), so alien flora reads as glowing crystal
+// against the pale terrain instead of dark silhouettes. Zero on Earth (uAlien=0).
+function _alienFloraEmissive(){ return vec3(0.10,0.55,0.62).mul(_alienFloraLum()).mul(uAlien).mul(0.55); }
 function buildPalms(){
   if (REGION.flora && REGION.flora.palms===false) return;   // arid regions (Cyclades) have no palms
   const variants = [
@@ -3496,7 +3509,7 @@ function buildPalms(){
     makePalm({ trunkH:3.2, lean:0.06, nf:9, frondLen:2.6, droop:0.85, trunkR:0.28 }),  // short, bushy, heavy droop
     makePalm({ trunkH:4.6, lean:0.26, nf:7, frondLen:3.0, droop:0.7,  trunkR:0.22 }),  // leaning
   ];
-  const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85 });
+  const mat = new THREE.MeshStandardNodeMaterial({ roughness:0.85 }); mat.colorNode=_alienFloraColor(); mat.emissiveNode=_alienFloraEmissive();   // colorNode reads the 'color' attr itself → don't also set vertexColors (it would multiply in again)
   for (const g of variants) registerStyledColors(g);   // palms join the style re-grade
   const CAPv = 240;
   const meshes = variants.map(g => { const m=new THREE.InstancedMesh(g, mat, CAPv);
@@ -3530,7 +3543,7 @@ function makeBush(){
   return mergeGeos(geos);
 }
 function buildShrubs(){
-  const g=makeBush(), mat=new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.92 });
+  const g=makeBush(), mat=new THREE.MeshStandardNodeMaterial({ roughness:0.92 }); mat.colorNode=_alienFloraColor(); mat.emissiveNode=_alienFloraEmissive();   // colorNode reads 'color' attr itself → no vertexColors flag
   registerStyledColors(g);                              // shrubs join the style re-grade
   const fl=REGION.flora||{};
   const DENS=fl.density||1;                             // per-region foliage multiplier (densely pine-forested Sweden ≈ 6)
@@ -4195,6 +4208,47 @@ const OBS_LAT = 17.7 * Math.PI/180, OBS_LON_DEG = -62.0, STAR_R = 9000;   // big
 function _raDecVec(raDeg, decDeg, out){ const ra=raDeg*Math.PI/180, dec=decDeg*Math.PI/180, cd=Math.cos(dec);
   return out.set(cd*Math.cos(ra), cd*Math.sin(ra), Math.sin(dec)); }
 
+// MILKY WAY as a CLOUD OF UNRESOLVED STARS concentrated on the galactic plane — not a textured strip (which read as a
+// flat "bandage"). Thousands of points: a tight bright spine + a broad faint halo + soft haze blobs to fuse the glow,
+// clumped along galactic longitude into star-clouds with a dark dust rift. Generated in a local frame (galactic
+// equator = the XZ plane), then the whole object is tilted so its pole points at the real galactic north pole; added
+// to `parent` so it inherits the sidereal rotation. `opaNode` gates brightness (uNight for the sky, a constant for the
+// globe). Returns the Points so the caller can keep it.
+function _buildMilkyWayStars(parent, R, opaNode){
+  const N=9000, pos=new Float32Array(N*3), col=new Float32Array(N*3), siz=new Float32Array(N), ph=new Float32Array(N);
+  const clump=(l)=> Math.max(0.10, Math.min(1, 0.55 + 0.30*Math.sin(l+0.5) + 0.22*Math.sin(l*2.3+1.7) + 0.15*Math.sin(l*5.1+4.0)));   // star-clouds along the band
+  const gauss=()=> Math.sqrt(-2*Math.log(Math.random()+1e-9))*Math.cos(6.2831853*Math.random());
+  let k=0, guard=0;
+  while(k<N && guard<N*40){ guard++;
+    const l=Math.random()*Math.PI*2;
+    const roll=Math.random(); const haze=roll<0.16, tight=!haze && roll<0.72;       // 16% soft haze, ~56% tight spine, ~28% broad halo
+    const sigma= haze?0.13 : (tight?0.045:0.16);
+    const b=gauss()*sigma; if(Math.abs(b)>0.62) continue;
+    const rift = 1 - 0.62*Math.exp(-Math.pow((b-0.03)/0.024,2))*(0.55+0.45*Math.sin(l*1.3+0.7));   // a dark dust lane skirts the spine
+    if(Math.random() > clump(l)*rift) continue;
+    const cb=Math.cos(b);
+    pos[k*3]=cb*Math.cos(l)*R; pos[k*3+1]=Math.sin(b)*R; pos[k*3+2]=cb*Math.sin(l)*R;
+    const warm=Math.random(); let r=0.60+0.34*warm, g2=0.68+0.16*warm, bl=0.97-0.20*warm;
+    const br = haze ? (0.06+Math.random()*0.10) : (tight ? (0.45+Math.random()*0.85) : (0.20+Math.random()*0.38));
+    col[k*3]=r*br; col[k*3+1]=g2*br; col[k*3+2]=bl*br;
+    siz[k]= haze ? (5+Math.random()*5) : ((tight?1.1:0.9) + Math.random()*1.3);
+    ph[k]=Math.random()*6.2831853; k++;
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0,k*3),3));
+  g.setAttribute('acolor', new THREE.BufferAttribute(col.subarray(0,k*3),3));
+  g.setAttribute('asize', new THREE.BufferAttribute(siz.subarray(0,k),1));
+  g.setAttribute('aphase', new THREE.BufferAttribute(ph.subarray(0,k),1));
+  const m=new THREE.PointsNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
+  m.sizeNode=attribute('asize'); m.colorNode=attribute('acolor','vec3');
+  const tw=sin(uTime.mul(2.0).add(attribute('aphase'))).mul(0.5).add(0.5);    // gentle shimmer (static on the globe where uTime is frozen — fine)
+  m.opacityNode=opaNode.mul(float(0.62).add(tw.mul(0.38)));
+  const pts=new THREE.Points(g, m); pts.frustumCulled=false; pts.renderOrder=-9;
+  const gp=_raDecVec(192.85, 27.13, new THREE.Vector3());                      // tilt the galactic plane onto the real galactic pole
+  pts.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), gp);
+  parent.add(pts); return pts;
+}
+
 function buildStarMap(){
   const grp = new THREE.Group(); grp.frustumCulled=false;
   const SM = window.STARMAP, _v = new THREE.Vector3(), cc = new THREE.Color();
@@ -4249,6 +4303,9 @@ function buildStarMap(){
     const ftw=sin(uTime.mul(3.3).add(attribute('aphase'))).mul(0.5).add(0.5);
     fm.opacityNode=uNight.mul(float(0.40).add(ftw.mul(0.35)));
     const fpts=new THREE.Points(fg, fm); fpts.frustumCulled=false; fpts.renderOrder=-9; grp.add(fpts); }
+
+  // ---- MILKY WAY: a galactic-plane star cloud (granular glow, no hard edges) ----
+  _buildMilkyWayStars(grp, STAR_R, uNight);
 
   // ---- SHOOTING STARS: a small pool of meteors that streak occasionally across the night sky ----
   const meteors=[];
@@ -6865,7 +6922,8 @@ function buildGlobe(){
     for (let i=0;i<NB;i++){ const v=new THREE.Vector3().randomDirection().multiplyScalar(44+Math.random()*22); bp.set([v.x,v.y,v.z], i*3);
       const t=Math.random(); bc[i*3]=0.90+0.10*t; bc[i*3+1]=0.94+0.06*t; bc[i*3+2]=1.0-0.14*t; }
     const bg=new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(bp,3)); bg.setAttribute('color', new THREE.BufferAttribute(bc,3));
-    globeScene.add(new THREE.Points(bg, new THREE.PointsMaterial({ size:0.40, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:1.0, blending:THREE.AdditiveBlending, depthWrite:false }))); }
+    globeScene.add(new THREE.Points(bg, new THREE.PointsMaterial({ size:0.40, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:1.0, blending:THREE.AdditiveBlending, depthWrite:false })));
+    _buildMilkyWayStars(globeScene, 54, float(0.85)); }
   globeSpin=new THREE.Group(); globeScene.add(globeSpin);
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
   if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03;   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
