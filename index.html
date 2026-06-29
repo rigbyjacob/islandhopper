@@ -2118,7 +2118,7 @@ function buildMoon(){
   const disk=smoothstep(1.0, 0.90, r2);                              // soft-edged round mask
   const nz=float(1.0).sub(r2).max(0.0).sqrt();                       // sphere z (fake normal)
   const a=oneMinus(uMoonPhase).mul(Math.PI);                        // phase → light angle: full=0 (toward viewer), new=π (behind)
-  const ndl=p.x.mul(sin(a)).negate().add(nz.mul(cos(a)));           // n·L; x negated because the billboard faces the camera (mirrors local x) → waxing lit on the right, matching the slider handle
+  const ndl=p.x.mul(sin(a)).add(nz.mul(cos(a)));                    // n·L with L=(sinα,0,cosα) → waxing lit on the right, matching the slider handle (billboard local +x maps to screen-right)
   const shade=smoothstep(-0.12, 0.14, ndl).mul(0.95).add(0.06);     // terminator + faint earthshine
   mat.colorNode=texture(tex, uvv).xyz.mul(uMoonCol).mul(shade).mul(1.7);   // bright silver so it reads as a real moon at night
   mat.opacityNode=disk.mul(clamp(uMoonUp.mul(1.4), 0.0, 1.0));
@@ -7239,6 +7239,14 @@ function drawMoonPhase(cv, p){
   ctx.beginPath(); ctx.arc(cx,cy,R,0,7); ctx.strokeStyle='rgba(176,198,255,0.55)'; ctx.lineWidth=1; ctx.stroke();
 }
 // slider whose draggable handle is a live moon showing the current phase
+// name the waxing slider's major phases (the slider runs new→full, lit on the right)
+function _moonPhaseName(t){
+  if (t<0.04) return 'New';
+  if (t<0.46) return 'Waxing crescent';
+  if (t<0.54) return 'First quarter';
+  if (t<0.96) return 'Waxing gibbous';
+  return 'Full';
+}
 function addMoonSlider(parent, label, obj, key){
   const row=el('div','row',parent);
   el('label','',row).textContent=label;
@@ -7251,7 +7259,7 @@ function addMoonSlider(parent, label, obj, key){
     'filter:drop-shadow(0 0 5px rgba(150,180,255,0.7));';
   const cv=document.createElement('canvas'); cv.width=cv.height=22; cv.style.cssText='display:block;width:22px;height:22px;border-radius:50%';
   handle.appendChild(cv);
-  function render(){ const t=Math.max(0,Math.min(1,obj[key])); handle.style.left=(6+t*88)+'%'; drawMoonPhase(cv,t); val.textContent=Math.round(t*100)+'%'; }
+  function render(){ const t=Math.max(0,Math.min(1,obj[key])); handle.style.left=(6+t*88)+'%'; drawMoonPhase(cv,t); val.textContent=_moonPhaseName(t); val.title=Math.round(t*100)+'% lit'; }
   function setFromX(clientX){ const r=track.getBoundingClientRect(); let t=(clientX-r.left)/r.width; obj[key]=+Math.max(0,Math.min(1,t)).toFixed(2); render(); saveSettings(); }
   track.addEventListener('pointerdown', (e)=>{ track.setPointerCapture(e.pointerId); setFromX(e.clientX);
     const mv=(ev)=>setFromX(ev.clientX), up=()=>{ track.removeEventListener('pointermove',mv); track.removeEventListener('pointerup',up); };
