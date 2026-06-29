@@ -2165,8 +2165,10 @@ function buildMoon(){
     mesh.renderOrder=-8; mesh.frustumCulled=false; mesh.visible=false;
     mesh.userData={orbit, scale, l1, l2}; scene.add(mesh); _alienMoons.push(mesh);
   };
-  _mkAlienMoon([1.05,0.92,0.84], {speed:0.050, phase:0.0, tilt:0.50, yaw:0.85}, 230);   // larger rocky moon (warm-grey albedo)
-  _mkAlienMoon([0.86,0.92,1.05], {speed:0.082, phase:2.3, tilt:1.15, yaw:-1.45}, 150);  // small pale-blue moon
+  // orbit `speed` is now RADIANS PER HOUR of in-app time (keyed off the time-of-day scrubber, like the sun/moon) so the
+  // moons rise & set with the day/night cycle and the auto-day run — not wall-clock time.
+  _mkAlienMoon([1.05,0.92,0.84], {speed:0.262, phase:0.0, tilt:0.50, yaw:0.85}, 230);   // larger rocky moon (~1 orbit/day)
+  _mkAlienMoon([0.86,0.92,1.05], {speed:0.436, phase:2.3, tilt:1.15, yaw:-1.45}, 150);  // small pale-blue moon (~1.7 orbits/day)
 }
 function _moonOrbitDir(tSec, o, out){
   const ang=tSec*o.speed + o.phase;
@@ -2182,20 +2184,23 @@ function updateMoonMesh(){
   moonMesh.visible = uMoonUp.value > 0.02;
   if(moonMesh.visible && activeCam){
     _mdir.set(uMoonDir.value.x, uMoonDir.value.y - uHorizonDrop.value, uMoonDir.value.z).normalize();
-    // anchor on the sky dome (centred at the map), so the textured disk lines up exactly with the dome's moon halo
-    moonMesh.position.set(MAP.cx + _mdir.x*5000, _mdir.y*5000, MAP.cz + _mdir.z*5000);
+    // anchor CAMERA-RELATIVE (at "infinity"), matching the sky-shader moon glow which is purely view-directional — so the
+    // textured disk and its halo stay aligned no matter where the boat/camera is (anchoring at the map centre made them
+    // drift apart as the camera moved away from MAP.cx/cz).
+    const _cp=activeCam.position;
+    moonMesh.position.set(_cp.x + _mdir.x*5000, _cp.y + _mdir.y*5000, _cp.z + _mdir.z*5000);
     moonMesh.lookAt(activeCam.position);
     moonMesh.scale.set(340,340,1);
   }
   // alien companion moons — only when the alien skin is on; each rides its own slow orbit
   if(_alienMoons.length && activeCam){
-    const tSec=performance.now()*0.001, show=uAlien.value>0.35;
+    const tDay=(typeof P!=='undefined'&&P.timeOfDay!=null)?P.timeOfDay:0, show=uAlien.value>0.35;   // key off the time scrubber, not wall-clock
     for(const m of _alienMoons){
-      _moonOrbitDir(tSec, m.userData.orbit, _amdir);
+      _moonOrbitDir(tDay, m.userData.orbit, _amdir);
       m.visible = show && _amdir.y > -0.12;
       if(!m.visible) continue;
-      const dy=_amdir.y - uHorizonDrop.value;
-      m.position.set(MAP.cx + _amdir.x*5000, dy*5000, MAP.cz + _amdir.z*5000);
+      const dy=_amdir.y - uHorizonDrop.value, _cp=activeCam.position;
+      m.position.set(_cp.x + _amdir.x*5000, _cp.y + dy*5000, _cp.z + _amdir.z*5000);   // camera-relative (at infinity), like the primary moon + stars
       m.lookAt(activeCam.position);
       m.scale.set(m.userData.scale, m.userData.scale, 1);
       // light by BOTH suns: project each sun's sky direction into this moon's billboard basis (+z=toCam, +x=up×z, +y=z×x)
@@ -2260,7 +2265,7 @@ function _tiltSyncUI(){ const lbl=_tiltOn?'⌖ Tilt ●':'⌖ Tilt';
   if(_tiltDemoBtn){ _tiltDemoBtn.classList.toggle('active',_tiltOn); _tiltDemoBtn.textContent=lbl; } }
 // ---- MOBILE FULLSCREEN + LANDSCAPE LOCK (touch only; iOS Safari ignores both gracefully) ----
 const _isTouchUI = (('ontouchstart' in window) || ((navigator.maxTouchPoints||0) > 0));
-let _fsFloatBtn=null, _fsDemoBtn=null;
+let _fsFloatBtn=null, _fsDemoBtn=null, _throttleEl=null;
 function _fsActive(){ return !!(document.fullscreenElement || document.webkitFullscreenElement); }
 function _fsSyncUI(){ const on=_fsActive(), lbl=on?'⤢':'⛶';
   if(_fsFloatBtn){ _fsFloatBtn.classList.toggle('on',on); _fsFloatBtn.textContent=lbl; }
@@ -4221,17 +4226,19 @@ function _buildMilkyWayStars(parent, R, opaNode){
   let k=0, guard=0;
   while(k<N && guard<N*40){ guard++;
     const l=Math.random()*Math.PI*2;
-    const roll=Math.random(); const haze=roll<0.16, tight=!haze && roll<0.72;       // 16% soft haze, ~56% tight spine, ~28% broad halo
-    const sigma= haze?0.13 : (tight?0.045:0.16);
+    // NO smooth haze (it read as gray smudges); small DISCRETE points only — denser along the spine — so it reads as a
+    // granular star river, not an overlapping glow.
+    const roll=Math.random(); const haze=false, tight=roll<0.70;
+    const sigma= haze?0.13 : (tight?0.05:0.17);
     const b=gauss()*sigma; if(Math.abs(b)>0.62) continue;
     const rift = 1 - 0.62*Math.exp(-Math.pow((b-0.03)/0.024,2))*(0.55+0.45*Math.sin(l*1.3+0.7));   // a dark dust lane skirts the spine
     if(Math.random() > clump(l)*rift) continue;
     const cb=Math.cos(b);
     pos[k*3]=cb*Math.cos(l)*R; pos[k*3+1]=Math.sin(b)*R; pos[k*3+2]=cb*Math.sin(l)*R;
     const warm=Math.random(); let r=0.60+0.34*warm, g2=0.68+0.16*warm, bl=0.97-0.20*warm;
-    const br = haze ? (0.06+Math.random()*0.10) : (tight ? (0.45+Math.random()*0.85) : (0.20+Math.random()*0.38));
+    const br = tight ? (0.5+Math.random()*0.85) : (0.22+Math.random()*0.4);
     col[k*3]=r*br; col[k*3+1]=g2*br; col[k*3+2]=bl*br;
-    siz[k]= haze ? (5+Math.random()*5) : ((tight?1.1:0.9) + Math.random()*1.3);
+    siz[k]= (tight?1.2:0.9) + Math.random()*1.4;                       // SMALL points (≤~2.6px) so they stay discrete
     ph[k]=Math.random()*6.2831853; k++;
   }
   const g=new THREE.BufferGeometry();
@@ -4268,9 +4275,9 @@ function buildStarMap(){
     const isC=vset.has(ra.toFixed(2)+','+dec.toFixed(2));                          // constellation member?
     const tc=Math.max(0,Math.min(1,(bv+0.4)/2.0));                                // B-V: blue-white → amber
     cc.setRGB(0.72+0.28*tc, 0.82+0.05*tc, 1.0-0.35*tc);
-    const bb=Math.min(2.0, 0.70+0.85*b)*(isC?1.3:1.0);
+    const bb=Math.min(3.2, 0.95+1.25*b)*(isC?1.45:1.0);                           // punchier: brighter cores, brilliant stars really blaze
     gc[i*3]=cc.r*bb; gc[i*3+1]=cc.g*bb; gc[i*3+2]=cc.b*bb;
-    gs[i]=(2.2+3.4*Math.min(1.5,b)) + 7.5*bright*bright;                          // brilliant stars get a much bigger disk
+    gs[i]=(3.2+5.0*Math.min(1.5,b)) + 15.0*bright*bright;                         // bigger discs overall; brilliant stars get a huge glow
     gph[i]=Math.random()*6.2832;
     gtw[i]=0.18 + 0.34*bright;                                                    // brighter stars twinkle more
   }
@@ -4282,9 +4289,10 @@ function buildStarMap(){
   g.setAttribute('atw', new THREE.BufferAttribute(gtw,1));
   const mat=new THREE.PointsNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
   mat.sizeNode=attribute('asize'); mat.colorNode=attribute('acolor','vec3');
-  // twinkle: per-star amplitude (bright stars shimmer more), two beat frequencies for a livelier sparkle
-  const tw = sin(uTime.mul(2.6).add(attribute('aphase'))).mul(0.6).add(sin(uTime.mul(5.7).add(attribute('aphase').mul(1.7))).mul(0.4));
-  mat.opacityNode=uNight.mul(oneMinus(attribute('atw')).add(attribute('atw').mul(tw.mul(0.5).add(0.5))));
+  // twinkle: per-star amplitude (bright stars shimmer more), two beat frequencies — exaggerated for a livelier sparkle
+  const tw = sin(uTime.mul(2.6).add(attribute('aphase'))).mul(0.8).add(sin(uTime.mul(5.7).add(attribute('aphase').mul(1.7))).mul(0.55));
+  const twk = oneMinus(attribute('atw')).add(attribute('atw').mul(tw.mul(0.5).add(0.5)));
+  mat.opacityNode=uNight.mul(twk);
   const pts=new THREE.Points(g, mat); pts.frustumCulled=false; pts.renderOrder=-9; grp.add(pts);
 
   // ---- FAINT FILL: a deep dusting of dim background stars between the catalogue stars, so the open-ocean sky reads
@@ -4294,14 +4302,14 @@ function buildStarMap(){
       const x=rr*Math.cos(th), y=rr*Math.sin(th), z=u;
       fp[i*3]=x*STAR_R; fp[i*3+1]=y*STAR_R; fp[i*3+2]=z*STAR_R;
       const t=Math.random(); fc[i*3]=0.62+0.30*t; fc[i*3+1]=0.70+0.16*t; fc[i*3+2]=0.92-0.20*t;   // cool→warm tints
-      fs[i]=1.1+Math.random()*1.7; fph[i]=Math.random()*6.2832; }
+      fs[i]=1.7+Math.random()*2.4; fph[i]=Math.random()*6.2832; }
     const fg=new THREE.BufferGeometry();
     fg.setAttribute('position', new THREE.BufferAttribute(fp,3)); fg.setAttribute('acolor', new THREE.BufferAttribute(fc,3));
     fg.setAttribute('asize', new THREE.BufferAttribute(fs,1)); fg.setAttribute('aphase', new THREE.BufferAttribute(fph,1));
     const fm=new THREE.PointsNodeMaterial({ transparent:true, depthTest:true, depthWrite:false, blending:THREE.AdditiveBlending });
     fm.sizeNode=attribute('asize'); fm.colorNode=attribute('acolor','vec3');
     const ftw=sin(uTime.mul(3.3).add(attribute('aphase'))).mul(0.5).add(0.5);
-    fm.opacityNode=uNight.mul(float(0.40).add(ftw.mul(0.35)));
+    fm.opacityNode=uNight.mul(float(0.55).add(ftw.mul(0.45)));
     const fpts=new THREE.Points(fg, fm); fpts.frustumCulled=false; fpts.renderOrder=-9; grp.add(fpts); }
 
   // ---- MILKY WAY: a galactic-plane star cloud (granular glow, no hard edges) ----
@@ -4934,6 +4942,11 @@ function buildOcean() {
     // ALIEN: desaturate the sky reflection toward its luminance so the grazing-horizon reflection doesn't smear into a garish magenta/green band
     const _rLum = rSky.r.mul(0.3).add(rSky.g.mul(0.59)).add(rSky.b.mul(0.11));
     rSky.assign(mix(rSky, vec3(_rLum), uAlien.mul(0.8)));
+    // ALIEN: the COMPANION sun also reflects on the water — its own cool-blue glow + glint disk (kept after the
+    // desaturation so it keeps colour), so two suns visibly glint on the sea. Gated by uAlien → no effect on Earth.
+    const sun2Vr = normalize(vec3(uSun2Dir.x, uSun2Dir.y.sub(uHorizonDrop), uSun2Dir.z));
+    const rsd2 = max(dot(refl, sun2Vr), 0.0);
+    rSky.addAssign(uSun2Col.mul(pow(rsd2,12.0).mul(0.40).add(pow(rsd2,340.0).mul(3.4))).mul(uSunInt).mul(uAlien));
     col.assign(mix(col, rSky, clamp(fres, 0.0, 1.0).mul(hkFlat)));
     // Van Gogh SEA: mirror the swirling Starry-Night sky along the RIPPLED reflection vector (refl carries the wave
     // normal, so the swirls/stars/moon wobble on the water) — the painting's village pond. Default; dev.vgSea(0) → impasto.
@@ -5718,12 +5731,22 @@ function setFly(on){
     flyState.keys = {};
   } else {
     handoffToOrbit(flyCam);                                  // return to orbit at the same spot
+    flyState.throttle=0; flyState.throttleTarget=0;          // drop throttle when leaving free cam
   }
+  if (_throttleEl) _throttleEl.style.display = (on && _isTouchUI) ? 'block' : 'none';   // throttle only in free cam on touch
   const app=document.getElementById('app'); if(app) app.style.cursor = on ? 'grab' : '';
   if (ui.flyBtn) ui.flyBtn.textContent = on ? '✈ Flying — F to exit' : '✈ Fly the map (F)';
 }
 function updateFlyCam(dt){
   const K=flyState.keys, boost=K['shift']?2.6:1.0;
+  // MOBILE TILT → VIEW ROTATION (free cam): tilt left/right yaws, tilt fwd/back pitches. Movement is the throttle, not tilt.
+  if (_tiltOn && !worldMapOpen){
+    const RZ=0.05;
+    const tx = Math.abs(_tiltX)>RZ ? (_tiltX-Math.sign(_tiltX)*RZ) : 0;
+    const ty = Math.abs(_tiltY)>RZ ? (_tiltY-Math.sign(_tiltY)*RZ) : 0;
+    flyState.yaw  += tx * 1.7 * dt;                                                 // tilt right → pan right
+    flyState.pitch = clampJS(flyState.pitch + ty * 1.5 * dt, -1.45, 1.45);          // tilt top-edge-down → look down
+  }
   const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
   const fx=cy*cp, fy=sp2, fz=sy*cp;                                  // forward
   const rx=Math.cos(flyState.yaw+Math.PI/2), rz=Math.sin(flyState.yaw+Math.PI/2);   // right (horizontal)
@@ -5743,6 +5766,12 @@ function updateFlyCam(dt){
   if(rt){  p.x+=rx*sp; p.z+=rz*sp; }
   if(K['e']||K[' ']) p.y+=sp;     // E (or Space) up
   if(K['q']||K['c']) p.y-=sp;     // Q (or C) down
+  // MOBILE THROTTLE (right-side drag): eases toward the dragged target, springs back to 0 on release (coast). Squared
+  // response for fine low-end control; capped. Drives forward/back along the current view direction.
+  flyState.throttle = (flyState.throttle||0) + ((flyState.throttleTarget||0) - (flyState.throttle||0)) * Math.min(1, dt*3.2);
+  if (Math.abs(flyState.throttle) < 0.002) flyState.throttle = 0;
+  if (flyState.throttle){ const ts = flyState.throttle*Math.abs(flyState.throttle) * 900 * dt;
+    p.x+=fx*ts; p.y+=fy*ts; p.z+=fz*ts; }
   p.y=Math.max(p.y, seabedHeight(p.x,p.z)+2.5);                      // can dive UNDER the water now, but not through the seabed
   flyCam.position.copy(p);
   flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
@@ -6106,7 +6135,8 @@ function initInput() {
     const applyTiltControls=()=>{
       clearKeys();
       if (worldMapOpen) return;                            // globe consumes _tiltX/_tiltY directly in updateGlobe()
-      const tgt = (typeof flyMode!=='undefined' && flyMode) ? flyState.keys : manualKeys;   // fly cam vs ship/vehicle — both use WASD
+      if (typeof flyMode!=='undefined' && flyMode) return; // FREE CAM: tilt only ROTATES the view (handled in updateFlyCam); forward/back is the throttle, not tilt
+      const tgt = manualKeys;                              // ship / vehicle: tilt still steers like WASD
       const HX=0.12, HY=0.14;                              // ~7° / ~8° activation (sin units)
       tgt['a'] = _tiltX < -HX;  tgt['d'] = _tiltX > HX;    // tilt left/right
       tgt['w'] = _tiltY < -HY;  tgt['s'] = _tiltY > HY;    // tilt forward/back (forward = top edge down)
@@ -6147,6 +6177,22 @@ function initInput() {
   if (_isTouchUI){   // floating fullscreen/landscape toggle (bottom-right), hidden while the demo bar owns it
     const fb=document.createElement('div'); fb.id='fsbtn'; fb.textContent='⛶'; fb.title='Fullscreen + landscape lock';
     fb.onclick=_toggleFullscreen; document.body.appendChild(fb); _fsFloatBtn=fb;
+  }
+  if (_isTouchUI){   // FREE-CAM THROTTLE: right-side vertical strip — drag up = forward, down = reverse; springs back to neutral (coast) on release
+    const H=200, KNOB=46, center=(H-KNOB)/2;
+    const th=document.createElement('div'); th.id='throttle';
+    Object.assign(th.style,{ position:'fixed', right:'14px', bottom:'92px', width:'60px', height:H+'px', borderRadius:'30px',
+      background:'rgba(18,28,38,0.42)', border:'1px solid rgba(140,200,255,0.34)', zIndex:130, display:'none', touchAction:'none' });
+    const mid=document.createElement('div'); Object.assign(mid.style,{ position:'absolute', left:'12px', right:'12px', top:'50%', height:'2px', background:'rgba(255,255,255,0.22)' }); th.appendChild(mid);
+    const lbl=document.createElement('div'); lbl.textContent='THR'; Object.assign(lbl.style,{ position:'absolute', left:'0', right:'0', top:'7px', textAlign:'center', color:'rgba(200,230,255,0.55)', font:'10px sans-serif', letterSpacing:'1px' }); th.appendChild(lbl);
+    const knob=document.createElement('div'); Object.assign(knob.style,{ position:'absolute', left:'7px', width:KNOB+'px', height:KNOB+'px', borderRadius:'50%', top:center+'px', background:'rgba(170,200,220,0.7)', boxShadow:'0 0 10px rgba(120,255,200,0.45)' }); th.appendChild(knob);
+    const setKnob=(t)=>{ knob.style.top=(center - t*center)+'px'; knob.style.background = t>0.02?'rgba(120,220,180,0.92)':(t<-0.02?'rgba(240,170,120,0.92)':'rgba(170,200,220,0.7)'); };
+    let drag=false, sy=0, sThr=0;
+    th.addEventListener('touchstart', e=>{ drag=true; sy=e.touches[0].clientY; sThr=flyState.throttleTarget||0; e.preventDefault(); }, {passive:false});
+    th.addEventListener('touchmove', e=>{ if(!drag) return; const dy=sy-e.touches[0].clientY; const t=clampJS(sThr + dy/center, -1, 1); flyState.throttleTarget=t; setKnob(t); e.preventDefault(); }, {passive:false});
+    const endT=()=>{ if(!drag) return; drag=false; flyState.throttleTarget=0; setKnob(0); };   // release → spring back to neutral; coasts to a stop
+    th.addEventListener('touchend', endT); th.addEventListener('touchcancel', endT);
+    document.body.appendChild(th); _throttleEl=th;
   }
 
   let dragging=false, lx=0, ly=0;
@@ -7166,14 +7212,17 @@ function updateGlobe(dt){
     const _gx = Math.abs(_tiltX)>_dz ? clampJS(_tiltX,-_cap,_cap)-Math.sign(_tiltX)*_dz : 0;   // downhill-right → roll right (like dragging right)
     const _gy = Math.abs(_tiltY)>_dz ? clampJS(_tiltY,-_cap,_cap)-Math.sign(_tiltY)*_dz : 0;   // downhill-down  → roll down  (like dragging down)
     if (_gx||_gy){ const _f=(dt||0.016)*60;
-      globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _gx*_rate*_f);
-      globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _gy*_rate*_f);
+      // REVERSED from the marble-on-tray model (felt backwards): tilt right now brings the right side toward you
+      // (like pushing/dragging the globe in the tilt direction), which testers found more intuitive.
+      globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), -_gx*_rate*_f);
+      globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), -_gy*_rate*_f);
       _globeIdle=0; _globeLevel=null; }                                                  // active tilt cancels the idle auto-level
   }
   // idle auto-level: after 30s untouched, ease the north pole back upright (arcball drag can leave the globe rolled/tilted)
   // while preserving the focal point (whatever is currently centred at the front stays centred).
   const _busy = !!_globeDrag || (Math.abs(_globeVel.x)+Math.abs(_globeVel.y))>1e-4 || !!_diveZoom;
   if (_busy){ _globeIdle=0; _globeLevel=null; }
+  else if (_tiltOn){ _globeIdle=0; _globeLevel=null; }   // TILT MODE: never auto-level — don't reset the orientation the user set by tilting
   else {
     _globeIdle += dt||0.016;
     if (_globeIdle>1 && !_globeLevel){
