@@ -2970,10 +2970,11 @@ function updateEnvironment(dt) {
   if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
     // locale fog: foggy regions (Faroe/Kodiak/St.John's/Skye) carry a fog weight → paler, closer haze. The Fog slider adds on top.
     const rFog = clampJS(((REGION && REGION.fog) || 0) + (P.fog || 0), 0, 1);
-    if (rFog>0){ const db=uDayBright.value; _fogPale.setRGB(0.62*db+0.20, 0.66*db+0.20, 0.70*db+0.22); fog.color.lerp(_fogPale, rFog*0.55); }
+    const fT = Math.pow(rFog, 0.6);   // front-load the curve so even low slider values pull the haze in noticeably
+    if (rFog>0){ const db=uDayBright.value; _fogPale.setRGB(0.62*db+0.20, 0.66*db+0.20, 0.70*db+0.22); fog.color.lerp(_fogPale, fT*0.85); }
     // tiny-planet: push the haze out so it recedes PAST the curved horizon instead of banding across it as a flat line
     const fF = P.curveWorld ? 1.55 : 1, fN = P.curveWorld ? 1.3 : 1;
-    fog.near=lerp(lerp(1500,820,rFog),560,localStorm)*fN; fog.far=lerp(lerp(4200,2400,rFog),1900,localStorm)*fF; }
+    fog.near=lerp(lerp(1500,300,fT),560,localStorm)*fN; fog.far=lerp(lerp(4200,950,fT),1900,localStorm)*fF; }
   if (seaSkirt){ const db=uDayBright.value; seaSkirt.material.color.setRGB(0.03*db,0.16*db,0.28*db);
     seaSkirt.position.x=controls.target.x; seaSkirt.position.z=controls.target.z; }
 
@@ -6183,6 +6184,7 @@ function buildPanel() {
   addToggle(s, 'Clouds', P, 'showClouds');
   addToggle(s, 'Soft clouds (off = cartoon)', P, 'cloudSoft', ()=>setCloudStyle());
   addToggle(s, 'Rain particles + splashes', P, 'showRainParticles');
+  ui.rainTog = addToggle(s, 'Rain on lens (storms)', P, 'rainLens', (on)=>{ if (on) enableRain(); else disableRain(); });
   ui.bloomTog = addToggle(s, 'Bloom / glow (beta)', P, 'bloom', (on)=>{ if (on) enableBloom(); else disableBloom(); });
   addToggle(s, 'Ink outlines (woodblock styles)', P, 'outline');
   addToggle(s, 'Route path (wedge markers)', P, 'showPath');   // the ship/sub wedge route — independent of the debug view below
@@ -6325,7 +6327,6 @@ function buildPanel() {
   addSlider(s, 'Storm intensity', P, 'stormIntensity', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Fog', P, 'fog', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Wave height', P, 'waveHeight', 0, 6, 0.1, v=>v.toFixed(1));
-  ui.rainTog = addToggle(s, 'Rain on lens (storms)', P, 'rainLens', (on)=>{ if (on) enableRain(); else disableRain(); });
   if (VOLC_ENABLED){
     ui.eruptBtn = el('div','btn danger', el('div','btns',s)); ui.eruptBtn.textContent='🌋 Erupt volcano';
     ui.eruptBtn.onclick = ()=>{ eruptVolcano(); };
