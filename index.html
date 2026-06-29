@@ -3650,7 +3650,7 @@ const AUDIO_DEFAULTS = {
 function _deepMerge(a,b){ for(const k in b){ if(b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])) a[k]=_deepMerge(a[k]||{},b[k]); else a[k]=b[k]; } return a; }
 let AUDIO_CFG = (()=>{ try{ const j=JSON.parse(localStorage.getItem('islandHopper.audio.v1')||'null'); const base=JSON.parse(JSON.stringify(AUDIO_DEFAULTS)); return j? _deepMerge(base, j) : base; }catch(_){ return JSON.parse(JSON.stringify(AUDIO_DEFAULTS)); } })();
 const EXTRA_SFX = false;   // ← plane engine / UFO beam / storm rain — OFF until tuned; set true to re-enable (soundboard tunes them regardless)
-let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null,
+let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null, _regionBus=null, _regionBusTgt=1,
     _fireVoices=[], _fireIdx=0, _thunderVoices=[], _thunderIdx=0,
     _planeSrc=null, _ufoSrc=null, _rainSrc=null;
 async function _initAudio(){
@@ -3663,6 +3663,9 @@ async function _initAudio(){
   audioListener = new THREE.AudioListener(); scene.add(audioListener);    // listener = the active camera (moved each frame)
   audioListener.setMasterVolume(P.music===false ? 0 : 1);                 // "Sounds" master gate
   const LIN = audioListener.getInput();
+  // REGION ambient BUS: the wind + ocean beds route through this so they can be faded out when we leave the sea for
+  // the globe ("no wind in space") — ramped in _updateAudioListener by worldMapOpen. Music + UFO beam bypass it.
+  _regionBus = new T.Gain(1.0).connect(LIN);
   // --- WIND — ambient, tied to the camera (non-positional → straight to the listener input) ---
   const windGain = new T.Gain(0.0);
   const windLP   = new T.Filter(640, 'lowpass').connect(windGain);
@@ -3670,10 +3673,10 @@ async function _initAudio(){
   new T.Noise('brown').connect(windBP).start();
   new T.LFO({ frequency:0.08, min:300, max:880 }).connect(windBP.frequency).start();   // slow gusts sweep the band
   new T.LFO({ frequency:0.05, min:0.05, max:0.13 }).connect(windGain.gain).start();    // breathe the level in/out
-  windGain.connect(LIN);
+  windGain.connect(_regionBus);
   // --- OCEAN — ambient, level tied to the camera's height over the sea (set per frame in _updateAudioListener).
   //     Chain: pink noise → sway bandpass → MUFFLE lowpass (drops hard underwater) → lapping rhythm → proximity gain.
-  _oceanGain = new T.Gain(0.0).connect(LIN);                              // proximity master (camera height drives it)
+  _oceanGain = new T.Gain(0.0).connect(_regionBus);                       // proximity master (camera height drives it)
   const lapGain = new T.Gain(0.0).connect(_oceanGain);
   _oceanLP  = new T.Filter(1400, 'lowpass').connect(lapGain);             // muffle: ~1400Hz at the surface → ~220Hz underwater
   const oceanBP = new T.Filter({ type:'bandpass', frequency:900, Q:0.55 }).connect(_oceanLP);
@@ -3767,6 +3770,8 @@ function _updateAudioListener(){
   if (!audioListener || !activeCam) return;
   activeCam.getWorldPosition(audioListener.position);
   activeCam.getWorldQuaternion(audioListener.quaternion);
+  if (_regionBus){ const tgt = worldMapOpen ? 0 : 1;   // fade the sea ambience out on the globe ("no wind in space"), back in on the dive
+    if (tgt !== _regionBusTgt){ _regionBusTgt = tgt; _regionBus.gain.rampTo(tgt, tgt ? 0.6 : 1.0); } }   // slower fade-out matches the reverse dive
   if (_oceanGain){
     const c = AUDIO_CFG.ocean, h = audioListener.position.y;  // height above sea (sea level ≈ 0)
     let gain, cutoff;
@@ -3920,8 +3925,12 @@ function setMusic(on){ P.music=!!on;
   if (on){ _initAudio(); }                                                 // the toggle click is a valid gesture → start audio
   if (audioListener){ try{ audioListener.setMasterVolume(on?1:0); }catch(_){} }
   if(!on) stopIntroMusic(); else { _musicPlayed=false; _musicStableT=0; playIntroMusic(); } saveSettings(); }
-// if autoplay was blocked, kick the track off on the first user gesture
-['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev, ()=>{ if(_musicPending && P.music && !_musicPlayed) playIntroMusic(); }));
+// Start the track on the first real user gesture (covers mobile, where autoplay is blocked and the 2s-settle
+// auto-attempt fires OUTSIDE a gesture → stays stuck "pending"). Firing playIntroMusic INSIDE the gesture is the
+// reliable cross-browser path. Guarded so it doesn't start mid-transition; `_musicEl`/`_musicPlayed` prevent doubles.
+['pointerdown','keydown','touchstart'].forEach(ev=>window.addEventListener(ev, ()=>{
+  if (P.music && !_musicPlayed && !_musicEl && !worldMapOpen && !_diveZoom && !_globeRise && !_descent) playIntroMusic();
+}, { passive:true }));
 
 // ============================================================================
 // Estimator step + navigation visuals (path, GPS pings, estimated position)
