@@ -62,8 +62,12 @@
   #skullBtn:hover { background: rgba(30,60,90,.9); }
   /* demo mode stepper */
   #demobar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 120; display: flex; align-items: center; gap: 10px;
-    background: rgba(8,18,30,.82); backdrop-filter: blur(10px); border: 1px solid rgba(140,200,255,.22); border-radius: 14px; padding: 8px 12px;
-    box-shadow: 0 8px 30px rgba(0,0,0,.5); font: 13px ui-sans-serif, system-ui; color: #dfeefb; max-width: 92vw; }
+    background: rgba(8,18,30,.42); backdrop-filter: blur(9px); border: 1px solid rgba(140,200,255,.16); border-radius: 14px; padding: 8px 12px;
+    box-shadow: 0 6px 22px rgba(0,0,0,.35); font: 13px ui-sans-serif, system-ui; color: #dfeefb; max-width: 92vw; }
+  #tiltbtn { position: fixed; left: 12px; bottom: 14px; z-index: 130; padding: 9px 13px; border-radius: 11px;
+    background: rgba(8,18,30,.5); backdrop-filter: blur(8px); border: 1px solid rgba(140,200,255,.22);
+    color: #cfe2f5; font: 600 13px ui-sans-serif, system-ui; user-select: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  #tiltbtn.on { background: rgba(40,120,90,.62); border-color: rgba(120,255,190,.5); color: #eafff4; }
   #demobar .demo-nav { font-size: 22px; line-height: 1; padding: 2px 9px; cursor: pointer; opacity: .7; border-radius: 8px; user-select: none; }
   #demobar .demo-nav:hover { opacity: 1; background: rgba(140,200,255,.14); }
   #demobar .demo-mid { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
@@ -5560,6 +5564,39 @@ function initInput() {
     if (!flyMode && fleetView!=='grid'){ manualKeys[e.key.toLowerCase()] = true; if(e.key.indexOf('Arrow')===0) e.preventDefault(); }   // WASD/arrows pilot the focused fleet vehicle, OR (fleetView off) manually steer the ship
   });
   window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; manualKeys[e.key.toLowerCase()] = false; });
+
+  // ---- MOBILE TILT STEERING: tilt the device to drive like WASD (toggle button, default OFF; iOS asks permission) ----
+  (function setupTiltSteer(){
+    const hasOrient = (typeof DeviceOrientationEvent !== 'undefined');
+    const isTouch = ('ontouchstart' in window) || ((navigator.maxTouchPoints||0) > 0);
+    if (!hasOrient || !isTouch) return;            // only on phones/tablets
+    let on=false, calib=false, baseG=0, baseB=0;
+    const btn=document.createElement('div');
+    btn.id='tiltbtn'; btn.textContent='⌖ Tilt';
+    document.body.appendChild(btn);
+    const clearKeys=()=>{ manualKeys['a']=manualKeys['d']=manualKeys['w']=manualKeys['s']=false; };
+    const onOrient=(e)=>{
+      if (e.gamma==null && e.beta==null) return;
+      const g=e.gamma||0, b=e.beta||0;
+      if (calib){ baseG=g; baseB=b; calib=false; return; } // first reading = neutral hold
+      const steer=g-baseG, thr=b-baseB;                    // gamma=roll→steer, beta=pitch→throttle
+      manualKeys['a'] = steer < -7;  manualKeys['d'] = steer > 7;
+      manualKeys['w'] = thr   < -8;  manualKeys['s'] = thr   > 12;
+    };
+    btn.onclick=async ()=>{
+      if (on){ on=false; window.removeEventListener('deviceorientation',onOrient); clearKeys(); btn.classList.remove('on'); btn.textContent='⌖ Tilt'; return; }
+      try{
+        if (typeof DeviceOrientationEvent.requestPermission === 'function'){
+          const r=await DeviceOrientationEvent.requestPermission();
+          if (r!=='granted'){ btn.textContent='⌖ Tilt ✕'; return; }
+        }
+        calib=true; on=true;
+        window.addEventListener('deviceorientation',onOrient);
+        btn.classList.add('on'); btn.textContent='⌖ Tilt ●';
+      }catch(err){ btn.textContent='⌖ Tilt ✕'; }
+    };
+  })();
+
   let dragging=false, lx=0, ly=0;
   renderer.domElement.addEventListener('pointerdown', (e)=>{ if(fpsMode||flyMode){ dragging=true; lx=e.clientX; ly=e.clientY; } });
   window.addEventListener('pointerup', ()=>{ dragging=false; });
