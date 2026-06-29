@@ -2103,6 +2103,11 @@ function buildLights() {
 const FLEET = [];
 let fleetView = 'off';   // 'off' | 'ship' | 'sub' | 'plane' | 'ufo' | 'grid'
 const manualKeys = {};   // WASD/Q/E state for piloting the focused vehicle
+let _tiltOn=false, _tiltGamma=0, _tiltBeta=0;   // device-tilt steering: ON flag + neutral-relative roll(gamma)/pitch(beta) degrees; consumed by piloting (WASD) and the globe-roll
+let _tiltCapable=false, _tiltToggleFn=null, _tiltFloatBtn=null, _tiltDemoBtn=null;   // one toggle drives two buttons: a floating one in normal play + one inside the demo bar (so they never overlap on small screens)
+function _tiltSyncUI(){ const lbl=_tiltOn?'⌖ Tilt ●':'⌖ Tilt';
+  if(_tiltFloatBtn){ _tiltFloatBtn.classList.toggle('on',_tiltOn); _tiltFloatBtn.textContent=lbl; }
+  if(_tiltDemoBtn){ _tiltDemoBtn.classList.toggle('active',_tiltOn); _tiltDemoBtn.textContent=lbl; } }
 let dirSubjectId = 'ship';   // who the Director camera films (ship, or a focused vehicle)
 function _dirSubject(){
   if (dirSubjectId!=='ship'){ const v=FLEET.find(x=>x.id===dirSubjectId);
@@ -5570,31 +5575,33 @@ function initInput() {
     const hasOrient = (typeof DeviceOrientationEvent !== 'undefined');
     const isTouch = ('ontouchstart' in window) || ((navigator.maxTouchPoints||0) > 0);
     if (!hasOrient || !isTouch) return;            // only on phones/tablets
-    let on=false, calib=false, baseG=0, baseB=0;
-    const btn=document.createElement('div');
-    btn.id='tiltbtn'; btn.textContent='⌖ Tilt';
-    document.body.appendChild(btn);
+    _tiltCapable=true;
+    let calib=false, baseG=0, baseB=0;
     const clearKeys=()=>{ manualKeys['a']=manualKeys['d']=manualKeys['w']=manualKeys['s']=false; };
     const onOrient=(e)=>{
       if (e.gamma==null && e.beta==null) return;
       const g=e.gamma||0, b=e.beta||0;
       if (calib){ baseG=g; baseB=b; calib=false; return; } // first reading = neutral hold
-      const steer=g-baseG, thr=b-baseB;                    // gamma=roll→steer, beta=pitch→throttle
-      manualKeys['a'] = steer < -7;  manualKeys['d'] = steer > 7;
-      manualKeys['w'] = thr   < -8;  manualKeys['s'] = thr   > 12;
+      _tiltGamma=g-baseG; _tiltBeta=b-baseB;               // gamma=roll, beta=pitch (neutral-relative)
+      if (worldMapOpen){ clearKeys(); return; }            // on the globe → updateGlobe() rolls the sphere from _tiltGamma/_tiltBeta instead of piloting
+      manualKeys['a'] = _tiltGamma < -7;  manualKeys['d'] = _tiltGamma > 7;   // steer
+      manualKeys['w'] = _tiltBeta  < -8;  manualKeys['s'] = _tiltBeta  > 12;  // throttle
     };
-    btn.onclick=async ()=>{
-      if (on){ on=false; window.removeEventListener('deviceorientation',onOrient); clearKeys(); btn.classList.remove('on'); btn.textContent='⌖ Tilt'; return; }
+    _tiltToggleFn = async ()=>{                             // shared by the floating button + the demo-bar button
+      if (_tiltOn){ _tiltOn=false; window.removeEventListener('deviceorientation',onOrient); clearKeys(); _tiltGamma=_tiltBeta=0; _tiltSyncUI(); return; }
       try{
         if (typeof DeviceOrientationEvent.requestPermission === 'function'){
           const r=await DeviceOrientationEvent.requestPermission();
-          if (r!=='granted'){ btn.textContent='⌖ Tilt ✕'; return; }
+          if (r!=='granted'){ if(_tiltFloatBtn)_tiltFloatBtn.textContent='⌖ Tilt ✕'; if(_tiltDemoBtn)_tiltDemoBtn.textContent='⌖ ✕'; return; }
         }
-        calib=true; on=true;
+        calib=true; _tiltOn=true;
         window.addEventListener('deviceorientation',onOrient);
-        btn.classList.add('on'); btn.textContent='⌖ Tilt ●';
-      }catch(err){ btn.textContent='⌖ Tilt ✕'; }
+        _tiltSyncUI();
+      }catch(err){ if(_tiltFloatBtn)_tiltFloatBtn.textContent='⌖ Tilt ✕'; }
     };
+    const btn=document.createElement('div');
+    btn.id='tiltbtn'; btn.textContent='⌖ Tilt'; btn.onclick=()=>_tiltToggleFn();
+    document.body.appendChild(btn); _tiltFloatBtn=btn;
   })();
 
   let dragging=false, lx=0, ly=0;
@@ -6443,6 +6450,16 @@ function updateGlobe(dt){
     globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _globeVel.x);
     _globeVel.x*=0.955; _globeVel.y*=0.955;                                              // gentle decay → a satisfying glide
     if(Math.abs(_globeVel.x)<5e-5) _globeVel.x=0; if(Math.abs(_globeVel.y)<5e-5) _globeVel.y=0; }
+  // DEVICE-TILT ROLL: tilt the phone to roll the globe like a ball on a tray (deadzone + clamp; paused during dives)
+  if (_tiltOn && worldMapOpen && !_globeDrag && !_diveZoom && !_globeRise && !_diveAfterSlerp){
+    const _dz=4, _cap=35, _rate=0.0013;                                                  // 4° deadzone, ±35° clamp, rad per (deg·frame)
+    const _gx = Math.abs(_tiltGamma)>_dz ? clampJS(_tiltGamma,-_cap,_cap)-Math.sign(_tiltGamma)*_dz : 0;   // roll → spin about Y (east/west), like dragging sideways
+    const _gy = Math.abs(_tiltBeta) >_dz ? clampJS(_tiltBeta, -_cap,_cap)-Math.sign(_tiltBeta )*_dz : 0;   // pitch → spin about X (north/south)
+    if (_gx||_gy){ const _f=(dt||0.016)*60;
+      globeSpin.rotateOnWorldAxis(new THREE.Vector3(0,1,0), _gx*_rate*_f);
+      globeSpin.rotateOnWorldAxis(new THREE.Vector3(1,0,0), _gy*_rate*_f);
+      _globeIdle=0; _globeLevel=null; }                                                  // active tilt cancels the idle auto-level
+  }
   // idle auto-level: after 30s untouched, ease the north pole back upright (arcball drag can leave the globe rolled/tilted)
   // while preserving the focal point (whatever is currently centred at the front stays centred).
   const _busy = !!_globeDrag || (Math.abs(_globeVel.x)+Math.abs(_globeVel.y))>1e-4 || !!_diveZoom;
@@ -6777,6 +6794,7 @@ function enterDemoMode(){ if(!demoScenarios.length){ return; }
   _buildDemoBar(); presentScenario(demoScenarios[0]);
 }
 function exitDemoMode(){ demoMode=false; if(_demoBar){ _demoBar.remove(); _demoBar=null; }
+  _tiltDemoBtn=null; if(_tiltFloatBtn) _tiltFloatBtn.style.display='';   // demo bar gone → hand the toggle back to the floating button
   const wb=document.getElementById('wm-open'); if(wb) wb.style.display=''; syncPanelToP(); setPanelOpen(true); }
 function demoGo(i){ if(!demoScenarios.length) return; _demoIdx=(i+demoScenarios.length)%demoScenarios.length; _updateDemoBar();
   // stepping scenarios keeps the viewer's current camera (sticky); entering demo (enterDemoMode) doesn't set this, so it starts on the ship
@@ -6801,6 +6819,11 @@ function _buildDemoBar(){
     b.onclick=()=>{ if(k==='free'){ if(typeof fleetView!=='undefined'&&fleetView==='grid') setFleetView('off'); setFly(true); }   // leave the 4-up grid (or a vehicle) before flying, else the split render stays on
                     else { if(typeof flyMode!=='undefined'&&flyMode) setFly(false); setFleetView(k); } _updateDemoCam(); };
     ui.demoCamBtns[k]=b;
+  }
+  if (_tiltCapable){   // fold the tilt toggle into the demo bar (touch devices only) so it never overlaps the floating button on small screens
+    const tb=el('div','demo-cambtn'+(_tiltOn?' active':''),cam); tb.id='demo-tilt'; tb.textContent=_tiltOn?'⌖ Tilt ●':'⌖ Tilt'; tb.title='Tilt device to steer / roll the globe';
+    tb.onclick=()=>{ if(_tiltToggleFn) _tiltToggleFn(); }; _tiltDemoBtn=tb;
+    if(_tiltFloatBtn) _tiltFloatBtn.style.display='none';   // demo bar owns the toggle now
   }
   const next=el('div','demo-nav',bar); next.textContent='›'; next.title='Next'; next.onclick=()=>demoGo(_demoIdx+1);
   const exit=el('div','demo-exit',bar); exit.textContent='✕'; exit.title='Exit demo (Esc)'; exit.onclick=exitDemoMode;
