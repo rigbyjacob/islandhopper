@@ -308,6 +308,7 @@ const P = {
   windOn: true, windStrength: 5, windDirDeg: 60,
   tideOn: true,
   stormOn: false, stormIntensity: 0.05,
+  fog: 0,             // extra fog/haze added on top of the region's own fog (0 = none → 1 = pea-soup)
   volcanoAuto: false,   // periodic self-triggering eruptions (like the storm switch)
   waveHeight: 1.0,    // sea state / swell amplitude — independent of storm (low enough islands stay afloat)
   paused: false,
@@ -2967,8 +2968,8 @@ function updateEnvironment(dt) {
   }
 
   if (fog){ fog.color.setRGB(_cHor.r,_cHor.g,_cHor.b);
-    // locale fog: foggy regions (Faroe/Kodiak/St.John's/Skye) carry a fog weight → paler, closer haze.
-    const rFog = (typeof REGION!=='undefined' && REGION && REGION.fog) ? REGION.fog : 0;
+    // locale fog: foggy regions (Faroe/Kodiak/St.John's/Skye) carry a fog weight → paler, closer haze. The Fog slider adds on top.
+    const rFog = clampJS(((REGION && REGION.fog) || 0) + (P.fog || 0), 0, 1);
     if (rFog>0){ const db=uDayBright.value; _fogPale.setRGB(0.62*db+0.20, 0.66*db+0.20, 0.70*db+0.22); fog.color.lerp(_fogPale, rFog*0.55); }
     // tiny-planet: push the haze out so it recedes PAST the curved horizon instead of banding across it as a flat line
     const fF = P.curveWorld ? 1.55 : 1, fN = P.curveWorld ? 1.3 : 1;
@@ -3505,7 +3506,24 @@ function buildTownMotifs(){
 // ---- AUDIO (Tone.js synths through THREE.PositionalAudio for true 3D sound; Tone shares THREE's AudioContext).
 // The listener follows the active camera. WIND is ambient (on the camera); WATER lapping is positional at the ship;
 // FIREWORK pops are positional one-shots at each island (the positional-audio test). All gated by "Sounds" (P.music). ----
-let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null, _fireVoices=[], _fireIdx=0, _thunderVoices=[], _thunderIdx=0;
+// Tunable audio config — mirrored by soundboard.html. Paste the soundboard's exported JSON over AUDIO_DEFAULTS to
+// bake in changes; it also live-loads from localStorage 'islandHopper.audio.v1' (same origin as the soundboard) so you
+// can tune without editing source. Each entry: target (what it's attached to) + gain; positional sounds add
+// attenuation { model, ref, max, rolloff }. gateBeam/gateStorm = only audible while that effect is active.
+const AUDIO_DEFAULTS = {
+  wind:     { target:'camera',       gain:0.13 },
+  ocean:    { target:'cameraHeight', gain:0.35, underGain:0.51, fullH:6, silentH:80 },
+  plane:    { target:'plane',      gain:0.5, model:'exponential', ref:30,  max:700,  rolloff:1.8, freq:72 },
+  ufo:      { target:'ufo',        gain:0.6, model:'exponential', ref:28,  max:260,  rolloff:3.2, gateBeam:true },
+  rain:     { target:'stormCloud', gain:0.5, model:'exponential', ref:120, max:1500, rolloff:1.3, gateStorm:true },
+  firework: { target:'island',     gain:0.5, model:'exponential', ref:45,  max:900,  rolloff:2.2 },
+  thunder:  { target:'stormCloud', gain:0.9, model:'exponential', ref:240, max:6000, rolloff:0.8 },
+};
+function _deepMerge(a,b){ for(const k in b){ if(b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])) a[k]=_deepMerge(a[k]||{},b[k]); else a[k]=b[k]; } return a; }
+let AUDIO_CFG = (()=>{ try{ const j=JSON.parse(localStorage.getItem('islandHopper.audio.v1')||'null'); const base=JSON.parse(JSON.stringify(AUDIO_DEFAULTS)); return j? _deepMerge(base, j) : base; }catch(_){ return JSON.parse(JSON.stringify(AUDIO_DEFAULTS)); } })();
+let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null,
+    _fireVoices=[], _fireIdx=0, _thunderVoices=[], _thunderIdx=0,
+    _planeSrc=null, _ufoSrc=null, _rainSrc=null;
 async function _initAudio(){
   if (_audioInit) return; _audioInit=true;
   let T; try{ T = await import('https://cdn.jsdelivr.net/npm/tone@14.8.49/+esm'); }
@@ -3564,8 +3582,9 @@ async function _initAudio(){
   }
 }
 // positional thunder at a world point; lags the flash by distance/speed (capped), sharper & brighter when close
+const THUNDER_AUDIO = false;   // ← thunder temporarily OFF (not dialed in yet); set true to re-enable
 function _playThunderAt(x,y,z){
-  if (!_thunderVoices.length || !audioListener) return;
+  if (!THUNDER_AUDIO || !_thunderVoices.length || !audioListener) return;
   const dx=x-audioListener.position.x, dy=y-audioListener.position.y, dz=z-audioListener.position.z;
   const dist=Math.hypot(dx,dy,dz);
   const delay=Math.min(dist/350, 5.0);                       // sound trails the lightning, capped at 5s
@@ -6304,6 +6323,7 @@ function buildPanel() {
   addSlider(s, 'Wind bearing',  P, 'windDirDeg', 0, 359, 1, v=>v.toFixed(0)+'°');
   addToggle(s, 'Storm', P, 'stormOn');
   addSlider(s, 'Storm intensity', P, 'stormIntensity', 0, 1, 0.05, v=>v.toFixed(2));
+  addSlider(s, 'Fog', P, 'fog', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Wave height', P, 'waveHeight', 0, 6, 0.1, v=>v.toFixed(1));
   ui.rainTog = addToggle(s, 'Rain on lens (storms)', P, 'rainLens', (on)=>{ if (on) enableRain(); else disableRain(); });
   if (VOLC_ENABLED){
