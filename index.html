@@ -642,7 +642,7 @@ if (window.ARAN) REGIONS.aran = Object.assign({}, window.ARAN, {
 });
 // ---- Faroe Islands (basalt sea-cliffs, fjords, low cloud) — resembles sweden (nord) ----
 if (window.FAROE) REGIONS.faroe = Object.assign({}, window.FAROE, {
-  relief: { escale:11, steep:0.90, ridge:2.6, lift:2.4 }, fog: 0.38,   // basalt sea-cliffs in low cloud (eased so the emerald turf reads)
+  relief: { escale:14, steep:0.12, ridge:0.22, lift:2.4, terrace:2.0, terraceJit:0.4, plateau:5.5, plateauK:0.30 }, fog: 0.38,   // FLAT-TOPPED, terraced flood-basalt (trap landscape): plateau-compress tall peaks into tables + stepped lava benches, not alpine spires; low cloud
   tour: ['Streymoy','Vágar','Mykines','Eysturoy','Kalsoy','Borðoy','Viðoy','Suðuroy','Sandoy'],
   seaTint: [0.46, 0.58, 0.78], foam: 0.85,    // Faroe: deep slate North-Atlantic blue-grey
   palette: { land: { seabed:0x21525e, wetsand:0x8f8a72, sand:0xb6ad90, grass:0x3f9a42, forest:0x2c7a33, rock:0x4a4742, cliff:0x35322d }, shrub: [0x3a8e38, 0x276b24] },   // Faroe: vivid EMERALD turf over dark basalt (was grey-green over grey rock)
@@ -797,7 +797,10 @@ function buildTerrainField(){
     if(land[i]){
       const RL = REGION.relief || {};                                       // per-region relief shaping (Caribbean defaults below = volcanic)
       const escale = RL.escale!==undefined ? RL.escale : 10;                 // metres→world-unit divisor for GEBCO-sampled land
-      const base = ELEV ? (ELEV[li++] / 10) : Math.max(0, gebcoMetres(wx,wz)) / escale;
+      let base = ELEV ? (ELEV[li++] / 10) : Math.max(0, gebcoMetres(wx,wz)) / escale;
+      // PLATEAU compression (trap-basalt table mountains, e.g. Faroe): squash everything above `plateau` so tall
+      // sharp peaks collapse into broad flat-topped tables instead of spires.
+      if (RL.plateau!==undefined && base>RL.plateau){ base = RL.plateau + (base-RL.plateau)*(RL.plateauK??0.35); }
       // relief shaping: steepen tall ground into cones + lay ridged crests on high ground only (clamp keeps
       // beaches/lowland smooth so coastlines stay clean). Aegean dials these down → arid rolling hills, not spires.
       const steep = RL.steep!==undefined ? RL.steep : 0.55;
@@ -806,7 +809,15 @@ function buildTerrainField(){
       const tall = clampJS(base/12, 0, 1);
       const peakBoost = base * (1 + steep*tall);
       const rdg = (ridge(wx*0.05, wz*0.05) - 0.4) * clampJS(base/6, 0, 1) * ridgeAmt;
-      const lh = lift + peakBoost + rdg + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift clear of crests + micro-relief
+      let lh = lift + peakBoost + rdg + (fbm(wx*0.15, wz*0.15)-0.5)*0.8;   // lift clear of crests + micro-relief
+      // TRAP-BASALT TERRACING (e.g. Faroe): snap high ground into flat lava-flow BENCHES with quick risers, so
+      // mountains read as stepped/table-topped tiers instead of alpine spires. Blended in by height so coastlines
+      // stay smooth. `terrace` = bench height in world units; `terraceJit` adds a little per-step wobble.
+      if (RL.terrace){ const T=RL.terrace, jit=(RL.terraceJit||0)*(vnoise(wx*0.4,wz*0.4)-0.5);
+        const q=(lh+jit)/T, fl=Math.floor(q), fr=q-fl;
+        const tread=smoothstepJS(0.30,0.70,fr);                 // flat bench across most of the step, fast riser mid-step
+        const stepped=(fl+tread)*T - jit;
+        lh = lh + (stepped-lh)*clampJS(base/4,0,1); }           // full terracing on high ground, none at the shore
       Hh[i] = lh; Hsea[i] = lh;
     }
     else {
