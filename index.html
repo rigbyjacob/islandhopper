@@ -2132,6 +2132,15 @@ function buildPlaneMesh(){
   const wing=new THREE.Mesh(new THREE.BoxGeometry(3.6,0.3,20), trim); wing.position.set(0,0,0); g.add(wing);
   const tailH=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.25,7), trim); tailH.position.set(-6,0.4,0); g.add(tailH);
   const tailV=new THREE.Mesh(new THREE.BoxGeometry(2.2,3,0.25), trim); tailV.position.set(-6,1.6,0); g.add(tailV);
+  // RUNNING LIGHTS: steady red (port wingtip) / green (starboard) / white (tail) bulbs + additive glows, plus blinking
+  // white wingtip strobes and a pulsing red anti-collision beacon. Animated in updateVehicleFX.
+  const _navTex=makeDotTexture();
+  const _glow=(col,x,y,z,sc)=>{ const m=new THREE.SpriteMaterial({map:_navTex,color:col,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false,fog:false}); const s=new THREE.Sprite(m); s.position.set(x,y,z); s.scale.set(sc,sc,1); s.renderOrder=5; g.add(s); return m; };
+  const _bulb=(col,x,y,z)=>{ const b=new THREE.Mesh(new THREE.SphereGeometry(0.22,8,6), new THREE.MeshBasicMaterial({color:col})); b.position.set(x,y,z); g.add(b); };
+  _bulb(0xff2a1a,0,0.15,-10); _bulb(0x2bff44,0,0.15,10); _bulb(0xffffff,-9.2,0.5,0);
+  const nav=[ _glow(0xff2a1a,0,0.15,-10,1.7), _glow(0x2bff44,0,0.15,10,1.7), _glow(0xffffff,-9.2,0.5,0,1.5) ];
+  const strobeL=_glow(0xffffff,0,0.2,-10,2.6), strobeR=_glow(0xffffff,0,0.2,10,2.6), beacon=_glow(0xff2200,0,1.35,0,2.2);
+  g.userData.lights={ nav, strobeL, strobeR, beacon };
   g.traverse(o=>{ if(o.isMesh){o.castShadow=true; o.receiveShadow=true;} }); return g;
 }
 function buildUfoMesh(){
@@ -2395,6 +2404,8 @@ function updateVehicles(dt){ for (const v of FLEET){ if (!v.ship){ _agentStep(v,
 // ============================================================================
 const SUB_BUB_N=90, CONTRAIL_N=150, SHIP_FOAM_N=110;
 let subBubbleIM=null, contrailIM=null, ufoRipple=null, ufoGlow=null, shipFoamIM=null, _bub=[], _con=[], _foam=[], _bubAcc=0, _conAcc=0, _foamAcc=0;
+let subSpot=null, subBeam=null, ufoSpot=null, ufoBeam=null;   // sub searchlight (sweeps the seabed) + UFO scan beam (periodic down-cone), each a SpotLight + a visible additive cone
+const _yDown=new THREE.Vector3(0,-1,0), _beamDir=new THREE.Vector3(), _beamP=new THREE.Vector3();
 const _vfxM4=new THREE.Matrix4(), _vfxQ=new THREE.Quaternion(), _vfxS=new THREE.Vector3(), _vfxP=new THREE.Vector3();
 function buildVehicleFX(){
   _bub=[]; _con=[]; _foam=[]; _bubAcc=0; _conAcc=0; _foamAcc=0;   // clear ALL FX particle pools (incl. ship foam) so a region swap never replays the previous region's stale puffs
@@ -2413,6 +2424,18 @@ function buildVehicleFX(){
   ufoRipple.rotation.x=-Math.PI/2; ufoRipple.renderOrder=4; ufoRipple.frustumCulled=false; scene.add(ufoRipple);
   ufoGlow=new THREE.Mesh(new THREE.SphereGeometry(7,16,12), new THREE.MeshBasicMaterial({ color:0x7fc0ff, transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending }));
   ufoGlow.renderOrder=4; ufoGlow.frustumCulled=false; scene.add(ufoGlow);
+  // SUBMARINE SEARCHLIGHT: a real spotlight that sweeps the seabed + a visible cool beam cone (apex at the sub).
+  subSpot=new THREE.SpotLight(0xdaf0ff, 0, 140, 0.34, 0.55, 1.0); subSpot.castShadow=false;
+  scene.add(subSpot); scene.add(subSpot.target);
+  subBeam=new THREE.Mesh(new THREE.ConeGeometry(7, 46, 22, 1, true),
+    new THREE.MeshBasicMaterial({ color:0xcfeaff, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending }));
+  subBeam.renderOrder=4; subBeam.frustumCulled=false; scene.add(subBeam);
+  // UFO SCAN BEAM: a periodic downward cone + spotlight pool on the sea/ground below.
+  ufoSpot=new THREE.SpotLight(0x9effe0, 0, 600, 0.26, 0.5, 0.9); ufoSpot.castShadow=false;
+  scene.add(ufoSpot); scene.add(ufoSpot.target);
+  ufoBeam=new THREE.Mesh(new THREE.ConeGeometry(1, 1, 30, 1, true),   // unit cone; scaled each frame to reach the sea
+    new THREE.MeshBasicMaterial({ color:0x86ffd6, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending }));
+  ufoBeam.renderOrder=4; ufoBeam.frustumCulled=false; scene.add(ufoBeam);
 }
 function _spawnFX(arr, x,y,z, vx,vy,vz, size, maxLife){ for(let i=0;i<arr.length;i++){ const p=arr[i]; if(p.life<=0){ p.x=x;p.y=y;p.z=z;p.vx=vx;p.vy=vy;p.vz=vz;p.size=size;p.maxLife=maxLife;p.life=maxLife; return; } } }
 function updateVehicleFX(dt, t){
@@ -2459,6 +2482,35 @@ function updateVehicleFX(dt, t){
     ufo._rip=(ufo._rip||0)+dt*(0.5+sp*0.012); if(ufo._rip>1) ufo._rip-=1;
     ufoRipple.visible=true; ufoRipple.position.set(ufo.pos.x,yb-3,ufo.pos.z); const rs=0.4+ufo._rip*2.6; ufoRipple.scale.set(rs,rs,rs); ufoRipple.material.opacity=(1-ufo._rip)*0.20;
   } else { if(ufoGlow)ufoGlow.visible=false; if(ufoRipple)ufoRipple.visible=false; }
+  // SUBMARINE SEARCHLIGHT: a slow side-to-side sweep of the seabed; the beam stays BELOW horizontal (never above the sub)
+  if(subSpot){ if(sub && sub.shown!==false){
+    const sx=sub.pos.x, sz=sub.pos.z, sy=sub.pos.y - curveDropJS(sx,sz); _beamP.set(sx,sy,sz);
+    const az=sub.yaw + Math.sin(t*0.45)*0.85;     // slow sweep around the heading
+    const el=-1.02, ch=Math.cos(el);              // ~58° below horizontal → always points down
+    _beamDir.set(Math.cos(az)*ch, Math.sin(el), Math.sin(az)*ch).normalize();
+    const L=46;
+    subSpot.position.copy(_beamP); subSpot.target.position.copy(_beamP).addScaledVector(_beamDir,L); subSpot.target.updateMatrixWorld();
+    subSpot.intensity = 7.0*(0.45+0.55*uNight.value);
+    subBeam.visible=true; subBeam.position.copy(_beamP).addScaledVector(_beamDir,L*0.5);
+    subBeam.quaternion.setFromUnitVectors(_yDown,_beamDir);
+    subBeam.material.opacity = 0.09 + 0.10*uNight.value;
+  } else { subSpot.intensity=0; if(subBeam) subBeam.visible=false; } }
+  // UFO SCAN BEAM: a periodic downward cone + spotlight pool on the ground/sea below
+  if(ufoSpot){ if(ufo && ufo.shown!==false){
+    const ux=ufo.pos.x, uz=ufo.pos.z, drop=curveDropJS(ux,uz), uy=ufo.pos.y-drop, seaY=-drop, L=Math.max(20, uy-seaY);
+    const cyc=(t%7)/7, amt = cyc<0.42 ? Math.sin(cyc/0.42*Math.PI) : 0;   // smooth on-pulse ~3s every 7s
+    ufoSpot.position.set(ux,uy,uz); ufoSpot.target.position.set(ux,seaY,uz); ufoSpot.target.updateMatrixWorld();
+    ufoSpot.intensity = amt*10.0;
+    if(amt>0.01){ ufoBeam.visible=true; ufoBeam.position.set(ux, uy-L*0.5, uz); const rB=L*0.17; ufoBeam.scale.set(rB,L,rB); ufoBeam.material.opacity=amt*0.16; }
+    else ufoBeam.visible=false;
+  } else { ufoSpot.intensity=0; if(ufoBeam) ufoBeam.visible=false; } }
+  // PLANE running lights: blinking wingtip strobes + pulsing red beacon; steady nav glows brighter at night
+  if(plane && plane.mesh && plane.mesh.userData.lights){ const PL=plane.mesh.userData.lights, vis=(plane.shown!==false), tm=t%1.3;
+    const strobe = (vis && (tm<0.06 || (tm>0.12 && tm<0.18))) ? 1 : 0;   // double-flash
+    PL.strobeL.opacity=strobe; PL.strobeR.opacity=strobe;
+    PL.beacon.opacity = vis ? 0.22+0.55*Math.abs(Math.sin(t*2.4)) : 0;
+    for(const m of PL.nav) m.opacity = vis ? 0.6+0.32*uNight.value : 0;
+  }
 }
 // ============================================================================
 //  SEA LIFE — schools of region-appropriate fish: Boid flocking + a procedural
