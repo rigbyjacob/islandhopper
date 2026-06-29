@@ -3561,14 +3561,14 @@ function _updateAudioListener(){
   activeCam.getWorldQuaternion(audioListener.quaternion);
   if (_oceanGain){
     const h = _aLP.copy(audioListener.position).y;            // height above sea (sea level ≈ 0)
-    let lvl, cutoff;
-    if (h < -0.5){                                            // UNDERWATER: present but muffled, no high-freq lapping
-      lvl = 0.85; cutoff = 220;
-    } else {                                                  // ABOVE: full near the surface, attenuates fast as you climb
-      lvl = clampJS((300 - h) / (300 - 50), 0, 1); lvl *= lvl;   // full ≤50u, silent by ~300u (squared → quick drop)
-      cutoff = 1400;
+    let gain, cutoff;
+    if (h < -0.5){                                            // UNDERWATER: present but muffled (unchanged — sounds good)
+      gain = 0.51; cutoff = 220;
+    } else {                                                  // ABOVE: loud ONLY very close to the surface, then drops off fast
+      let lvl = clampJS((80 - h) / (80 - 6), 0, 1); lvl = lvl*lvl*lvl;   // full ≤6u, cubic falloff, silent by ~80u
+      gain = lvl * 0.35; cutoff = 1400;
     }
-    _oceanGain.gain.rampTo(lvl * 0.6, 0.12);
+    _oceanGain.gain.rampTo(gain, 0.10);
     if (_oceanLP) _oceanLP.frequency.rampTo(cutoff, 0.18);
   }
 }
