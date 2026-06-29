@@ -3882,7 +3882,7 @@ function updateBoatShadow(day){
 // Intro music — a random embedded track plays once the follow cam settles, then
 // fades out a few seconds before its end. Muteable (P.music), persisted, scenario-aware.
 // ============================================================================
-let _musicEl=null, _musicPlayed=false, _musicPending=false, _musicStableT=0, _musicBag=[], _lastIdxPlayed=-1;
+let _musicEl=null, _musicPlayed=false, _musicPending=false, _musicStableT=0, _musicBag=[], _lastIdxPlayed=-1, _musicDuck=1, _musicLoadVol=0;
 const _MUSIC_VOL=0.55, _MUSIC_FADE_IN=2.0, _MUSIC_FADE_OUT=3.5;
 // shuffle-bag: play every track once (in random order) before any repeats; reshuffle when the bag empties
 function _nextTrackIdx(){
@@ -3914,11 +3914,16 @@ function _updateMusic(dt){
   // volume envelope: fade in, hold, fade out before the end
   const a=_musicEl; if(!a || a.paused) return;
   const d=a.duration, t=a.currentTime;
-  if (!isFinite(d) || d<=0){ a.volume=Math.min(_MUSIC_VOL, a.volume+0.012); return; }
-  if (t < _MUSIC_FADE_IN) a.volume=_MUSIC_VOL*(t/_MUSIC_FADE_IN);
-  else if (t > d-_MUSIC_FADE_OUT) a.volume=Math.max(0, _MUSIC_VOL*(d-t)/_MUSIC_FADE_OUT);
-  else a.volume=_MUSIC_VOL;
-  if (t >= d-0.05){ try{ a.pause(); }catch(_){} _musicEl=null; }   // done — plays only once
+  let vol;
+  if (!isFinite(d) || d<=0){ _musicLoadVol=Math.min(_MUSIC_VOL, _musicLoadVol+0.012); vol=_musicLoadVol; }   // still loading: ramp the base up
+  else { _musicLoadVol=_MUSIC_VOL;
+    if (t < _MUSIC_FADE_IN) vol=_MUSIC_VOL*(t/_MUSIC_FADE_IN);
+    else if (t > d-_MUSIC_FADE_OUT) vol=Math.max(0, _MUSIC_VOL*(d-t)/_MUSIC_FADE_OUT);
+    else vol=_MUSIC_VOL; }
+  // DUCK the music to silence on the globe ("no music in space") and fade it back on the dive down.
+  _musicDuck += ((worldMapOpen?0:1) - _musicDuck) * Math.min(1, dt*1.8);
+  a.volume = Math.max(0, Math.min(1, vol*_musicDuck));
+  if (isFinite(d) && d>0 && t >= d-0.05){ try{ a.pause(); }catch(_){} _musicEl=null; }   // done — plays only once
 }
 // "Sounds" master toggle — gates intro music AND the Tone.js audio (wind bed + UFO beam) via the master gain.
 function setMusic(on){ P.music=!!on;
