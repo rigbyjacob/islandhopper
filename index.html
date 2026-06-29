@@ -3213,6 +3213,7 @@ function updateClouds(dt, sf, day){
       lightDur = 0.26 + Math.random()*0.20; lightT = lightDur;
       boltMesh.position.set(best.position.x, best.position.y*0.5, best.position.z);
       boltMesh.scale.set(1, best.position.y*0.94, 1);
+      _playThunderAt(best.position.x, best.position.y, best.position.z);   // thunder from the originating cloud, delayed by distance
     }
     if (lightT>0){ lightT -= dt;
       const k = clampJS(lightT/Math.max(lightDur,1e-3), 0, 1);
@@ -3504,7 +3505,7 @@ function buildTownMotifs(){
 // ---- AUDIO (Tone.js synths through THREE.PositionalAudio for true 3D sound; Tone shares THREE's AudioContext).
 // The listener follows the active camera. WIND is ambient (on the camera); WATER lapping is positional at the ship;
 // FIREWORK pops are positional one-shots at each island (the positional-audio test). All gated by "Sounds" (P.music). ----
-let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null, _fireVoices=[], _fireIdx=0;
+let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null, _fireVoices=[], _fireIdx=0, _thunderVoices=[], _thunderIdx=0;
 async function _initAudio(){
   if (_audioInit) return; _audioInit=true;
   let T; try{ T = await import('https://cdn.jsdelivr.net/npm/tone@14.8.49/+esm'); }
@@ -3545,6 +3546,37 @@ async function _initAudio(){
     const crack=new T.NoiseSynth({ noise:{ type:'pink' }, envelope:{ attack:0.002, decay:0.16, sustain:0 } }).connect(crackBP);
     _fireVoices.push({ anchor, boom, crack });
   }
+  // --- THUNDER — POSITIONAL at the storming cloud: a low brown-noise rumble + a sharp crack (close strikes only),
+  //     carries far (gentle rolloff). Triggered by lightning, delayed by distance (you see the flash, then hear it) ---
+  for (let i=0;i<3;i++){
+    const anchor=new THREE.Object3D(); scene.add(anchor);
+    const pa=new THREE.PositionalAudio(audioListener);
+    pa.setDistanceModel('exponential'); pa.setRefDistance(240); pa.setMaxDistance(6000); pa.setRolloffFactor(0.8);   // thunder carries across the map
+    anchor.add(pa);
+    const vGain=new T.Gain(0.9); vGain.connect(pa.panner);
+    const rumbleLP =new T.Filter(200,'lowpass').connect(vGain);
+    const rumbleEnv=new T.AmplitudeEnvelope({ attack:0.04, decay:0.7, sustain:0.3, release:1.8 }).connect(rumbleLP);
+    new T.Noise('brown').connect(rumbleEnv).start();
+    const crackBP =new T.Filter({ type:'bandpass', frequency:1100, Q:0.5 }).connect(vGain);
+    const crackEnv=new T.AmplitudeEnvelope({ attack:0.005, decay:0.16, sustain:0, release:0.3 }).connect(crackBP);
+    new T.Noise('pink').connect(crackEnv).start();
+    _thunderVoices.push({ anchor, rumbleEnv, crackEnv, rumbleLP });
+  }
+}
+// positional thunder at a world point; lags the flash by distance/speed (capped), sharper & brighter when close
+function _playThunderAt(x,y,z){
+  if (!_thunderVoices.length || !audioListener) return;
+  const dx=x-audioListener.position.x, dy=y-audioListener.position.y, dz=z-audioListener.position.z;
+  const dist=Math.hypot(dx,dy,dz);
+  const delay=Math.min(dist/350, 5.0);                       // sound trails the lightning, capped at 5s
+  const near=clampJS(1 - dist/1600, 0, 1);                   // 1 = right overhead → 0 = far away
+  const v=_thunderVoices[_thunderIdx++ % _thunderVoices.length];
+  v.anchor.position.set(x,y,z); v.anchor.updateMatrixWorld();
+  try{
+    v.rumbleLP.frequency.setValueAtTime(120 + 240*near, '+'+delay.toFixed(3));   // closer rumble is a touch brighter
+    v.rumbleEnv.triggerAttackRelease(0.8 + 1.4*near, '+'+delay.toFixed(3), 0.55 + 0.45*near);
+    if (near>0.05) v.crackEnv.triggerAttackRelease(0.16, '+'+delay.toFixed(3), near);   // sharp crack only for nearby strikes
+  }catch(_){}
 }
 // positional firework burst sound at a world point (round-robin through the voice pool)
 function _playFireworkAt(x,y,z){
@@ -3648,14 +3680,24 @@ function updateBoatShadow(day){
 // Intro music — a random embedded track plays once the follow cam settles, then
 // fades out a few seconds before its end. Muteable (P.music), persisted, scenario-aware.
 // ============================================================================
-let _musicEl=null, _musicPlayed=false, _musicPending=false, _musicStableT=0, _lastTrack=-1;
+let _musicEl=null, _musicPlayed=false, _musicPending=false, _musicStableT=0, _musicBag=[], _lastIdxPlayed=-1;
 const _MUSIC_VOL=0.55, _MUSIC_FADE_IN=2.0, _MUSIC_FADE_OUT=3.5;
+// shuffle-bag: play every track once (in random order) before any repeats; reshuffle when the bag empties
+function _nextTrackIdx(){
+  const n=window.MUSIC.length;
+  if (n<=1) return 0;
+  if (!_musicBag.length){
+    _musicBag=[...Array(n).keys()];
+    for (let i=n-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [_musicBag[i],_musicBag[j]]=[_musicBag[j],_musicBag[i]]; }   // Fisher–Yates
+    if (_musicBag[_musicBag.length-1]===_lastIdxPlayed) _musicBag.unshift(_musicBag.pop());   // avoid a seam repeat across reshuffles
+  }
+  _lastIdxPlayed=_musicBag.pop();
+  return _lastIdxPlayed;
+}
 function playIntroMusic(){
   if (!P.music || !Array.isArray(window.MUSIC) || !window.MUSIC.length) return;
   if (_musicEl){ try{ _musicEl.pause(); }catch(_){} _musicEl=null; }
-  let idx=(Math.random()*window.MUSIC.length)|0;                          // no immediate repeats — pick a different track than last time
-  if (window.MUSIC.length>1){ while(idx===_lastTrack) idx=(Math.random()*window.MUSIC.length)|0; }
-  _lastTrack=idx;
+  const idx=_nextTrackIdx();
   const a=new Audio(window.MUSIC[idx]); a.volume=0; _musicEl=a;
   const pr=a.play();
   if (pr && pr.then){ pr.then(()=>{ _musicPlayed=true; _musicPending=false; }).catch(()=>{ _musicPending=true; _musicEl=null; }); }   // autoplay blocked → retry on first interaction
