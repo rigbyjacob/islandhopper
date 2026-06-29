@@ -6506,6 +6506,7 @@ const REGION_META = {
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
 let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[];
+const _dV3=new THREE.Vector3(), _dOff=new THREE.Vector3(), _dInv=new THREE.Quaternion();   // scratch for diorama declutter/fan-out
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
@@ -6824,6 +6825,30 @@ function updateGlobe(dt){
     d.patch.scale.setScalar(d.s); if (d.marker) d.marker.scale.setScalar(d.s);
     if (d.glow) d.glow.scale.setScalar(0.46*d.s);                        // halo tracks the diorama so it rings the hero (fixed size → it hid behind the big one)
     if (d.lab){ const ls=clampJS(d.s*0.5, 0.30, 0.62); d.lab.scale.set(ls,ls,1); }   // hug the diorama; min font so it stays legible
+  }
+  // EXPLODE-ON-PROXIMITY: when front-facing dioramas overlap, nudge them apart in the view plane so each stays
+  // separately hoverable/clickable. The offset relaxes back when they're not crowded or rotate off-centre.
+  for (const d of _regionDioramas){ const wn=_dV3.copy(d.n).applyQuaternion(globeSpin.quaternion);
+    d._front=clampJS((wn.z-0.25)/0.5, 0, 1); d._px=wn.x; d._py=wn.y;
+    if (!d.off) d.off=new THREE.Vector2(); d.off.multiplyScalar(0.82); }   // decay → settles back when crowding clears
+  const SEP=0.13;
+  for (let it=0; it<4; it++){
+    for (let i=0;i<_regionDioramas.length;i++){ const a=_regionDioramas[i]; if(a._front<0.05) continue;
+      for (let j=i+1;j<_regionDioramas.length;j++){ const b=_regionDioramas[j]; if(b._front<0.05) continue;
+        const ax=a._px+a.off.x, ay=a._py+a.off.y, bx=b._px+b.off.x, by=b._py+b.off.y;
+        let dx=ax-bx, dy=ay-by, dd=Math.hypot(dx,dy);
+        if (dd<1e-3){ dx=(Math.random()-0.5)*0.01; dy=(Math.random()-0.5)*0.01; dd=Math.hypot(dx,dy)||1e-3; }
+        if (dd<SEP){ const w=Math.min(a._front,b._front), push=(SEP-dd)*0.35*w, ux=dx/dd, uy=dy/dd;
+          a.off.x+=ux*push; a.off.y+=uy*push; b.off.x-=ux*push; b.off.y-=uy*push; }
+      }
+    }
+  }
+  for (const d of _regionDioramas){ if(!d.off) continue;
+    _dOff.set(d.off.x*d._front, d.off.y*d._front, 0).applyQuaternion(_dInv.copy(globeSpin.quaternion).invert());   // view-plane offset → globe-local
+    d.patch.position.copy(d.n).multiplyScalar(0.988).add(_dOff);
+    if (d.marker) d.marker.position.copy(d.n).multiplyScalar(1.0).add(_dOff);
+    if (d.glow)   d.glow.position.copy(d.n).multiplyScalar(1.01).add(_dOff);
+    if (d.lab)    d.lab.position.copy(d.n).multiplyScalar(1.018).add(_dOff);
   }
   // labels fade out toward the limb/back so they never bleed through from the far side (depthTest off → never clipped)
   for (const L of _regionLabels){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
