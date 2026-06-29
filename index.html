@@ -4741,6 +4741,9 @@ function buildOcean() {
     const sunV = normalize(vec3(uSunDir.x, uSunDir.y.sub(uHorizonDrop), uSunDir.z));
     const rsd = max(dot(refl, sunV), 0.0);
     rSky.addAssign(uSunCol.mul(pow(rsd, 12.0).mul(0.40).add(pow(rsd, 340.0).mul(3.2))).mul(uSunInt));   // reflected sun: softer glow + dimmer glint (less glossy)
+    // ALIEN: desaturate the sky reflection toward its luminance so the grazing-horizon reflection doesn't smear into a garish magenta/green band
+    const _rLum = rSky.r.mul(0.3).add(rSky.g.mul(0.59)).add(rSky.b.mul(0.11));
+    rSky.assign(mix(rSky, vec3(_rLum), uAlien.mul(0.8)));
     col.assign(mix(col, rSky, clamp(fres, 0.0, 1.0).mul(hkFlat)));
     // Van Gogh SEA: mirror the swirling Starry-Night sky along the RIPPLED reflection vector (refl carries the wave
     // normal, so the swirls/stars/moon wobble on the water) — the painting's village pond. Default; dev.vgSea(0) → impasto.
@@ -4849,7 +4852,11 @@ function buildOcean() {
     const _coastN = texture(bathyTex, clamp(_shUV, vec2(0.0), vec2(1.0))).g;   // distance to nearest coast (0 shore → 1 far)
     const _distFade = oneMinus(smoothstep(0.42, 0.85, _coastN));               // full across the lagoon/near-shore water → tapers out only in the DEEP open sea (middle ground: not clipped at the shore, not infinite)
     const _ocb = oceanColor().mul( _sunShadowMul(_distFade) );
-    oceanMat.colorNode = mix(_ocb, _ocb.mul(vec3(0.5,0.95,0.78)).add(vec3(0.0,0.03,0.02)), uAlien.mul(0.6));   // ALIEN: thick green/teal "gas" sea (gentle so it doesn't blow out at the horizon)
+    // ALIEN: map the sea by BRIGHTNESS onto a bounded teal ramp (not a multiply) so highlights/sparkle/SSS can't blow
+    // out into a garish magenta/green band at the horizon — it stays a thick, even toxic-teal "gas".
+    const _ocLum = clamp(_ocb.r.mul(0.3).add(_ocb.g.mul(0.59)).add(_ocb.b.mul(0.11)).mul(1.25), 0.0, 1.0);
+    const _alienSea = mix(vec3(0.03,0.20,0.17), vec3(0.12,0.52,0.42), _ocLum);
+    oceanMat.colorNode = mix(_ocb, _alienSea, uAlien.mul(0.78));
   }
   // translucent only inside the data region (so the seabed shows through there); stays opaque elsewhere,
   // hiding the sea-skirt and the terrain field's edge wall that the user saw as a dark bar
@@ -5304,7 +5311,13 @@ function buildClipmapTerrain(){
     const occ=_hAt(wx.add(aoR),wz).sub(h).max(0).add(_hAt(wx.sub(aoR),wz).sub(h).max(0)).add(_hAt(wx,wz.add(aoR)).sub(h).max(0)).add(_hAt(wx,wz.sub(aoR)).sub(h).max(0));
     const ao=float(1).sub(clamp(occ.div(aoR).mul(0.45),0,0.45));
     const grain=_nfbm2(vec2(wx,wz).mul(0.12)).sub(0.5).mul(0.12).mul(landMask);   // per-pixel colour grain on land
-    mat.colorNode = col.mul(ao).add(grain);   // sun occlusion is handled NATIVELY by the engine (receiveShadow below) → correct directional diffuse + a real mountain cast/self shadow, not a hand-rolled per-pixel darken
+    const _earthCol = col.mul(ao).add(grain);
+    // ALIEN: land becomes metallic crystal — cool steel→violet by height, with sharp faceted sparkle; sea keeps its colour
+    const _crystal = mix(vec3(0.16,0.18,0.27), vec3(0.62,0.55,0.78), smoothstep(1.4,11.0,h)).mul(ao);
+    const _facet = pow(clamp(_nfbm2(vec2(wx,wz).mul(2.6)),0,1), 7.0).mul(1.1);     // sparse bright crystal facets
+    const _alienCol = _crystal.add(vec3(0.8,0.85,1.0).mul(_facet));
+    mat.colorNode = mix(_earthCol, _alienCol, uAlien.mul(landMask));   // sun occlusion handled natively (receiveShadow below); only land turns crystal
+
     // gradient normal + micro-normal shimmer (fbm tilt on land) — the rocky/leafy sparkle under the sun
     const nB=normalize(vec3(hL.sub(hR), e.mul(2.0), hD.sub(hU)));
     const mgx=_nfbm2(vec2(wx.add(0.9),wz).mul(0.55)).sub(_nfbm2(vec2(wx.sub(0.9),wz).mul(0.55))).mul(landMask);
@@ -7003,9 +7016,9 @@ function updateGlobe(dt){
   const PAN=0.6;
   for (const L of _comboLenses){ const wn=L.cN.clone().applyQuaternion(globeSpin.quaternion);
     L.tex.offset.set(wn.x*PAN, wn.y*PAN); }
-  // singleton dioramas: scroll the sea ripple with the arcball too (shake the globe → shake the water)
+  // singleton dioramas: scroll the sea ripple HARD with the arcball (shake the globe → really churn the water)
   for (const L of _seaLenses){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
-    L.off.value.set(wn.x*0.28, wn.y*0.28); }
+    L.off.value.set(wn.x*2.2, wn.y*2.2); }
   _updateGlobeSun();   // sun/moon rigid with the Earth → track the arcball spin
   // FOCUS HIGHLIGHT for combined sections: the focused region's section lifts up over the others + glows
   for (const S of _comboSections){ const on=(S.id===_globeFocus), lift=on?0.05:0;
