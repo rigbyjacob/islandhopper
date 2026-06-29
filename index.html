@@ -6506,13 +6506,13 @@ const REGION_META = {
 };
 let worldMapOpen=false, globeScene=null, globeCam=null, globeSpin=null;
 let _globePicks=[], _globeDrag=null, _globeVel={x:0,y:0}, _prevCtrlEnabled=false, _regionGlows=[], _regionLabels=[], _regionDioramas=[];
-const _dV3=new THREE.Vector3(), _dOff=new THREE.Vector3(), _dInv=new THREE.Quaternion();   // scratch for diorama declutter/fan-out
 const GLOBE_R = 1.0;
 function latLonToVec(lat, lon, r){ const a=lat*Math.PI/180, o=lon*Math.PI/180;
   // z uses -sin(lon) to match THREE.SphereGeometry's equirect texture mapping (Greenwich→+X, east→-Z)
   return new THREE.Vector3(r*Math.cos(a)*Math.cos(o), r*Math.sin(a), -r*Math.cos(a)*Math.sin(o)); }
 function _placeOnSphere(obj, lat, lon, r){ const n=latLonToVec(lat,lon,1);
   obj.position.copy(n.clone().multiplyScalar(r)); obj.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), n); }
+function _placeOnSphereV(obj, nVec, r){ obj.position.copy(nVec).multiplyScalar(r); obj.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), nVec); }
 function makeRegionMarker(id, cur, artCol){      // INVISIBLE pick target only — the sculpted relief marks the spot (no ring/cone)
   const g=new THREE.Group();
   const disc=new THREE.Mesh(new THREE.CircleGeometry(0.09, 18),
@@ -6710,7 +6710,61 @@ function buildGlobe(){
     _regionLabels.push({ id:r.id, spr:lab, n:latLonToVec(r.lat0||0, r.lon0||0, 1) });   // declutter: only the focused, front-facing region's label fades in (see updateGlobe)
     if (patch) _regionDioramas.push({ id:r.id, patch, marker:c, lab, glow:glow.mesh, n:latLonToVec(r.lat0||0, r.lon0||0, 1), s:0.5 });   // per-region scale: focus scales up subtly; lab + glow track the diorama
   }
+  _buildClusterDioramas();   // merge tight clusters into one subdivided "combined" diorama (no more overlap)
   faceRegion(REGION.id);
+}
+// When several region dioramas sit close enough to overlap on the globe, replace that cluster with ONE bigger plinth
+// split into equal pie sectors (2=halves, 3=thirds, 4=quarters, 5=fifths…), each sector a region: its sculpted
+// mini-scene + art-tinted slice, divided by black lines, label at the rim. Clicking a sector dives that region.
+function _buildClusterDioramas(){
+  const ds=_regionDioramas, N=ds.length; if (N<2) return;
+  const COS_TH=Math.cos(12*Math.PI/180);                                   // regions within ~12° cluster together
+  const adj=Array.from({length:N},()=>[]);
+  for (let i=0;i<N;i++) for (let j=i+1;j<N;j++){ if (ds[i].n.dot(ds[j].n)>COS_TH){ adj[i].push(j); adj[j].push(i); } }
+  const seen=new Array(N).fill(false);
+  const wd=(p)=>new THREE.Vector3(Math.cos(p),0,-Math.sin(p));             // CircleGeometry angle φ → world XZ dir (after the flat x=-90 rotation)
+  const TWO=Math.PI*2;
+  for (let i=0;i<N;i++){
+    if (seen[i]) continue; const comp=[]; const q=[i]; seen[i]=true;
+    while (q.length){ const k=q.pop(); comp.push(k); for (const m of adj[k]) if(!seen[m]){ seen[m]=true; q.push(m); } }
+    if (comp.length<2) continue;                                            // singletons keep their normal diorama
+    const members=comp.map(k=>ds[k]);
+    const cN=new THREE.Vector3(); for (const d of members) cN.add(d.n); cN.normalize();   // cluster centroid direction
+    for (const d of members){                                              // hide the individual dioramas + remove them from pick/label lists
+      d.patch.visible=false; if(d.marker) d.marker.visible=false; if(d.glow) d.glow.visible=false; if(d.lab) d.lab.visible=false; d.clustered=true;
+      let li=_regionLabels.findIndex(L=>L.id===d.id); if(li>=0) _regionLabels.splice(li,1);
+      let p1=_globePicks.indexOf(d.patch); if(p1>=0) _globePicks.splice(p1,1);
+      let p2=_globePicks.indexOf(d.marker); if(p2>=0) _globePicks.splice(p2,1);
+    }
+    const n=members.length, PR=0.20+0.022*Math.min(n,6);                   // combined plinth radius (grows slightly with count)
+    const grp=new THREE.Group(); _placeOnSphereV(grp, cN, GLOBE_R-0.012); globeSpin.add(grp);
+    const base=new THREE.Mesh(new THREE.CylinderGeometry(PR*1.06, PR*0.95, 0.05, 96),
+      new THREE.MeshStandardMaterial({ color:0x241f1b, roughness:0.95, metalness:0.0 }));
+    base.position.y=0.02; grp.add(base);
+    const lineMat=new THREE.MeshBasicMaterial({ color:0x05080d });
+    for (let s=0;s<n;s++){
+      const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff, ac=new THREE.Color(art);
+      const a0=s/n*TWO, aMid=(s+0.5)/n*TWO;
+      const segMat=new THREE.MeshStandardNodeMaterial({ roughness:0.55, metalness:0.0 });   // art-tinted slice behind the islands
+      segMat.colorNode=vec3(ac.r,ac.g,ac.b).mul(0.45); segMat.emissiveNode=vec3(ac.r,ac.g,ac.b).mul(0.22);
+      const seg=new THREE.Mesh(new THREE.CircleGeometry(PR*0.98, 48, a0, TWO/n), segMat);
+      seg.rotation.x=-Math.PI/2; seg.position.y=0.052; grp.add(seg);
+      const patch=buildRegionPatch(r);
+      if (patch){ patch.scale.setScalar(clampJS(0.46-0.04*n, 0.16, 0.42));
+        patch.position.copy(wd(aMid).multiplyScalar(PR*0.5)).setY(0.052);
+        patch.userData.regionId=r.id; grp.add(patch); _globePicks.push(patch); }
+      const pick=new THREE.Mesh(new THREE.CircleGeometry(PR, 24, a0, TWO/n), new THREE.MeshBasicMaterial({ transparent:true, opacity:0, depthWrite:false }));
+      pick.rotation.x=-Math.PI/2; pick.position.y=0.085; pick.userData.regionId=r.id; grp.add(pick); _globePicks.push(pick);
+      const m=REGION_META[r.id]||{ tag:r.name||r.id };
+      const lab=_globeLabel(m.tag, art); lab.position.copy(wd(aMid).multiplyScalar(PR*1.14)).setY(0.12); lab.material.opacity=0; grp.add(lab);
+      _regionLabels.push({ id:r.id, spr:lab, n:cN.clone() });               // fades in/out with the cluster facing the camera
+    }
+    for (let s=0;s<n;s++){ const a=s/n*TWO;                                 // black radial dividers between sectors
+      const bar=new THREE.Mesh(new THREE.BoxGeometry(PR*0.98, 0.013, 0.013), lineMat);
+      bar.position.copy(wd(a).multiplyScalar(PR*0.49)).setY(0.085); bar.rotation.y=a; grp.add(bar); }
+    const ring=new THREE.Mesh(new THREE.TorusGeometry(PR*0.98, 0.009, 6, 72), lineMat);   // black rim ring (like the single-diorama keyline)
+    ring.rotation.x=Math.PI/2; ring.position.y=0.085; grp.add(ring);
+  }
 }
 function faceRegion(id){ const r=REGIONS[id]; if(!r||!globeSpin) return;
   const n=latLonToVec(r.lat0||0, r.lon0||0, 1);
@@ -6825,30 +6879,6 @@ function updateGlobe(dt){
     d.patch.scale.setScalar(d.s); if (d.marker) d.marker.scale.setScalar(d.s);
     if (d.glow) d.glow.scale.setScalar(0.46*d.s);                        // halo tracks the diorama so it rings the hero (fixed size → it hid behind the big one)
     if (d.lab){ const ls=clampJS(d.s*0.5, 0.30, 0.62); d.lab.scale.set(ls,ls,1); }   // hug the diorama; min font so it stays legible
-  }
-  // EXPLODE-ON-PROXIMITY: when front-facing dioramas overlap, nudge them apart in the view plane so each stays
-  // separately hoverable/clickable. The offset relaxes back when they're not crowded or rotate off-centre.
-  for (const d of _regionDioramas){ const wn=_dV3.copy(d.n).applyQuaternion(globeSpin.quaternion);
-    d._front=clampJS((wn.z-0.25)/0.5, 0, 1); d._px=wn.x; d._py=wn.y;
-    if (!d.off) d.off=new THREE.Vector2(); d.off.multiplyScalar(0.82); }   // decay → settles back when crowding clears
-  const SEP=0.13;
-  for (let it=0; it<4; it++){
-    for (let i=0;i<_regionDioramas.length;i++){ const a=_regionDioramas[i]; if(a._front<0.05) continue;
-      for (let j=i+1;j<_regionDioramas.length;j++){ const b=_regionDioramas[j]; if(b._front<0.05) continue;
-        const ax=a._px+a.off.x, ay=a._py+a.off.y, bx=b._px+b.off.x, by=b._py+b.off.y;
-        let dx=ax-bx, dy=ay-by, dd=Math.hypot(dx,dy);
-        if (dd<1e-3){ dx=(Math.random()-0.5)*0.01; dy=(Math.random()-0.5)*0.01; dd=Math.hypot(dx,dy)||1e-3; }
-        if (dd<SEP){ const w=Math.min(a._front,b._front), push=(SEP-dd)*0.35*w, ux=dx/dd, uy=dy/dd;
-          a.off.x+=ux*push; a.off.y+=uy*push; b.off.x-=ux*push; b.off.y-=uy*push; }
-      }
-    }
-  }
-  for (const d of _regionDioramas){ if(!d.off) continue;
-    _dOff.set(d.off.x*d._front, d.off.y*d._front, 0).applyQuaternion(_dInv.copy(globeSpin.quaternion).invert());   // view-plane offset → globe-local
-    d.patch.position.copy(d.n).multiplyScalar(0.988).add(_dOff);
-    if (d.marker) d.marker.position.copy(d.n).multiplyScalar(1.0).add(_dOff);
-    if (d.glow)   d.glow.position.copy(d.n).multiplyScalar(1.01).add(_dOff);
-    if (d.lab)    d.lab.position.copy(d.n).multiplyScalar(1.018).add(_dOff);
   }
   // labels fade out toward the limb/back so they never bleed through from the far side (depthTest off → never clipped)
   for (const L of _regionLabels){ const wn=L.n.clone().applyQuaternion(globeSpin.quaternion);
