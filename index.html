@@ -6746,6 +6746,9 @@ function _yinShape(R, which){            // which 0 = right comma, 1 = left comm
 }
 function _remapShapeUV(geo, R){ const p=geo.attributes.position, uv=geo.attributes.uv;
   for (let i=0;i<p.count;i++){ uv.setXY(i, (p.getX(i)+R)/(2*R), (p.getY(i)+R)/(2*R)); } uv.needsUpdate=true; }
+// center a region thumb on a SECTION's centroid (so each section shows its OWN region render, not a shared pie-slice)
+function _remapUVCentered(geo, cx, cy, half){ const p=geo.attributes.position, uv=geo.attributes.uv;
+  for (let i=0;i<p.count;i++){ uv.setXY(i, 0.5+(p.getX(i)-cx)/(2*half), 0.5+(p.getY(i)-cy)/(2*half)); } uv.needsUpdate=true; }
 // When region dioramas sit close enough to overlap on the globe, merge that cluster into ONE small disc whose SECTIONS
 // are each textured with a render of that region (yin-yang for 2, equal pie wedges for 3–5), divided by black lines,
 // labels at the rim. Clicking a section dives that region.
@@ -6780,7 +6783,7 @@ function _buildClusterDioramas(){
       _regionLabels.push({ id:r.id, spr:lab, n:cN.clone() }); };
     if (n===2){                                                            // ☯ true yin-yang: two interlocking commas, each a region render
       for (let s=0;s<2;s++){ const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff;
-        const geo=new THREE.ShapeGeometry(_yinShape(PR, s), 30); _remapShapeUV(geo, PR);
+        const geo=new THREE.ShapeGeometry(_yinShape(PR, s), 30); _remapUVCentered(geo, (s?-1:1)*PR*0.42, 0, PR*0.72);   // center each region in its comma
         const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map:_regionThumb(r) }));
         m.rotation.x=-Math.PI/2; m.position.y=0.017; m.userData.regionId=r.id; grp.add(m); _globePicks.push(m);
         addLabel(r, art, wd(s? Math.PI : 0));                              // left comma label left, right comma label right
@@ -6790,7 +6793,8 @@ function _buildClusterDioramas(){
     } else {                                                               // equal pie wedges, each a region render slice
       for (let s=0;s<n;s++){ const r=REGIONS[members[s].id], art=REGION_ART_COL[r.id]||0x86d8ff;
         const a0=s/n*TWO, aMid=(s+0.5)/n*TWO;
-        const seg=new THREE.Mesh(new THREE.CircleGeometry(PR, 44, a0, TWO/n), new THREE.MeshBasicMaterial({ map:_regionThumb(r) }));
+        const sgeo=new THREE.CircleGeometry(PR, 44, a0, TWO/n); _remapUVCentered(sgeo, Math.cos(aMid)*PR*0.55, Math.sin(aMid)*PR*0.55, PR*0.6);   // center each region in its wedge
+        const seg=new THREE.Mesh(sgeo, new THREE.MeshBasicMaterial({ map:_regionThumb(r) }));
         seg.rotation.x=-Math.PI/2; seg.position.y=0.017; seg.userData.regionId=r.id; grp.add(seg); _globePicks.push(seg);
         addLabel(r, art, wd(aMid));
       }
