@@ -6233,22 +6233,27 @@ function initInput() {
       tgt['a'] = _tiltX < -HX;  tgt['d'] = _tiltX > HX;    // tilt left/right
       tgt['w'] = _tiltY < -HY;  tgt['s'] = _tiltY > HY;    // tilt forward/back (forward = top edge down)
     };
+    const _oQ=new THREE.Quaternion(), _oR=new THREE.Vector3(), _oD=new THREE.Vector3();
     const onOrient=(e)=>{
       if (e.beta==null && e.gamma==null) return;
       _devA=(e.alpha!=null)?e.alpha:_devA; _devB=e.beta||0; _devG=e.gamma||0; _devHas=true;   // raw orientation for the free-cam gyro look
-      const beta=e.beta||0, gamma=e.gamma||0, br=beta*D2R, gr=gamma*D2R, cb=Math.cos(br);
-      const txp = cb*Math.sin(gr);                         // in-plane gravity toward the device's RIGHT edge (downhill-right), portrait frame
-      const typ = Math.sin(br);                            // in-plane gravity toward the device's BOTTOM edge (downhill-down)
+      const beta=e.beta||0, gamma=e.gamma||0;
+      const orientDeg=((screen.orientation&&screen.orientation.angle)||window.orientation||0);
+      // GRAVITY-PROJECTION marble (gimbal-free): build the device→world quaternion (same recipe as the free-cam look,
+      // screen rotation included), then read world-gravity (0,-1,0)'s components along the SCREEN right/down axes. This
+      // avoids the beta/gamma Euler flip near vertical that made one tilt direction (down) invert sign and cancel out.
+      _deviceQuat(_oQ, _devA, _devB, _devG, orientDeg);
+      _oR.set(1,0,0).applyQuaternion(_oQ);                 // screen-right axis in world
+      _oD.set(0,-1,0).applyQuaternion(_oQ);                // screen-down axis in world
+      const txp = -_oR.y;                                  // gravity·screen-right → +x = screen-right downhill
+      const typ = -_oD.y;                                  // gravity·screen-down  → +y = screen-down downhill
       const now=performance.now(), dtm=lastT?(now-lastT):16; lastT=now;
       const moved=Math.abs(beta-lastB)+Math.abs(gamma-lastG); lastB=beta; lastG=gamma;
       if (calib){ baseTX=txp; baseTY=typ; calib=false; stillMs=0; }          // first reading = provisional flat
       if (moved < 0.7){ stillMs+=dtm; if (stillMs>1700){ baseTX=txp; baseTY=typ; } }   // held still ~1.7s → that pose IS flat (re-zero)
       else stillMs=0;
-      const dtx=txp-baseTX, dty=typ-baseTY;                                  // tilt relative to flat
-      const orient=((screen.orientation&&screen.orientation.angle)||window.orientation||0)*D2R;   // rotate the device-frame downhill into the live SCREEN frame
-      const ca=Math.cos(orient), sa=Math.sin(orient);
-      _tiltX = dtx*ca + dty*sa;                            // +x = screen-right downhill
-      _tiltY = -dtx*sa + dty*ca;                           // +y = screen-down downhill
+      _tiltX = txp - baseTX;                               // already in screen frame (the quaternion includes screen rotation)
+      _tiltY = typ - baseTY;
       applyTiltControls();
     };
     _tiltToggleFn = async ()=>{                             // shared by the floating button + the demo-bar button
