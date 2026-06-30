@@ -8095,9 +8095,10 @@ function drawCompass(){
 (function(){
   var host = location.hostname;
   var local = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '[::1]' || host === '::1'
-    || /^(10|127)\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);   // also LAN IPs → live-reload works on the phone over Wi-Fi
+    || /^(10|127)\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)   // LAN IPs → phone over Wi-Fi
+    || /\.ts\.net$/.test(host);   // Tailscale Serve (HTTPS on the tailnet) → phone reloads on `just reload` too
   if (location.protocol==='file:') return;   // only file:// is truly excluded
-  if (!local) { console.log('[live-reload] off (not localhost/LAN: "' + host + '")'); return; }
+  if (!local) { console.log('[live-reload] off (not localhost/LAN/tailnet: "' + host + '")'); return; }
   console.log('[live-reload] watching reload.txt every 1s');
   var last = null;
   async function poll(){
