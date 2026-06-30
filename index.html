@@ -1746,6 +1746,28 @@ const NOOPT = new URLSearchParams(location.search).has('noopt');   // ?noopt →
 if (NOOPT) console.log('[perf] ?noopt — BASELINE build (4096 shadow every frame · 52 godray taps · per-instance tree recompose)');
 init().catch(fatal);
 
+// DEV TELEMETRY BEACON — stream key runtime state to /telemetry (devserver writes telemetry.json) so the live phone
+// state can be polled while debugging. Dev hosts only (localhost / LAN / Tailscale / cloudflared); no-op on file://
+// and the GitHub Pages deploy. The callback runs async after eval, so all module vars are initialised by then.
+(function(){
+  const h=location.hostname;
+  const dev = location.protocol!=='file:' && (h==='localhost'||h==='127.0.0.1'||/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)||/\.ts\.net$/.test(h)||/\.trycloudflare\.com$/.test(h));
+  if(!dev) return;
+  setInterval(()=>{ try{
+    const view=(typeof flyMode!=='undefined'&&flyMode)?'fly':((typeof cineMode!=='undefined'&&cineMode)?'cine':((typeof fpsMode!=='undefined'&&fpsMode)?'fps':'orbit'));
+    fetch('/telemetry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      app:'sim', t:Date.now(), secure:isSecureContext,
+      tiltOn:(typeof _tiltOn!=='undefined')&&_tiltOn, devHas:(typeof _devHas!=='undefined')&&_devHas,
+      a:+(_devA||0).toFixed(1), b:+(_devB||0).toFixed(1), g:+(_devG||0).toFixed(1),
+      tiltX:+(_tiltX||0).toFixed(3), tiltY:+(_tiltY||0).toFixed(3),
+      view, world:(typeof worldMapOpen!=='undefined')&&worldMapOpen,
+      flyYaw:+((typeof flyState!=='undefined'&&flyState.yaw)||0).toFixed(2),
+      flyPitch:+((typeof flyState!=='undefined'&&flyState.pitch)||0).toFixed(2),
+      region:(typeof REGION!=='undefined'&&REGION)?REGION.id:null
+    })}).catch(()=>{}); }catch(_){}
+  }, 350);
+})();
+
 async function init() {
   renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: true });   // perf harness: request the WebGPU timestamp-query feature at device-init time (must be set in the constructor, not after)
   try { renderer.trackTimestamp = true; } catch(_){}
