@@ -569,7 +569,7 @@ if (window.HAWAII) REGIONS.hawaii = Object.assign({}, window.HAWAII, {
   seaTint: [0.84, 1.0, 1.14],                                // deep oceanic Pacific blue (narrow shelves → less turquoise)
   palette: {
     land: { seabed:0x10688f, wetsand:0x8f7d5e, sand:0xe6d4a2,
-            grass:0x4f8f3e, forest:0x2c6028, rock:0x6b5e52, cliff:0x453c34 },   // lush windward green → dark volcanic basalt rock/cliffs
+            grass:0x55883a, forest:0x2c6028, rock:0x4a3f37, cliff:0x2a2420 },   // lush windward green → BLACK basalt lava fields & cinder summits (rock/cliff darkened from brown-grey)
     shrub: [0x3f9a3a, 0x2a7028],                             // tropical foliage
   },
   // palms ON (tropical) — leave flora default; dense lowland greenery
@@ -649,17 +649,17 @@ if (window.FAROE) REGIONS.faroe = Object.assign({}, window.FAROE, {
   relief: { escale:14, steep:0.12, ridge:0.22, lift:2.4, terrace:2.0, terraceJit:0.4, plateau:5.5, plateauK:0.30 }, fog: 0.38,   // FLAT-TOPPED, terraced flood-basalt (trap landscape): plateau-compress tall peaks into tables + stepped lava benches, not alpine spires; low cloud
   tour: ['Streymoy','Vágar','Mykines','Eysturoy','Kalsoy','Borðoy','Viðoy','Suðuroy','Sandoy'],
   seaTint: [0.46, 0.58, 0.78], foam: 0.85,    // Faroe: deep slate North-Atlantic blue-grey
-  palette: { land: { seabed:0x21525e, wetsand:0x8f8a72, sand:0xb6ad90, grass:0x3f9a42, forest:0x2c7a33, rock:0x4a4742, cliff:0x35322d }, shrub: [0x3a8e38, 0x276b24] },   // Faroe: vivid EMERALD turf over dark basalt (was grey-green over grey rock)
+  palette: { land: { seabed:0x21525e, wetsand:0x8f8a72, sand:0xb6ad90, grass:0x3f9a42, forest:0x2c7a33, rock:0x5b554b, cliff:0x423d34 }, shrub: [0x3a8e38, 0x276b24] },   // Faroe: vivid EMERALD turf over basalt; rock/cliff lifted off near-black so the table tops aren't dark slabs
   flora: { palms:false, density:0.1 },   // Faroe: essentially treeless — bare emerald turf, almost no shrubs
   cities: [ [-6.77,62.01,24], [-6.59,62.23,16], [-7.31,62.07,10] ], cityLabels: [ ['Tórshavn',-6.77,62.01],['Klaksvík',-6.59,62.23],['Sørvágur',-7.31,62.07] ],
   defaults: { timeOfDay:8, atmosphere:0.75, windDirDeg:225, windStrength:22, waveHeight:2.4, stormOn:false, stormIntensity:0.0 },
 });
 // ---- Small Isles & Skye · Inner Hebrides (Cuillin peaks, sea-lochs, misty light) — resembles sweden (temp) ----
 if (window.SKYE) REGIONS.skye = Object.assign({}, window.SKYE, {
-  relief: { escale:12, steep:0.85, ridge:2.4, lift:2.2 }, fog: 0.45,   // misty Hebridean light
+  relief: { escale:12, steep:0.60, ridge:1.5, lift:2.2 }, fog: 0.45,   // Cuillin ridgeline — dramatic but not needle-spires (was steep0.85/ridge2.4 → near-black razor peaks)
   tour: ['Soay','Eigg','Muck','Rùm','Canna','Sanday','Raasay'],
   seaTint: [0.52, 0.64, 0.78], foam: 0.6,     // Skye: steely Hebridean loch grey-green
-  palette: { land: { seabed:0x2a6b78, wetsand:0xa39e80, sand:0xcac2a2, grass:0x4f7440, forest:0x33512c, rock:0x8d887d, cliff:0x6b675f }, shrub: [0x456435, 0x2f4a1d] },
+  palette: { land: { seabed:0x2a6b78, wetsand:0xa39e80, sand:0xcac2a2, grass:0x4f7440, forest:0x3a5a31, rock:0x9b958a, cliff:0x817b70 }, shrub: [0x456435, 0x2f4a1d] },   // lighter gabbro grey so high ground reads as rock, not black
   flora: { palms:false, density:0.7 },
   cities: [ [-6.11,57.15,10], [-6.28,57.01,10], [-5.89,57.07,10] ], cityLabels: [ ['Elgol',-6.11,57.15],['Kinloch',-6.28,57.01],['Armadale',-5.89,57.07] ],
   defaults: { timeOfDay:17, atmosphere:0.6, windDirDeg:240, windStrength:16, waveHeight:1.6, stormOn:false, stormIntensity:0.0 },
@@ -5510,10 +5510,10 @@ const _tp = { sandTop:uniform(5.0), rockElev:uniform(13.0), rockSlope0:uniform(0
 const _TERRAIN = {   // cliffSlope0: slope at which dark CLIFF rock appears — raise it on "green" regions so turf/forest climbs steep slopes
   capecod:{ sandTop:15,  rockElev:40, rockSlope0:1.3,  rockAmt:0.25 },   // glacial sandbar: sand-dominant, almost no bare rock
   montauk:{ sandTop:9,   rockElev:30, rockSlope0:1.0,  rockAmt:0.40 },
-  faroe:  { sandTop:3.5, rockElev:34, rockSlope0:1.2,  rockAmt:0.30, cliffSlope0:1.75 },   // emerald turf climbs steep basalt; only near-vertical = dark cliff
+  faroe:  { sandTop:3.5, rockElev:42, rockSlope0:1.3,  rockAmt:0.24, cliffSlope0:1.85 },   // emerald turf holds the terraced table-tops; only near-vertical sea-cliff faces go bare rock
   solomon:{ sandTop:4,   rockElev:36, rockSlope0:1.2,  rockAmt:0.28, cliffSlope0:1.8 },    // unbroken rainforest, little bare rock
-  hawaii: { sandTop:4,   rockElev:30, rockSlope0:0.95, rockAmt:0.50, cliffSlope0:1.6 },
-  skye:   { sandTop:4,   rockElev:20, rockSlope0:0.8,  rockAmt:0.55, cliffSlope0:1.5 },
+  hawaii: { sandTop:4,   rockElev:24, rockSlope0:0.85, rockAmt:0.64, cliffSlope0:1.55 },   // black lava/cinder shows widely on the shield upper slopes; lush green stays in the lowlands
+  skye:   { sandTop:4,   rockElev:32, rockSlope0:0.98, rockAmt:0.42, cliffSlope0:1.7 },   // turf/heather climbs higher; only the steepest faces go bare rock/cliff
   kodiak: { sandTop:4,   rockElev:26, rockSlope0:0.95, rockAmt:0.45, cliffSlope0:1.6 },    // emerald spruce up the slopes
   stjohns:{ sandTop:3.5, rockElev:18, rockSlope0:0.8,  rockAmt:0.5,  cliffSlope0:1.45 },
   aran:   { sandTop:3,   rockElev:7,  rockSlope0:0.55, rockAmt:0.7  },   // flat pale limestone shows readily (palette is pale)
