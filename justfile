@@ -35,9 +35,70 @@ open: serve
 refresh: serve
     open "{{url}}"
 
-# Live-reload: bump the touchfile so any open localhost tab reloads itself (no need to re-focus the browser)
+# Live-reload: bump the touchfile so any open localhost/LAN tab reloads itself (no need to re-focus the browser)
 reload:
     @date +%s > reload.txt && echo "reload triggered"
+
+# Dev server WITH a telemetry sink (POST /telemetry → telemetry.json). Use this for PHONE debugging: the phone
+# streams its live orientation/control state, which Claude reads from telemetry.json. Binds 0.0.0.0 (LAN-reachable).
+dev: stop
+    #!/usr/bin/env sh
+    nohup uv run --python 3.14 python "{{justfile_directory()}}/devserver.py" {{port}} > "{{logf}}" 2>&1 &
+    echo $! > "{{pidf}}"
+    sleep 0.7
+    ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '<your-mac-ip>')
+    echo "telemetry dev server up (pid $(cat {{pidf}}))"
+    echo "  laptop : {{url}}"
+    echo "  phone  : http://$ip:{{port}}/index.html"
+    echo "  gyro   : http://$ip:{{port}}/gyro-helper.html"
+
+# Print the LAN URL to open on the phone (same Wi-Fi)
+lan:
+    #!/usr/bin/env sh
+    ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '<your-mac-ip>')
+    echo "http://$ip:{{port}}/"
+
+# Show the latest telemetry the phone posted (run repeatedly, or `watch -n0.3 just tel`)
+tel:
+    @cat telemetry.json 2>/dev/null || echo "(no telemetry yet)"
+
+# Expose the dev server over HTTPS on your tailnet, so the phone gets a SECURE context (sensors work) with no USB/flags.
+# One-time setup: install Tailscale on both devices (same tailnet) + enable MagicDNS & HTTPS certs in the admin console
+# (https://login.tailscale.com/admin/dns). Then: `just share`  → open the printed https URL on the phone.
+share: dev
+    #!/usr/bin/env sh
+    tailscale serve reset >/dev/null 2>&1 || true   # clear any stale config bound to a previous machine name
+    # proxy the tailnet HTTPS endpoint → the local dev server (try the modern then the older serve syntax)
+    tailscale serve --bg {{port}} >/dev/null 2>&1 \
+      || tailscale serve --bg --https=443 http://127.0.0.1:{{port}} >/dev/null 2>&1 \
+      || tailscale serve --bg https / http://127.0.0.1:{{port}} >/dev/null 2>&1 \
+      || { echo "tailscale serve failed — is Tailscale running + HTTPS certs enabled in the admin console?"; exit 1; }
+    host=$(tailscale status --json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null)
+    [ -z "$host" ] && host='<your-machine>.<tailnet>.ts.net'
+    echo "tailnet HTTPS (open on the phone with Tailscale on):"
+    echo "  https://$host/gyro-helper.html"
+    echo "  https://$host/index.html"
+    echo "stop sharing with: just unshare"
+
+# Diagnose the phone-debug pipe: machine name, serve config, dev server, local fetch. Paste this output to Claude.
+diag:
+    #!/usr/bin/env sh
+    echo "=== tailscale machine name (use THIS in the phone URL) ==="
+    tailscale status --json 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);print("  https://"+d["Self"]["DNSName"].rstrip(".")+"/gyro-helper.html");print("  online:",d["Self"].get("Online"))' 2>/dev/null || echo "  (tailscale not running?)"
+    echo "=== tailscale serve config ==="; tailscale serve status 2>&1 || echo "  (none)"
+    echo "=== dev server (local :{{port}}) ==="; just status
+    echo "=== local fetch test ==="; curl -s -o /dev/null -w "  GET /gyro-helper.html -> %{http_code}\n" http://127.0.0.1:{{port}}/gyro-helper.html 2>&1 || echo "  curl failed (dev server down?)"
+    echo "=== HTTPS certs enabled? (need 'true') ==="; tailscale status --json 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);print("  MagicDNS:",d.get("CurrentTailnet",{}).get("MagicDNSEnabled"))' 2>/dev/null || true
+
+# Stop exposing over Tailscale (dev server keeps running)
+unshare:
+    @tailscale serve reset 2>/dev/null || tailscale serve --https=443 off 2>/dev/null; echo "tailscale serve stopped"
+
+# Zero-config HTTPS tunnel (no admin console, no account): prints a trusted https://*.trycloudflare.com URL to open
+# on the phone. Requires cloudflared (brew install cloudflared). Runs in the foreground — Ctrl-C to stop.
+tunnel: dev
+    @echo "Opening a Cloudflare quick tunnel → http://localhost:{{port}} … open the printed https URL on the phone:"
+    cloudflared tunnel --url http://localhost:{{port}}
 
 # Stop, then start fresh
 restart: stop serve
