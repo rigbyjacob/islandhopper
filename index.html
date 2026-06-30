@@ -5800,6 +5800,7 @@ function setFly(on){
     flyState.pitch = clampJS(Math.asin(clampJS(d.y,-1,1)), -1.4, 1.4);
     flyState.pos.y = Math.max(flyState.pos.y, 6);
     flyState.keys = {};
+    _gyroAnchored = false;                                   // re-anchor the gyro heading to this view on entry
   } else {
     handoffToOrbit(flyCam);                                  // return to orbit at the same spot
     flyState.throttle=0; flyState.throttleTarget=0;          // drop throttle when leaving free cam
@@ -5816,17 +5817,27 @@ function _deviceQuat(out, aDeg,bDeg,gDeg,orientDeg){ const R=Math.PI/180;
   out.setFromEuler(_eulerG); out.multiply(_q1g);            // camera looks out the back of the phone
   out.multiply(_q0g.setFromAxisAngle(_zeeV, -orientDeg*R));  // account for screen rotation
   return out; }
-const _gq=new THREE.Quaternion(), _gqOff=new THREE.Quaternion(), _gFwd=new THREE.Vector3();
+const _gq=new THREE.Quaternion(), _gqOff=new THREE.Quaternion(), _gqTarget=new THREE.Quaternion(), _gFwd=new THREE.Vector3(), _yAxisG=new THREE.Vector3(0,1,0);
 function updateFlyCam(dt){
   const K=flyState.keys, boost=K['shift']?2.6:1.0;
-  // MOBILE TILT → incremental view look (free cam): tilt left/right pans, tilt fwd/back pitches. (The full "gyro window"
-  // mapping is being dialled in separately in gyro-helper.html — this incremental version is the functional fallback.)
+  // MOBILE GYRO → "look through the phone into the world": the device orientation drives the camera quaternion directly
+  // (the DeviceOrientationControls recipe, validated against the gyro-helper telemetry). Heading is anchored once to the
+  // view you entered with (so it doesn't snap to absolute compass north); pitch & roll are gravity-absolute.
+  let gyroActive = false;
   if (_tiltOn && _devHas && !worldMapOpen){
-    const RZ=0.05;
-    const tx = Math.abs(_tiltX)>RZ ? (_tiltX-Math.sign(_tiltX)*RZ) : 0;
-    const ty = Math.abs(_tiltY)>RZ ? (_tiltY-Math.sign(_tiltY)*RZ) : 0;
-    flyState.yaw  += tx * 1.7 * dt;
-    flyState.pitch = clampJS(flyState.pitch + ty * 1.5 * dt, -1.45, 1.45);
+    const orient = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    _deviceQuat(_gq, _devA, _devB, _devG, orient);                 // raw device → world camera quaternion
+    _gFwd.set(0,0,-1).applyQuaternion(_gq);                        // device forward (pre-offset)
+    if (!_gyroAnchored){                                           // align device heading to the current view heading once
+      _gqOff.setFromAxisAngle(_yAxisG, Math.atan2(_gFwd.z, _gFwd.x) - flyState.yaw);
+      _gyroAnchored = true;
+    }
+    _gqTarget.copy(_gqOff).multiply(_gq);                          // heading-anchored target orientation
+    flyCam.quaternion.slerp(_gqTarget, Math.min(1, dt*12));        // smooth a touch to kill sensor jitter
+    _gFwd.set(0,0,-1).applyQuaternion(flyCam.quaternion);          // resulting forward → keep yaw/pitch coherent for movement
+    flyState.yaw   = Math.atan2(_gFwd.z, _gFwd.x);
+    flyState.pitch = clampJS(Math.asin(clampJS(_gFwd.y,-1,1)), -1.45, 1.45);
+    gyroActive = true;
   }
   const cy=Math.cos(flyState.yaw), sy=Math.sin(flyState.yaw), cp=Math.cos(flyState.pitch), sp2=Math.sin(flyState.pitch);
   const fx=cy*cp, fy=sp2, fz=sy*cp;                                  // forward
@@ -5855,7 +5866,7 @@ function updateFlyCam(dt){
     p.x+=fx*ts; p.y+=fy*ts; p.z+=fz*ts; }
   p.y=Math.max(p.y, seabedHeight(p.x,p.z)+2.5);                      // can dive UNDER the water now, but not through the seabed
   flyCam.position.copy(p);
-  flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);
+  if (!gyroActive) flyCam.lookAt(p.x+fx, p.y+fy, p.z+fz);   // gyro mode already set the full quaternion (incl. roll); don't flatten it
 }
 
 // ---- DEV camera hook: jump into flight mode and aim the camera anywhere (drive from the browser console). ----
@@ -7304,7 +7315,8 @@ function updateGlobe(dt){
   // idle auto-level: after 30s untouched, ease the north pole back upright (arcball drag can leave the globe rolled/tilted)
   // while preserving the focal point (whatever is currently centred at the front stays centred).
   const _busy = !!_globeDrag || (Math.abs(_globeVel.x)+Math.abs(_globeVel.y))>1e-4 || !!_diveZoom;
-  if (_busy){ _globeIdle=0; _globeLevel=null; }
+  if (_diveAfterSlerp){ /* a dive is queued: let the slerp-to-centre run to completion — do NOT cancel _globeLevel (tilt/idle must not stomp the pending dive, or it hangs) */ }
+  else if (_busy){ _globeIdle=0; _globeLevel=null; }
   else if (_tiltOn){ _globeIdle=0; _globeLevel=null; }   // TILT MODE: never auto-level — don't reset the orientation the user set by tilting
   else {
     _globeIdle += dt||0.016;
@@ -7374,6 +7386,20 @@ function _globeRegionAt(e){ if(!renderer||!globeCam) return null;
   const hits=_gRC.intersectObjects(_globePicks, true);
   if(!hits.length) return null; let o=hits[0].object; while(o && !o.userData.regionId) o=o.parent; return o ? o.userData.regionId : null;
 }
+// screen-space distance (px) from a tap to the currently FOCUSED diorama — a tap only counts as "dive into the
+// target" if it lands near that diorama (not anywhere on screen, which used to dive the centred region from any tap,
+// including taps on UI chrome like the Tilt button). Returns a big number if there's no focus / it's on the far side.
+const _gWP=new THREE.Vector3();
+function _focusScreenDist(e){
+  if(!_globeFocus || !globeCam || !renderer) return 1e9;
+  const d=_regionDioramas.find(x=>x.id===_globeFocus); if(!d || !d.patch) return 1e9;
+  d.patch.getWorldPosition(_gWP);
+  if (_gWP.clone().sub(globeCam.position).dot(_gWP) > 0) return 1e9;   // diorama on the FAR side of the sphere → not tappable
+  _gWP.project(globeCam); if (_gWP.z>1) return 1e9;
+  const rect=renderer.domElement.getBoundingClientRect();
+  const sx=rect.left+(_gWP.x*0.5+0.5)*rect.width, sy=rect.top+(-_gWP.y*0.5+0.5)*rect.height;
+  return Math.hypot(e.clientX-sx, e.clientY-sy);
+}
 function _gPointerMove(e){ if(!worldMapOpen || _pinching) return;
   if(!_globeDrag){                                                       // hovering (no drag) → set that region as the target (the glow follows the cursor)
     if(_diveZoom||_globeRise||_diveAfterSlerp||demoMode) return;
@@ -7389,19 +7415,25 @@ function _gPointerMove(e){ if(!worldMapOpen || _pinching) return;
 function _gPointerUp(e){
   // TAP detection on pointerup (more reliable on touch than the synthetic 'click', which pointer-capture + touch-action
   // often swallows): a near-stationary release that wasn't a pinch dives the region under it, else the centred one.
-  if (worldMapOpen && !_pinching && !_pinchSuppress && _globeMoved<8 && e && e.clientX!=null && !_diveZoom && !_globeRise && !_diveAfterSlerp){
-    const id=_globeRegionAt(e) || _globeFocus;
-    try{ console.log('[globe tap]', { x:Math.round(e.clientX), y:Math.round(e.clientY), moved:Math.round(_globeMoved), hit:_globeRegionAt(e), focus:_globeFocus, dive:id }); }catch(_){}
+  // GUARD: this listener is on window, so it fires for taps on UI chrome (e.g. the Tilt button) too — only treat it as a
+  // globe tap if the gesture actually STARTED on the globe overlay (_globeDrag was set in _gPointerDown), else a button
+  // tap would dive into the region.
+  const onGlobe = !!_globeDrag;
+  if (onGlobe && worldMapOpen && !_pinching && !_pinchSuppress && _globeMoved<8 && e && e.clientX!=null && !_diveZoom && !_globeRise && !_diveAfterSlerp){
+    // only dive if the tap landed ON a diorama (raycast) OR within ~16% of the screen of the focused diorama — NOT from
+    // any stationary tap anywhere (that dove the centred region even when tapping empty space or UI chrome).
+    const hitId=_globeRegionAt(e);
+    const nearThresh=0.16*Math.min(window.innerWidth,window.innerHeight);
+    const id = hitId || (_focusScreenDist(e) < nearThresh ? _globeFocus : null);
     if(id) travelToRegion(id);
-  } else if (worldMapOpen && e && e.clientX!=null){
-    try{ console.log('[globe up — no tap]', { moved:Math.round(_globeMoved), pinching:_pinching, suppress:_pinchSuppress }); }catch(_){}
   }
   _globeDrag=null;
 }
 function _gClick(e){ if(!worldMapOpen || _globeMoved>10 || _pinchSuppress) return;   // a real tap (not the end of a spin/pinch)
-  // tap a region marker to dive; if the tap misses the small marker (common on touch), fall back to the FOCUSED
-  // (centred) region — so on mobile you spin a region to centre, then just tap to dive in.
-  const id=_globeRegionAt(e) || _globeFocus; if(id) travelToRegion(id);
+  // tap a region marker to dive; if the tap misses the small marker (common on touch), fall back to the FOCUSED region —
+  // but ONLY if the tap was near that focused diorama, so taps on empty space / UI chrome don't dive the centred region.
+  const nearThresh=0.16*Math.min(window.innerWidth,window.innerHeight);
+  const id=_globeRegionAt(e) || (_focusScreenDist(e) < nearThresh ? _globeFocus : null); if(id) travelToRegion(id);
 }
 // double-click = SAME as a single click (dive into the region). The two-tap sequence is often read as a tiny
 // drag (which spins the globe and trips _gClick's _globeMoved guard), so the click path can swallow it — but
