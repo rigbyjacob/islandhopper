@@ -9,3 +9,7 @@ GEBCO/
 data/_*test*.js
 dist/            # local distribution build; the GitHub Pages copy lives in docs/
 telemetry.json
+
+# Tailscale dev cert (local only)
+*.ts.net.crt
+*.ts.net.key
