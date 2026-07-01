@@ -18,8 +18,15 @@ from `Q` at init — no half‑applied live state, no partial‑mutation bugs.
    MOBILE`); every heavy lever reads from the active `Q`.
 2. **Capability probe** — `runDiag()` reads the GPU + device class and runs a
    short micro‑bench on the heaviest scenes, then recommends a tier.
-3. **Recommend‑only UI** — a toast + dev‑menu button. `applyQuality(tier)` is the
-   *only* thing that changes quality (persists tier + reloads).
+3. **Recommend‑only UI** — a tap‑to‑switch tier badge (bottom‑left, always visible),
+   a Performance panel section, a toast, and a dev‑menu button. `applyQuality(tier)`
+   is the *only* thing that changes quality (persists tier + reloads).
+   - **Recommend‑on‑load:** on a normal load (no `?diag`/`?tier`/`?perf`, and only
+     if the visitor hasn't already chosen a tier), a *cheap* check runs — GPU
+     string · mobile · dpr, **no micro‑bench**, so it never hijacks the intro. It
+     surfaces the recommend toast only on a confident‑weak signal *and* only when
+     that's an actual downgrade; otherwise silent. Prompts at most once per device.
+     Nothing changes without the visitor's tap. Capable devices are never nagged.
 4. **Visual A/B** — `perfShots()` screenshots every scenario at the current tier;
    `perfContactSheet()` composites them across tiers next to the lever values, so
    a quality regression is visible in lockstep with the speed win.

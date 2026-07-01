@@ -8169,6 +8169,35 @@ function _showTierToast(report){
   t.querySelector('#tierPick').onclick=()=>{ const c=prompt('Set quality tier: ULTRA / HIGH / MED / LOW / MOBILE', report.tier_recommended); if(c&&QUALITY[c.toUpperCase()]) applyQuality(c); };
 }
 
+// ---- recommend-on-load (one tap, no silent change) ----------------------------------------
+// Runs ONCE on a normal load. Uses only cheap signals (GPU string · mobile · dpr) — deliberately
+// NO micro-bench here, so it never hijacks the intro with the heavy scenes. It only surfaces the
+// recommend toast on a CONFIDENT weak signal AND when the recommendation is an actual downgrade;
+// otherwise it stays silent. Applying is still the user's one tap. Prompts at most once per device.
+const DIAG_PROMPTED_KEY='islandHopper.diagPrompted.v1';
+async function _autoRecommendOnLoad(){
+  try{
+    const qs=new URLSearchParams(location.search);
+    if (qs.has('diag')||qs.has('tier')||qs.has('perf')) return;         // explicit control — don't auto-nag
+    try{ if (localStorage.getItem(QTIER_KEY)) return; }catch(_){}        // user already picked a tier
+    try{ if (localStorage.getItem(DIAG_PROMPTED_KEY)) return; }catch(_){} // already prompted on this device
+    const gi=await _gpuInfo();
+    const dpr=window.devicePixelRatio||1;
+    const mobile=_isMobileDevice();
+    const noWebGPU=!(navigator.gpu);
+    const desc=((gi.description||'')+' '+(gi.architecture||'')+' '+(gi.vendor||'')).toLowerCase();
+    const weakStr=/(intel|uhd|iris|llvmpipe|swiftshader|microsoft basic|adreno|mali|powervr)/.test(desc);
+    if (!(noWebGPU||mobile||weakStr)) return;                            // only a CONFIDENT weak signal triggers a prompt
+    const rec=_recommendTier({ gi, dpr, mobile, noWebGPU, bench:null });
+    const order=['ULTRA','HIGH','MED','LOW','MOBILE'];
+    if (order.indexOf(rec.tier) <= order.indexOf(QTIER)) return;         // only prompt an actual downgrade
+    try{ localStorage.setItem(DIAG_PROMPTED_KEY,'1'); }catch(_){}        // one prompt per device, whatever they choose
+    console.log('[diag] auto-recommend on load →', rec.tier, '·', rec.reason);
+    _showTierToast({ tier_current:QTIER, tier_recommended:rec.tier, reason:rec.reason+' · tap Diagnose for a measured check',
+      device:{ gpu:gi, dpr, mobile, webgpu:!noWebGPU, ua:navigator.userAgent }, bench:null });
+  }catch(e){ console.warn('[diag] auto-recommend failed', e); }
+}
+
 // ---- visual A/B: screenshot every scenario at the current tier, composite across tiers ----
 const SHOTS_KEY='islandHopper.shots.v1';
 function _loadShots(){ try{ return JSON.parse(localStorage.getItem(SHOTS_KEY))||{}; }catch(_){ return {}; } }
@@ -8228,6 +8257,7 @@ try{ window.runDiag=runDiag; window.applyQuality=applyQuality; window.perfShots=
   if(window.dev) Object.assign(window.dev, { diag:runDiag, applyQuality, perfShots, contactSheet:perfContactSheet, tier:()=>QTIER });
 }catch(_){}
 if (new URLSearchParams(location.search).has('diag')) setTimeout(()=>{ try{ runDiag({}); }catch(e){ console.warn('diag autorun', e); } }, 2600);
+else setTimeout(()=>{ try{ _autoRecommendOnLoad(); }catch(e){ console.warn('auto-recommend', e); } }, 3200);   // normal load → cheap recommend-on-load (once per device, downgrade-only)
 
 // --- small UI factory ---
 function el(tag, cls, parent){ const e=document.createElement(tag); if(cls)e.className=cls; if(parent)parent.appendChild(e); return e; }
