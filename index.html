@@ -1744,6 +1744,33 @@ const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
 
 const NOOPT = new URLSearchParams(location.search).has('noopt');   // ?noopt → revert perf opts #1/#2/#3 at runtime so a perf sweep on ?noopt is the BASELINE to diff against the optimized build
 if (NOOPT) console.log('[perf] ?noopt — BASELINE build (4096 shadow every frame · 52 godray taps · per-instance tree recompose)');
+
+// ───────────────────────────────────────────────────────────────────────────
+// PERFORMANCE TIERS — the "quality ladder".  ULTRA == the exact current literals,
+// so the default path stays byte-identical to before.  The probe (runDiag) only
+// RECOMMENDS a tier (recommend-only); a tier is APPLIED by persisting it + reloading,
+// so the scene is always rebuilt consistently from Q at init (no half-applied live
+// state, no chance of a partial-mutation bug).  Every heavy lever reads from `Q`.
+//   force one with ?tier=LOW|MED|HIGH|ULTRA|MOBILE ; probe with ?diag
+// ───────────────────────────────────────────────────────────────────────────
+const QUALITY = {
+  ULTRA:  { pixelCap:2.0,  msaa:true,  shadowSun:4096, shadowSun2:2048, godrayTaps:30, starCount:9000, floraMul:1.00, foamClaws:true,  globeSeg:360, globeShadow:2048 },
+  HIGH:   { pixelCap:1.75, msaa:true,  shadowSun:2048, shadowSun2:1024, godrayTaps:24, starCount:6000, floraMul:0.80, foamClaws:true,  globeSeg:288, globeShadow:2048 },
+  MED:    { pixelCap:1.5,  msaa:false, shadowSun:2048, shadowSun2:1024, godrayTaps:18, starCount:3500, floraMul:0.55, foamClaws:false, globeSeg:220, globeShadow:1024 },
+  LOW:    { pixelCap:1.25, msaa:false, shadowSun:1024, shadowSun2:512,  godrayTaps:12, starCount:1800, floraMul:0.35, foamClaws:false, globeSeg:160, globeShadow:1024 },
+  MOBILE: { pixelCap:1.0,  msaa:false, shadowSun:1024, shadowSun2:512,  godrayTaps:12, starCount:1500, floraMul:0.30, foamClaws:false, globeSeg:128, globeShadow:1024 },
+};
+const QTIER_KEY = 'islandHopper.tier.v1';
+function _qTierFromStore(){
+  const forced = new URLSearchParams(location.search).get('tier');
+  if (forced && QUALITY[forced.toUpperCase()]) return forced.toUpperCase();
+  try { const s = localStorage.getItem(QTIER_KEY); if (s && QUALITY[s]) return s; } catch(_){}
+  return 'ULTRA';   // recommend-only: never silently downgrade; default = current M2 path
+}
+let QTIER = _qTierFromStore();
+let Q = Object.assign({}, QUALITY[QTIER]);
+console.log('[perf] quality tier =', QTIER, Q);
+
 init().catch(fatal);
 
 // DEV TELEMETRY BEACON — stream key runtime state to /telemetry (devserver writes telemetry.json) so the live phone
@@ -1769,9 +1796,9 @@ init().catch(fatal);
 })();
 
 async function init() {
-  renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: true });   // perf harness: request the WebGPU timestamp-query feature at device-init time (must be set in the constructor, not after)
+  renderer = new THREE.WebGPURenderer({ antialias: Q.msaa, trackTimestamp: true });   // perf harness: request the WebGPU timestamp-query feature at device-init time (must be set in the constructor, not after). Q.msaa: MSAA off on cheaper tiers.
   try { renderer.trackTimestamp = true; } catch(_){}
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, Q.pixelCap));   // Q.pixelCap: the single biggest GPU lever — caps render resolution (ULTRA 2.0 = prior behavior)
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
@@ -2266,7 +2293,7 @@ function buildLights() {
   sunLight = new THREE.DirectionalLight(0xfff2da, 2.4);
   sunLight.position.set(420, 620, 360);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(4096, 4096);   // region-fit map covers the WHOLE region, so it needs the resolution to keep fronds legible (was 2048 when the map hugged the boat)
+  sunLight.shadow.mapSize.set(Q.shadowSun, Q.shadowSun);   // Q.shadowSun (ULTRA 4096): region-fit map covers the WHOLE region, so it needs the resolution to keep fronds legible (was 2048 when the map hugged the boat)
   const sc = sunLight.shadow.camera;
   // tighter frustum (follows the boat) → smaller texels → steadier, sharper frond shadows.
   sc.left=-480; sc.right=480; sc.top=480; sc.bottom=-480; sc.near=20; sc.far=1900; sc.updateProjectionMatrix();   // wider box: a tall island's long low-sun shadow stays inside the map; still ~0.47u/texel @2048 (fronds stay crisp)
@@ -2280,7 +2307,7 @@ function buildLights() {
   // Companion sun ALSO casts shadows so alien scenes show two shadow directions. castShadow stays on permanently
   // (keeps the WebGPU shadow map allocated, same as the primary sun); intensity is 0 on Earth so no second shadow
   // shows there, and the custom terrain/ocean shading scales its shadow term by uAlien (see _sunShadowMul).
-  sun2Light.castShadow = true; sun2Light.shadow.mapSize.set(2048, 2048);
+  sun2Light.castShadow = true; sun2Light.shadow.mapSize.set(Q.shadowSun2, Q.shadowSun2);   // Q.shadowSun2 (ULTRA 2048): alien companion-sun shadow — smaller on cheaper tiers
   { const sc2=sun2Light.shadow.camera; sc2.left=-700; sc2.right=700; sc2.top=700; sc2.bottom=-700; sc2.near=1; sc2.far=3000; sc2.updateProjectionMatrix(); }
   sun2Light.shadow.bias = -0.0006; sun2Light.shadow.normalBias = 2.2;
   hemiLight = new THREE.HemisphereLight(0xbfe6ff, 0x35506b, 0.9); scene.add(hemiLight);
@@ -3591,7 +3618,7 @@ function buildShrubs(){
   const fl=REGION.flora||{};
   const DENS=fl.density||1;                             // per-region foliage multiplier (densely pine-forested Sweden ≈ 6)
   const MINH=(fl.minH!=null)?fl.minH:2.2, MAXH=(fl.maxH!=null)?fl.maxH:12;   // height band trees grow in
-  const CAP=Math.round(640*DENS); const m=new THREE.InstancedMesh(g, mat, CAP); m.castShadow=true; m.receiveShadow=true; m.count=0; scene.add(m);
+  const CAP=Math.round(640*DENS*Q.floraMul); const m=new THREE.InstancedMesh(g, mat, CAP); m.castShadow=true; m.receiveShadow=true; m.count=0; scene.add(m);   // Q.floraMul (ULTRA 1.0): scales the instanced-foliage pool on cheaper tiers
   const d=new THREE.Object3D(); let n=0;
   for (const isl of ISLANDS){ const big=isl.r>80;
     const cap = big ? Math.min(Math.round(isl.r*1.8*DENS), Math.round(240*DENS)) : Math.min(Math.round(isl.r*1.1*DENS), Math.round(28*DENS));
@@ -4273,7 +4300,7 @@ function _raDecVec(raDeg, decDeg, out){ const ra=raDeg*Math.PI/180, dec=decDeg*M
 // globe). Returns the Points so the caller can keep it.
 function _buildMilkyWayStars(parent, R, opaNode, opts){
   const bMul=(opts&&opts.bright)||1, sMul=(opts&&opts.sizeMul)||1;   // globe passes brighter/bigger so the arc reads behind the planet
-  const N=9000, pos=new Float32Array(N*3), col=new Float32Array(N*3), siz=new Float32Array(N), ph=new Float32Array(N);
+  const N=Q.starCount, pos=new Float32Array(N*3), col=new Float32Array(N*3), siz=new Float32Array(N), ph=new Float32Array(N);   // Q.starCount (ULTRA 9000): Milky-Way point density
   const clump=(l)=> Math.max(0.10, Math.min(1, 0.55 + 0.30*Math.sin(l+0.5) + 0.22*Math.sin(l*2.3+1.7) + 0.15*Math.sin(l*5.1+4.0)));   // star-clouds along the band
   const gauss=()=> Math.sqrt(-2*Math.log(Math.random()+1e-9))*Math.cos(6.2831853*Math.random());
   let k=0, guard=0;
@@ -4593,6 +4620,7 @@ function _hash2(i,j){ let n=(i*73856093)^(j*19349663); n=(n^(n>>13))*1274126177;
 function _clObjSet(x,y,z,q,s){ _clObj.position.set(x,y,z); _clObj.quaternion.copy(q); _clObj.scale.setScalar(s); _clObj.updateMatrix(); }
 
 function buildFoamClaws(){
+  if (!Q.foamClaws){ foamClaws = null; console.log('[perf] foam claws skipped (tier '+QTIER+')'); return; }   // Q.foamClaws: the instanced 3D Hokusai curl-fingers are dropped on cheaper tiers (updateFoamClaws already no-ops on null)
   const DARK = 0x14305c, WHITE = 0xf7f2e6;   // same palette as the foam-texture keyline / fill
 
   // amplitude-weighted mean wave TRAVEL direction. A crest of sin((x·nx+z·ny)·k + t·speed) moves toward
@@ -6522,7 +6550,7 @@ async function enableGodrays(){
   try {
     godrayScenePass = pass(scene, camera);
     const col = godrayScenePass.getTextureNode();
-    const N = NOOPT ? 52 : 30;                            // OPT #2: 30 radial taps (was 52), ~40% cheaper; ?noopt restores 52 for A/B. Decay retuned below so the shaft look is preserved.
+    const N = NOOPT ? 52 : Q.godrayTaps;                  // OPT #2 / Q.godrayTaps: radial taps (ULTRA 30, was 52). ?noopt restores 52 for A/B. Decay derived from N below so the shaft look is preserved at any tap count.
     const step = uSunScreenUV.sub(screenUV).mul(0.92/N);  // march ~92% of the way to the sun
     const illum = float(0).toVar();
     const coord = screenUV.toVar();
@@ -6531,7 +6559,7 @@ async function enableGodrays(){
       coord.addAssign(step);
       const s = col.sample(clamp(coord, vec2(0.0,0.0), vec2(1.0,1.0))).xyz;
       illum.addAssign(max(dot(s, vec3(0.299,0.587,0.114)).sub(0.40), 0.0).mul(w));   // bright-pass (sky/sun/lit cloud) × decay
-      w *= (NOOPT ? 0.967 : 0.943);                       // OPT #2: decay retuned for N=30 (0.943) so cumulative reach ≈ old 52-tap 0.967 profile; ?noopt restores 0.967
+      w *= (1 - 1.71/N);                                  // OPT #2: decay derived from tap count — reproduces 0.943 @ N=30 and 0.967 @ N=52 exactly, and keeps the shaft reach consistent at any tier's tap count
     }
     illum.assign(illum.mul(4.4/N));                       // exposure
     const rays = uSunCol.mul(illum).mul(uAtmo).mul(uSunOnScreen);
@@ -6580,7 +6608,50 @@ function setPanelOpen(open){
   document.getElementById('panel').style.display = open?'':'none';
   document.getElementById('skullBtn').style.display = open?'none':'flex';   // 'flex' (not '') — '' falls back to the CSS display:none and the badge never reappears
 }
+const _tierLabel = t => ({ULTRA:'Ultra',HIGH:'High',MED:'Medium',LOW:'Low',MOBILE:'Mobile'}[t]||t);
+// A small always-on pill showing the active graphics tier; tap/click opens a picker (switch = persist + reload)
+// or a one-tap Diagnose. Mounted on <body> so it stays put when the control panel is hidden (globe / demo).
+function _buildTierBadge(){
+  if (document.getElementById('tierBadge')) return;
+  const b=document.createElement('div'); b.id='tierBadge';
+  b.style.cssText='position:fixed;left:12px;bottom:14px;z-index:125;font:600 12px/1 system-ui,sans-serif;'
+    +'color:#dcecf7;background:rgba(14,20,28,.62);border:1px solid rgba(140,200,255,.28);border-radius:999px;'
+    +'padding:6px 11px;cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-backdrop-filter:blur(6px);'
+    +'backdrop-filter:blur(6px);display:flex;align-items:center;gap:6px;box-shadow:0 2px 10px rgba(0,0,0,.3)';
+  b.title='Graphics quality: '+_tierLabel(QTIER)+' — tap to change';
+  b.innerHTML='<span style="opacity:.7">⚙</span><span>'+_tierLabel(QTIER)+'</span>';
+  document.body.appendChild(b);
+  let pop=null;
+  const onDoc=(e)=>{ if(pop && !pop.contains(e.target) && !b.contains(e.target)) close(); };
+  const close=()=>{ if(pop){ pop.remove(); pop=null; document.removeEventListener('pointerdown',onDoc,true); } };
+  b.onclick=(e)=>{ e.stopPropagation(); if(pop){ close(); return; }
+    pop=document.createElement('div'); pop.id='tierBadgePop';
+    pop.style.cssText='position:fixed;left:12px;bottom:50px;z-index:126;min-width:196px;font:13px/1.3 system-ui,sans-serif;'
+      +'color:#e8eef4;background:rgba(16,22,30,.97);border:1px solid #2a3947;border-radius:12px;padding:8px;'
+      +'box-shadow:0 8px 30px rgba(0,0,0,.55)';
+    let h='<div style="font-weight:600;opacity:.85;padding:4px 8px 6px">Graphics quality</div>';
+    ['ULTRA','HIGH','MED','LOW','MOBILE'].forEach(t=>{ const cur=t===QTIER, p=QUALITY[t]||{};
+      h+='<div class="tb-opt" data-t="'+t+'" style="cursor:pointer;padding:7px 8px;border-radius:8px;display:flex;'
+        +'justify-content:space-between;gap:10px;align-items:center;'+(cur?'background:rgba(90,160,220,.18);':'')+'">'
+        +'<span>'+(cur?'● ':'○ ')+_tierLabel(t)+'</span><span style="opacity:.5;font-size:11px">px'+p.pixelCap+'</span></div>'; });
+    h+='<div style="border-top:1px solid #223;margin:6px 4px 4px"></div>'
+      +'<div id="tb-diag" style="cursor:pointer;padding:7px 8px;border-radius:8px;color:#7fd1ff">🔬 Diagnose this device…</div>'
+      +'<div id="tb-out" style="padding:2px 8px 4px;font-size:11px;opacity:.85"></div>';
+    pop.innerHTML=h; document.body.appendChild(pop);
+    pop.querySelectorAll('.tb-opt').forEach(o=>{ o.onclick=()=>{ const t=o.getAttribute('data-t'); if(t!==QTIER) applyQuality(t); else close(); }; });
+    const dg=pop.querySelector('#tb-diag'), out=pop.querySelector('#tb-out');
+    dg.onclick=()=>{ dg.textContent='⏳ probing…'; out.textContent='';
+      runDiag({silent:true}).then(r=>{ dg.textContent='🔬 Diagnose this device…';
+        const same=r.tier_recommended===r.tier_current, bch=r.bench&&r.bench.gpuMs?(r.bench.gpuMs+'ms/frame'):(r.bench&&r.bench.fps?(r.bench.fps+'fps'):'');
+        out.innerHTML = same ? ('✓ '+_tierLabel(r.tier_current)+' looks right'+(bch?' ('+bch+')':''))
+          : ('→ suggests <b style="color:#7fd1ff">'+_tierLabel(r.tier_recommended)+'</b>'+(bch?' ('+bch+')':'')+' · <a href="#" id="tb-apply" style="color:#7fd1ff">apply</a>');
+        const ap=out.querySelector('#tb-apply'); if(ap) ap.onclick=(ev)=>{ ev.preventDefault(); applyQuality(r.tier_recommended); };
+      }).catch(()=>{ dg.textContent='🔬 Diagnose this device…'; out.textContent='⚠ probe failed'; }); };
+    setTimeout(()=>document.addEventListener('pointerdown',onDoc,true),0);
+  };
+}
 function buildPanel() {
+  _buildTierBadge();   // always-visible tier pill (survives panel hide in globe/demo views); tap to switch tier
   const panel = document.getElementById('panel');
   const head = el('div','',panel);
   const ttlrow = el('div','ttlrow',head);
@@ -6617,6 +6688,29 @@ function buildPanel() {
   addToggle(s, 'Route path (wedge markers)', P, 'showPath');   // the ship/sub wedge route — independent of the debug view below
   addToggle(s, 'Sounds', P, 'music', setMusic);
   addToggle(s, 'Debug: nav grid + A* path', P, 'debugNav');
+
+  // Performance — manual quality tier so you can eyeball each tier before trusting the probe.
+  // Picking a tier persists it + reloads, so the scene always rebuilds consistently from Q.
+  { const ps = section(panel, 'Performance');
+    const _tierProxy = { tier: QTIER };
+    addSelect(ps, 'Quality tier', _tierProxy, 'tier',
+      [['ULTRA','Ultra — full (default)'],['HIGH','High'],['MED','Medium'],['LOW','Low'],['MOBILE','Mobile']],
+      (v)=>{ if(v!==QTIER) applyQuality(v); });   // applyQuality persists + reloads
+    const _q = QUALITY[QTIER]||{};
+    const note = el('div','read', ps); note.style.cssText='opacity:.6;font-size:11px;line-height:1.4;margin:2px 0 6px';
+    note.textContent = 'now: '+QTIER+' · px≤'+_q.pixelCap+' · shadow '+_q.shadowSun+(_q.msaa?' · MSAA':' · no MSAA')+' · godray '+_q.godrayTaps+(_q.foamClaws?' · claws':'');
+    const recRow = el('div','read', ps); recRow.style.cssText='opacity:.85;font-size:11px;margin:0 0 6px;min-height:1em';
+    const diagBtn = el('div','btn', el('div','btns',ps)); diagBtn.textContent='🔬 Diagnose this device';
+    diagBtn.title='Probe the GPU + micro-bench the heaviest scenes, then recommend a tier. Recommend-only — switching is your choice above.';
+    diagBtn.onclick=()=>{ diagBtn.textContent='⏳ probing…'; diagBtn.classList.add('active'); recRow.textContent='';
+      runDiag({ silent:true }).then(r=>{ diagBtn.classList.remove('active'); diagBtn.textContent='🔬 Diagnose this device';
+        const same=r.tier_recommended===r.tier_current;
+        const b=r.bench&&r.bench.gpuMs?(r.bench.gpuMs+'ms GPU/frame'):(r.bench&&r.bench.fps?(r.bench.fps+'fps'):'');
+        recRow.innerHTML = same ? ('✓ '+r.tier_current+' looks right'+(b?' ('+b+')':''))
+          : ('→ recommends <b style="color:#7fd1ff">'+r.tier_recommended+'</b>'+(b?' ('+b+')':'')+' · <a href="#" id="recApply" style="color:#7fd1ff">apply &amp; reload</a>');
+        const ra=recRow.querySelector('#recApply'); if(ra) ra.onclick=(e)=>{ e.preventDefault(); applyQuality(r.tier_recommended); };
+      }).catch(()=>{ diagBtn.classList.remove('active'); diagBtn.textContent='🔬 Diagnose this device'; recRow.textContent='⚠ probe failed'; }); };
+  }
 
   // Fleet — view actions (moved from the old View section) + independent vehicles + Brady-Bunch grid
   s = section(panel, 'Fleet');
@@ -6842,6 +6936,23 @@ function buildPanel() {
     try{ navigator.clipboard&&navigator.clipboard.writeText(json);}catch(_){}
     const o=perfExp.textContent; perfExp.textContent='✓ Saved + copied'; perfExp.classList.add('active'); setTimeout(()=>{ perfExp.textContent=o; perfExp.classList.remove('active'); },1600); };
 
+  // DIAGNOSE: probe the device + micro-bench → recommend a tier (recommend-only; never auto-applies)
+  const diagB = el('div','btn',acts); diagB.textContent='🔬 Diagnose & recommend tier';
+  diagB.title='Read the GPU/device + run a short micro-bench on the heaviest scenes, then recommend a quality tier. Recommend-only — applying is your choice (persists + reloads).';
+  diagB.onclick=()=>{ diagB.textContent='⏳ probing…'; diagB.classList.add('active');
+    runDiag({}).then(r=>{ diagB.textContent='✓ '+r.tier_recommended+' (now '+r.tier_current+')'; diagB.classList.remove('active'); setTimeout(()=>{ diagB.textContent='🔬 Diagnose & recommend tier'; },3500); })
+      .catch(()=>{ diagB.textContent='⚠ probe failed'; diagB.classList.remove('active'); setTimeout(()=>{ diagB.textContent='🔬 Diagnose & recommend tier'; },2800); }); };
+
+  // VISUAL A/B: snapshot every scenario at the current tier; build the cross-tier contact sheet
+  const shotB = el('div','btn',acts); shotB.textContent='📸 Capture tier shots ('+QTIER+')';
+  shotB.title='Screenshot every demo scenario at the CURRENT tier into localStorage. Apply another tier (it reloads) and capture again, then open the contact sheet to compare quality side-by-side.';
+  shotB.onclick=()=>{ shotB.textContent='⏳ capturing…'; shotB.classList.add('active');
+    perfShots({}).then(()=>{ shotB.textContent='✓ '+QTIER+' captured'; shotB.classList.remove('active'); setTimeout(()=>{ shotB.textContent='📸 Capture tier shots ('+QTIER+')'; },3000); })
+      .catch(()=>{ shotB.textContent='⚠ capture failed'; shotB.classList.remove('active'); setTimeout(()=>{ shotB.textContent='📸 Capture tier shots ('+QTIER+')'; },2800); }); };
+  const sheetB = el('div','btn',acts); sheetB.textContent='🗂 Open tier contact sheet';
+  sheetB.title='Open a grid comparing every captured tier shot side-by-side, annotated with each tier’s lever values — so you can see exactly what a downgrade costs visually.';
+  sheetB.onclick=()=>{ perfContactSheet(); };
+
   setMode('tour');                    // Island tour is the only working mode → force it (the old Mode buttons are gone)
   applyPanelLayout();                 // restore saved section order + collapsed state
 }
@@ -7050,7 +7161,7 @@ function buildGlobe(){
   // THE SUN — a real shadow-casting key light placed at the current UTC subsolar point (see _placeGlobeSun). It lives in
   // globeScene (NOT globeSpin), so it's fixed in world space and the day/night terminator sweeps as you spin the globe.
   globeSun=new THREE.DirectionalLight(0xffe8c8, 2.7); globeSun.castShadow=true;   // soft warm-white sunlight on the day side (was 0xffcc70 — too golden/orange)
-  globeSun.shadow.mapSize.set(2048,2048);
+  globeSun.shadow.mapSize.set(Q.globeShadow, Q.globeShadow);   // Q.globeShadow (ULTRA 2048): globe day/night terminator shadow res
   { const sc=globeSun.shadow.camera; sc.left=-1.35; sc.right=1.35; sc.top=1.35; sc.bottom=-1.35; sc.near=0.1; sc.far=12; sc.updateProjectionMatrix(); }
   globeSun.shadow.bias=-0.0007; globeSun.shadow.normalBias=0.015;
   globeScene.add(globeSun); globeScene.add(globeSun.target);
@@ -7072,7 +7183,7 @@ function buildGlobe(){
   const oceanMatOpts={ roughness:0.9, metalness:0.0, color:0x9a9ea2 };   // GRAYSCALE Earth (so the coloured region patches pop)
   if (window.WORLDMAP_DISP){ const dt=new THREE.TextureLoader().load(window.WORLDMAP_DISP); oceanMatOpts.displacementMap=dt; oceanMatOpts.displacementScale=0.06; oceanMatOpts.displacementBias=-0.03;   // gentler relief (was 0.10): the Earth reads as a globe, not a knobbly potato. sea level (disp 0.5) stays at radius.
     oceanMatOpts.bumpMap=dt; oceanMatOpts.bumpScale=3.5; }   // perturb normals from the height map so the relief actually catches the sun/moon (slope shading + crisp terminator) — displacement alone keeps flat radial normals
-  const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R,360,180), new THREE.MeshStandardMaterial(oceanMatOpts));
+  const ocean=new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R, Q.globeSeg, Math.round(Q.globeSeg/2)), new THREE.MeshStandardMaterial(oceanMatOpts));   // Q.globeSeg (ULTRA 360×180): displacement-relief sphere tessellation — the heaviest globe-view geometry
   ocean.castShadow=true; ocean.receiveShadow=true;   // displacement relief self-shadows + receives diorama shadows
   globeSpin.add(ocean);
   if (window.WORLDMAP){ const img=new Image(); img.onload=()=>{   // desaturate the Earth colour map → grayscale planet
@@ -7892,7 +8003,7 @@ async function runPerfSweep(opts){
               label: opts.label || (NOOPT?'baseline':'optimized'), noopt: NOOPT, forceW: opts.forceW||0, forceH: opts.forceH||0,
               forceSnap: !!opts.forceSnap,       // present each scenario via direct snap (skip globe dives — robust for automated/background runs; steady-state perf is identical)
               ignoreHidden: !!opts.ignoreHidden }; // don't abort if the tab is backgrounded (CPU/GPU ms stay valid when throttled; only fps inflates)
-  const list=demoScenarios, wasDemo=demoMode, musicWas=P.music;
+  const list=(opts.only&&opts.only.length)?demoScenarios.filter(s=>opts.only.includes(s.name)):demoScenarios, wasDemo=demoMode, musicWas=P.music;   // opts.only: restrict to named scenarios (used by the diag micro-bench)
   try{ P.music=false; stopIntroMusic(); }catch(_){}
   if (!demoMode){ enterDemoMode(); await _perfSleep(800); }
   let _restore=null;
@@ -7949,6 +8060,174 @@ try{ window.runPerfSweep=runPerfSweep; window.perfDiff=perfDiff; window.perfRuns
   if(window.dev) Object.assign(window.dev, { perfSweep:runPerfSweep, perfDiff, perfRuns:_perfLoadRuns,
     perfDump:()=>JSON.stringify(_perfLoadRuns(),null,2), perfClear:()=>{ try{localStorage.removeItem(PERF_KEY);}catch(_){}; return 'perf runs cleared'; } });
 }catch(_){}
+
+// ───────────────────────────────────────────────────────────────────────────
+// CAPABILITY PROBE + RECOMMEND-ONLY TIERING
+//   runDiag()         → reads GPU/device + a short micro-bench → recommends a tier
+//   applyQuality(t)   → the ONLY thing that changes quality: persists tier + reloads
+//   perfShots()       → capture a screenshot of every scenario at the current tier
+//   perfContactSheet()→ open a grid of those shots across tiers (quality A/B)
+// Nothing here auto-applies — it only suggests.  ?diag runs the probe on boot.
+// ───────────────────────────────────────────────────────────────────────────
+async function _gpuInfo(){
+  let info={ vendor:'?', architecture:'?', description:'?' };
+  try {
+    if (navigator.gpu && navigator.gpu.requestAdapter){
+      const ad = await navigator.gpu.requestAdapter();
+      if (ad){
+        if (ad.requestAdapterInfo){ const ai = await ad.requestAdapterInfo(); info={ vendor:ai.vendor||'?', architecture:ai.architecture||'?', description:ai.description||'?' }; }
+        else if (ad.info){ info={ vendor:ad.info.vendor||'?', architecture:ad.info.architecture||'?', description:ad.info.description||'?' }; }
+      }
+    }
+  } catch(_){}
+  return info;
+}
+function _isMobileDevice(){
+  if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) return true;
+  try { return (navigator.maxTouchPoints>1) && window.matchMedia('(pointer:coarse)').matches && !/Macintosh/.test(navigator.userAgent); } catch(_){ return false; }
+}
+function _diagBenchScenarios(){
+  const names = demoScenarios.map(s=>s.name);
+  const heavy = names.filter(n=>/storm|hokusai|night|rain|volcano|alien/i.test(n));
+  return (heavy.length?heavy:names).slice(0,2);
+}
+function _recommendTier({ gi, dpr, mobile, noWebGPU, bench }){
+  if (noWebGPU) return { tier:'LOW', reason:'WebGPU unavailable — lowest tier (consider a fallback notice)' };
+  if (mobile)   return { tier:'MOBILE', reason:'mobile device class' };
+  if (bench && bench.gpuMs){            // best signal: real GPU ms/frame on the heavy scenes at the CURRENT tier
+    const g = bench.gpuMs;
+    if (g <= 6)  return { tier:'ULTRA', reason:'GPU '+g+'ms/frame on heavy scenes — headroom for ULTRA' };
+    if (g <= 10) return { tier:'HIGH',  reason:'GPU '+g+'ms/frame — HIGH holds 60fps with margin' };
+    if (g <= 16) return { tier:'MED',   reason:'GPU '+g+'ms/frame — MED to keep 60fps' };
+    return { tier:'LOW', reason:'GPU '+g+'ms/frame — LOW to recover framerate' };
+  }
+  if (bench && bench.fps){              // fallback: realized fps (no GPU timestamps on this device/Chrome)
+    const f = bench.fps;
+    if (f >= 110) return { tier:'ULTRA', reason:f+'fps — headroom' };
+    if (f >= 75)  return { tier:'HIGH',  reason:f+'fps' };
+    if (f >= 45)  return { tier:'MED',   reason:f+'fps' };
+    return { tier:'LOW', reason:f+'fps — needs relief' };
+  }
+  const desc=((gi.description||'')+' '+(gi.architecture||'')+' '+(gi.vendor||'')).toLowerCase();   // coarse string heuristic when no bench
+  if (/(intel|uhd|iris|llvmpipe|swiftshader|microsoft basic|adreno|mali|powervr)/.test(desc)) return { tier:'LOW', reason:'integrated/software GPU string' };
+  if (/(rtx|radeon rx|apple m[1-9]|arc a[0-9]|geforce)/.test(desc) && dpr<=2) return { tier:'HIGH', reason:'discrete/strong GPU string' };
+  return { tier:'MED', reason:'unknown GPU — safe middle' };
+}
+async function runDiag(opts){
+  opts=opts||{};
+  const gi = await _gpuInfo();
+  const dpr = window.devicePixelRatio||1;
+  const screenPx = Math.round(window.screen.width*dpr)+'×'+Math.round(window.screen.height*dpr);
+  const mobile = _isMobileDevice();
+  const noWebGPU = !(navigator.gpu);
+  let bench=null;
+  if (!opts.skipBench && typeof runPerfSweep==='function' && demoScenarios.length){
+    try {
+      const run = await runPerfSweep({ label:'__diag', sampleMs: opts.sampleMs||2500, settleMs: opts.settleMs||1200, forceSnap:true, ignoreHidden:true, only:_diagBenchScenarios() });
+      if (run) bench = { cpuMs:run.aggregate.cpuMs_mean, gpuMs:run.aggregate.gpuMs_mean, fps:run.aggregate.fps_mean, worst:run.aggregate.worst_scenario, gpuTimestamps:run.env.hasGpuTimestamps };
+    } catch(e){ console.warn('[diag] bench failed', e); }
+  }
+  const rec = _recommendTier({ gi, dpr, mobile, noWebGPU, bench });
+  const report = { tier_current:QTIER, tier_recommended:rec.tier, reason:rec.reason,
+    device:{ gpu:gi, dpr, screenPx, mobile, webgpu:!noWebGPU, ua:navigator.userAgent }, bench };
+  console.log('%c[diag] recommended tier: '+rec.tier+'  (current: '+QTIER+') — '+rec.reason, 'font-weight:bold;color:#7fd1ff');
+  console.log('[diag]', report);
+  if (!opts.silent) _showTierToast(report);
+  window.__diag = report;
+  return report;
+}
+function applyQuality(tier){
+  tier=String(tier||'').toUpperCase();
+  if(!QUALITY[tier]){ console.warn('[perf] unknown tier', tier); return; }
+  try{ localStorage.setItem(QTIER_KEY, tier); }catch(_){}
+  console.log('[perf] applying tier '+tier+' — reloading to rebuild the scene from Q');
+  setTimeout(()=>location.reload(), 120);
+}
+function _showTierToast(report){
+  let t=document.getElementById('tierToast'); if(t) t.remove();
+  t=document.createElement('div'); t.id='tierToast';
+  t.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:99999;'
+    +'background:rgba(14,18,24,0.95);color:#e8eef4;font:13px/1.45 system-ui,sans-serif;'
+    +'padding:12px 14px;border:1px solid #2a3947;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.55);max-width:min(92vw,460px)';
+  const same = report.tier_recommended===report.tier_current;
+  const benchTxt = report.bench&&report.bench.gpuMs ? (' <span style="opacity:.7">('+report.bench.gpuMs+'ms GPU/frame on heavy scenes)</span>')
+                 : report.bench&&report.bench.fps ? (' <span style="opacity:.7">('+report.bench.fps+'fps on heavy scenes)</span>') : '';
+  t.innerHTML =
+    '<div style="font-weight:600;margin-bottom:4px">Performance check</div>'
+    +'<div style="opacity:.88">Current tier <b>'+report.tier_current+'</b>. '
+    +(same?'This looks right for your device.':('Recommended: <b style="color:#7fd1ff">'+report.tier_recommended+'</b>.'))
+    +benchTxt+'</div>'
+    +'<div style="opacity:.55;margin-top:3px;font-size:11px">'+report.reason+'</div>'
+    +'<div style="margin-top:9px;display:flex;gap:8px;flex-wrap:wrap">'
+    +(same?'':'<button id="tierApply" style="cursor:pointer;background:#2563a8;color:#fff;border:0;border-radius:7px;padding:6px 12px;font:inherit">Apply '+report.tier_recommended+' &amp; reload</button>')
+    +'<button id="tierPick" style="cursor:pointer;background:#243240;color:#cfe;border:1px solid #35506b;border-radius:7px;padding:6px 10px;font:inherit">Choose…</button>'
+    +'<button id="tierClose" style="cursor:pointer;background:transparent;color:#9fbecb;border:0;padding:6px 8px;font:inherit">Dismiss</button>'
+    +'</div>';
+  document.body.appendChild(t);
+  const ap=t.querySelector('#tierApply'); if(ap) ap.onclick=()=>applyQuality(report.tier_recommended);
+  t.querySelector('#tierClose').onclick=()=>t.remove();
+  t.querySelector('#tierPick').onclick=()=>{ const c=prompt('Set quality tier: ULTRA / HIGH / MED / LOW / MOBILE', report.tier_recommended); if(c&&QUALITY[c.toUpperCase()]) applyQuality(c); };
+}
+
+// ---- visual A/B: screenshot every scenario at the current tier, composite across tiers ----
+const SHOTS_KEY='islandHopper.shots.v1';
+function _loadShots(){ try{ return JSON.parse(localStorage.getItem(SHOTS_KEY))||{}; }catch(_){ return {}; } }
+function _saveShots(o){ try{ localStorage.setItem(SHOTS_KEY, JSON.stringify(o)); }catch(e){ console.warn('[shots] save failed (localStorage quota — try fewer/smaller shots)', e); } }
+async function _grabCanvas(maxW){
+  maxW=maxW||440;
+  const src=renderer.domElement;
+  await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));   // let a fresh frame present before we copy it
+  const w=src.width||src.clientWidth, h=src.height||src.clientHeight, sc=Math.min(1, maxW/w);
+  const cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(w*sc)); cv.height=Math.max(1,Math.round(h*sc));
+  try{ cv.getContext('2d').drawImage(src, 0,0, cv.width, cv.height); return cv.toDataURL('image/jpeg', 0.6); }
+  catch(e){ console.warn('[shots] canvas capture failed', e); return null; }
+}
+async function perfShots(opts){
+  opts=opts||{};
+  if(!demoScenarios.length){ console.warn('[shots] no scenarios'); return; }
+  const wasDemo=demoMode; if(!demoMode){ enterDemoMode(); await _perfSleep(700); }
+  const list=(opts.only&&opts.only.length)?demoScenarios.filter(s=>opts.only.includes(s.name)):demoScenarios;
+  const out=[];
+  for(let i=0;i<list.length;i++){
+    try{ _demoIdx=demoScenarios.indexOf(list[i]); await _applyScenarioCore(list[i]); if(typeof _updateDemoBar==='function') _updateDemoBar(); }catch(e){ console.warn('[shots] apply', e); }
+    await _perfWaitSettle(opts.settleMs||1400);
+    const img=await _grabCanvas(opts.maxW||440);
+    out.push({ name:list[i].name, img });
+    console.log('[shots] '+(i+1)+'/'+list.length+' '+list[i].name+(img?'':' — blank (canvas capture unsupported here)'));
+  }
+  if(!wasDemo){ try{ exitDemoMode(); }catch(_){} }
+  const all=_loadShots(); all[QTIER]={ tier:QTIER, at:new Date().toISOString(), preset:QUALITY[QTIER], ua:navigator.userAgent, shots:out };
+  _saveShots(all);
+  console.log('[shots] captured '+out.length+' for tier '+QTIER+'. Apply another tier (reload) + rerun, then perfContactSheet().');
+  return all[QTIER];
+}
+function perfContactSheet(){
+  const shots=_loadShots(); const tiers=Object.keys(shots);
+  if(!tiers.length){ console.warn('[shots] none captured — run perfShots() on at least one tier first'); return; }
+  const order=['ULTRA','HIGH','MED','LOW','MOBILE']; tiers.sort((a,b)=>order.indexOf(a)-order.indexOf(b));
+  const scNames=[]; tiers.forEach(t=>(shots[t].shots||[]).forEach(s=>{ if(!scNames.includes(s.name)) scNames.push(s.name); }));
+  let html='<!doctype html><meta charset=utf8><title>Island Hopper — tier contact sheet</title>'
+    +'<style>body{margin:0;background:#0c0f13;color:#dfe7ee;font:13px system-ui,sans-serif}'
+    +'h1{font-size:15px;padding:12px 16px;margin:0;border-bottom:1px solid #222}'
+    +'table{border-collapse:collapse;width:100%}td,th{border:1px solid #1c2531;padding:6px;vertical-align:top;text-align:center}'
+    +'th{position:sticky;top:0;background:#11161c;z-index:2}img{width:340px;max-width:34vw;display:block;border-radius:4px}'
+    +'.scn{font-weight:600;text-align:left;background:#0f141a;white-space:nowrap}.sub{font-weight:400;opacity:.55;font-size:11px}</style>'
+    +'<h1>Tier contact sheet — same scene across tiers · eyeball quality against the lever values</h1><table><tr><th>Scenario</th>';
+  tiers.forEach(t=>{ const p=QUALITY[t]; html+='<th>'+t+'<br><span class=sub>'+(p?('px'+p.pixelCap+' · shadow'+p.shadowSun+' · godray'+p.godrayTaps+(p.msaa?' · MSAA':'')+(p.foamClaws?' · claws':'')):'')+'</span></th>'; });
+  html+='</tr>';
+  scNames.forEach(n=>{ html+='<tr><td class=scn>'+n+'</td>';
+    tiers.forEach(t=>{ const s=(shots[t].shots||[]).find(x=>x.name===n); html+='<td>'+(s&&s.img?('<img src="'+s.img+'">'):'<span style="opacity:.35">—</span>')+'</td>'; });
+    html+='</tr>'; });
+  html+='</table>';
+  const w=window.open('','_blank'); if(w){ w.document.write(html); w.document.close(); }
+  else { const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([html],{type:'text/html'})); a.download='tier-contact-sheet.html'; a.click(); }
+  console.log('[shots] contact sheet opened ('+tiers.length+' tier(s): '+tiers.join(', ')+')');
+}
+try{ window.runDiag=runDiag; window.applyQuality=applyQuality; window.perfShots=perfShots; window.perfContactSheet=perfContactSheet; window.QUALITY=QUALITY;
+  Object.defineProperty(window,'QTIER',{ configurable:true, get:()=>QTIER });
+  if(window.dev) Object.assign(window.dev, { diag:runDiag, applyQuality, perfShots, contactSheet:perfContactSheet, tier:()=>QTIER });
+}catch(_){}
+if (new URLSearchParams(location.search).has('diag')) setTimeout(()=>{ try{ runDiag({}); }catch(e){ console.warn('diag autorun', e); } }, 2600);
 
 // --- small UI factory ---
 function el(tag, cls, parent){ const e=document.createElement(tag); if(cls)e.className=cls; if(parent)parent.appendChild(e); return e; }

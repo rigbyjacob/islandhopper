@@ -68,27 +68,25 @@ DONE Let's add sea life, that have a rigged animation system to simulate realist
 
 DONE-ish Add sea creatures, that have a rigged animation system to simulate realistic swimming patterns. These creatures can locally applicable fish, dolphins, and whales, which will add life to the underwater environment, but ideally we add in a few fun entities like a Kraken or other sea monsters. The sea creatures can be programmed to interact with the ships and submarines, creating a dynamic ecosystem.
 
-Add in fleets of ships, from pirate times with warring European factions to create a dynamic and immersive maritime environment. These fleets can be programmed to follow realistic shipping routes, engage in naval battles, or simply sail around the islands, adding life to the scene.
-
-The next thing I need is a good way to demo this, give people the file but not expose all of the complexity of the UI to them. I'm thinking a mode with buttons that switch between scenarios, built up from a combination of UI settings, region choices, paths etc. I'd like to build these configurations up, save them as scenarios and then have a mode where users can click through them.
-
-Let's explore optimization through travelling salesman, plot the fastest route that visits each island and returns to the starting point. Wall clock time, not only distinance on open water. Have the optimization problem also tune the speed, PID and Kalman hyperparameters. If necessary compute this task offline with appropriate libraries, hook into the justfile if it makes sense and use the uv env we have already.
-
-Can the Ship global wedge path be turned on and off independently of the debug path view.
-
-The constellations seem to be really close to me, can they render further out in the distance so feels less claustrophobic.
-
-I also notice those white lines are back, especially when switching between regions. I still think related to the path, perhaps leftovers from the other region?
+DONE The next thing I need is a good way to demo this, give people the file but not expose all of the complexity of the UI to them. I'm thinking a mode with buttons that switch between scenarios, built up from a combination of UI settings, region choices, paths etc. I'd like to build these configurations up, save them as scenarios and then have a mode where users can click through them.
 
 
-When choosing and island, the globe immediately snaps to it before diving (to ensure orientation is correct when reverse diving), it should SLERP to the island.
+DONE Can the Ship global wedge path be turned on and off independently of the debug path view.
 
-Also hovering over a region should set it as the new target, this includes clicking. Right now the target island can be almost off screen wouldn't even realize it's still the target.
+DONE The constellations seem to be really close to me, can they render further out in the distance so feels less claustrophobic.
+
+DONE I also notice those white lines are back, especially when switching between regions. I still think related to the path, perhaps leftovers from the other region?
 
 
-I add four m4a intro music tracks in the music/ folder that I want to embed in the app (so it remains one file) and have one of them play randomly on once the ship follow camera has stabilized, they should fade out with a few seconds before the end. There should be a setting to mute the music, defaults to on, but remembers the selection for next time (and respects the scenario setting).
+DONE When choosing and island, the globe immediately snaps to it before diving (to ensure orientation is correct when reverse diving), it should SLERP to the island.
+
+DONE Also hovering over a region should set it as the new target, this includes clicking. Right now the target island can be almost off screen wouldn't even realize it's still the target.
 
 
+DONE I add four m4a intro music tracks in the music/ folder that I want to embed in the app (so it remains one file) and have one of them play randomly on once the ship follow camera has stabilized, they should fade out with a few seconds before the end. There should be a setting to mute the music, defaults to on, but remembers the selection for next time (and respects the scenario setting).
+
+
+DONE """
 For the UI panel update, let's reorganize the sections to improve usability and clarity.
 
 The preferred order is:
@@ -108,32 +106,96 @@ Speed PID
 Navigation & Estimates
 
 Every panel should default to close, but remember that choice between refreshes.
+"""
 
-Instead of the pirate skull and crossbones when closing, let's use a ship steering wheel badge.
+DONE Instead of the pirate skull and crossbones when closing, let's use a ship steering wheel badge.
 
-On a mobile phone or tablet can we use the accelerometer to act like WASD steering (but with a button to toggle on and off, starting with off).
-
-Let's temporarily hide these regions until we can do more polishing:
+DONE """Let's temporarily hide these regions until we can do more polishing:
 Exe & South Devon
 Small isles & Sky
 Faroe Islands
 Montauk -> can we make this all of Long Island
+"""
 
 DONE """The boat is no longer the main target all the time, that's from the very beginning of this project. Now that you can follow the boat, the plane, sub or UFO or even fly around, is there a need to revist this shadow frustum design?
 """
-Frustum — it's a tight ±340u box around the boat (kept tight for sharp palm-frond shadows). Fine for the boat, but a tall island's long shadow can run past its edge.
+    Frustum — it's a tight ±340u box around the boat (kept tight for sharp palm-frond shadows). Fine for the boat, but a tall island's long shadow can run past its edge.
 """
 
-This seems fine, later we could think about refraction and modelling some light transpore through water? """The fix is to gate the shadow to above the waterline in the terrain shader so the seabed stays clean."""
+    This seems fine, later we could think about refraction and modelling some light transpore through water? """The fix is to gate the shadow to above the waterline in the terrain shader so the seabed stays clean."""
 
-Let's do this, minor but consistent: """
+    Let's do this, minor but consistent: """
 The fleet (sub/plane/UFO) only cast, not receive — easy to add.
 """
 
-Thig big one, my concern with a shadow-catcher plane is that it will not match the nice contoured ocean?: """Ocean surface — this is the headline you want, and it's the hard one: the sea is drawn with an unlit custom material (MeshBasicNodeMaterial — all the water look is hand-built in the shader, with no lighting model), so receiveShadow does nothing on it. To get island shadows on the water I'd either add manual shadow-map sampling into the water shader, or lay a dedicated shadow-catcher plane at the (curved) sea surface that only darkens where shadowed. The catcher is the cleaner route."""
+    Thig big one, my concern with a shadow-catcher plane is that it will not match the nice contoured ocean?: """Ocean surface — this is the headline you want, and it's the hard one: the sea is drawn with an unlit custom material (MeshBasicNodeMaterial — all the water look is hand-built in the shader, with no lighting model), so receiveShadow does nothing on it. To get island shadows on the water I'd either add manual shadow-map sampling into the water shader, or lay a dedicated shadow-catcher plane at the (curved) sea surface that only darkens where shadowed. The catcher is the cleaner route."""
 """
 
 DONE So the first thing I notice about the sun facing view: dev.look('Kolombangara', -17, 24, 850) is that if i nod the camera up and down (no translation), the mountain becomes dark or lighter, dramatically so. You said this was impossible, but is clearly happening.
 
+NOTE 24d30e6 = shadow fix
 
-24d30e6 = shadow fix
+
+On a mobile phone or tablet can we use the accelerometer to act like WASD steering (but with a button to toggle on and off, starting with off).
+
+Can we also make the demo menu more translucent so that mobile users aren't giving up too much of the screen to the UI.
+
+Let's explore optimization through travelling salesman, plot the fastest route that visits each island and returns to the starting point. Wall clock time, not only distinance on open water. Have the optimization problem also tune the speed, PID and Kalman hyperparameters. If necessary compute this task offline with appropriate libraries, hook into the justfile if it makes sense and use the uv env we have already.
+
+Add in fleets of ships, from pirate times with warring European factions to create a dynamic and immersive maritime environment. These fleets can be programmed to follow realistic shipping routes, engage in naval battles, or simply sail around the islands, adding life to the scene.
+
+
+vignette during the dive (as part of the zoom-in increase the vignetter, then decrease it as the dive happens over the region), might mask some of the transition effects and feels more cinematic.
+
+
+real moon (not just a white disc but real textured moon that obeys the moon phase slider)
+
+improved clouds and sky - streaking cloud patterns, color striations, especially sunset and sunrise
+
+improved weather, locale specific (i.e. snow), including fog
+
+weather and ocean sounds - thunder, waves, birds, rigging, engines, tractor beams, sonar pings, vehicle noise, other, ambient noise
+
+terrain deformation - bombs from plane, tractor beam from UFO, missiles from sub, cannons from ship
+
+more realistic surface textures, roads, buildings, flora, fauna from the region.
+
+"""
+Let's do in a big pass, then we review all of them:
+
+1 — Vignette on dive
+2 — Fog
+3 — Real textured moon
+4 — Basic version of this:  Streaks + sunset striations are a shader extension with real golden-hour payoff"
+5 — Audio, very very basic impl of this idea, a sound when near the UFO and make it sound like a tractor beam "I'd build it with Tone.js synthesis (CDN) to stay single-file and dodge sound-asset licensing/loading: "
+
+Agree to hold off on 6 and 7 - I do plan to turn this into a game at some point so we will be discussion things like event systems, dialogue and story engines, ECS, state management, multiplay networking, perf optimization.
+"""
+
+DONE The moon phase is opposite from what you said, it doesn't follow the  (and the slider should name the major phases)
+
+DONE The wind sound should effect the camera, but have the water lapping against ship sounds be tied to the ship position.
+
+PAUSED Instead of the UFO, play the of fireworks on each island and use that to test the positional audio.
+
+DONE Before you do this, please turn off the thunder sounds temporarily, they are not quite right yet and I want to publish a new demo.  Also is there is setting for the fog, not sure how to see it...
+
+PAUSED Let's add some positional engine hum to the plane and bring back the UFO sound, but sharply attenuated with distance (and the UFO sound should only play when the tractor/scanner beam effect is on). Also let's add some positional rain storm sounds to the clouds, but only when the storm effect is on.
+
+PAUSED Can we do another sound board web page to test out variations of each sound effect and change who it is assigned to and what params it has (especially attenuation distance), can save this as JSON to embed back in the main app.
+
+DONE New idea - when there are many overlapping diorams on the globe, that's a sign to build one big dioramat that contains all the regions in one diorama, with each region being divided into their own sub-diorama by black lines like the ring around the diarama. Clicking on that subset of the diorama acts just like clicking on the region now. The labels can be placed around the sub-diorama.
+
+DONE-ISH? Is there any cheap-ish way to do subsurface light scattering for the water, I feel like it's still too plasticky and reflective but not sure what else to try.
+
+PENDING What would it take to have a theme that switched from Earth to another planet, where there were two suns or the sun was a black hole and the ground was made of metallic crystal and the water was thick gas instead of liquid. Assume same physics rules and we're still piloting the same vehicles etc, this is mostly cosmetic, but significally so and applicable ontop of existing regions as much as possible.
+
+What else can we do to make the star experience more compelling. Being out on the open ocean at night must mean the best stars anywhere, since low light pollutions.
+
+DONE-ISH Can the globe have more of a starfield behind it instead of plain black, maybe a very slight halo effect to make the edges of the globe pop.
+
+DONE Can the water ripple effect used on the singleton dioramas follow the same background scrolling logic as the multi-region dioramas, what i want is to be able to shake the water so to speak by shaking the globe.
+
+DONE Can we have the sun shine on the globe view - light and cast shadows on the displacement maps and the dioramas, especially the new fan pop-up state. if the sun starts at the physically orientation of the current UTC time and date, but doesn't follow the arcball. Also better include the moon to illuminate the dark side of the Earth.
+
+Not sure the liquid in the singleton dioramas is really moving against the moves of the arcball.
