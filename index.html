@@ -500,7 +500,8 @@ if (window.AEGEAN) REGIONS.aegean = Object.assign({}, window.AEGEAN, {
     ['Ios',25.28,36.72],['Apollonia',24.71,36.98],['Katapola',25.86,36.83],
   ],
   // bright clear midday Mediterranean light + a dry meltemi north wind, calmer seas, clearer air
-  defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:115, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
+  // windDirDeg is the math-frame PUSH direction (+x=E, +z=S): 90 = pushes due south = wind FROM the north (meltemi)
+  defaults: { timeOfDay:12.6, atmosphere:0.4, windDirDeg:90, windStrength:8, waveHeight:1.15, stormOn:false, stormIntensity:0.0 },
 });
 // (the old 'aegeanbig' test region is retired — the main Aegean now covers the full Cyclades, so it was a duplicate)
 // ---- Japan · Sagami Bay (Izu volcanic islands — the Great Wave coast) ----
@@ -885,7 +886,9 @@ class PID {
     const iTry = this.i + err * dt;
     let out = this.p + ki * iTry + this.d;
     const sat = out > outMax ? 1 : (out < outMin ? -1 : 0);
-    if (sat === 0 || Math.sign(err) !== sat) this.i = iTry;     // integrate unless it worsens saturation
+    if (ki === 0) this.i = 0;                                   // Ki off → keep the integral empty (otherwise it silently
+                                                                // accumulates and slams the rudder when Ki is re-raised)
+    else if (sat === 0 || Math.sign(err) !== sat) this.i = iTry;     // integrate unless it worsens saturation
     out = clampJS(this.p + ki * this.i + this.d, outMin, outMax);
     this.iTerm = ki * this.i; this.prevMeas = meas; this.out = out;
     return out;
@@ -1665,7 +1668,8 @@ function guidance(s, t) {
     for (let i=0;i<tourGateAt.length;i++){ let d = tourGateAt[i]-pi; if (d < 0) d += tourPath.length; if (d > 1 && d < bestD){ bestD=d; next=i; } }
     wpIdx = next;
     const aim = pursuit(path, nav, P.lookahead);
-    let course = Math.atan2(aim.z-nav.z, aim.x-nav.x) + clampJS(P.xteGain*aim.xteSigned, -0.7, 0.7);
+    // xteSigned > 0 = boat displaced toward the +angle side of the track → correct by rotating the OTHER way (minus)
+    let course = Math.atan2(aim.z-nav.z, aim.x-nav.x) - clampJS(P.xteGain*aim.xteSigned, -0.7, 0.7);
     let desPsi = course;
     if (P.feedForward && kf){ const e=kf.est, spd=Math.max(P.desiredSpeed,6); const wx=Math.cos(course)*spd-e.cx, wz=Math.sin(course)*spd-e.cz; desPsi=Math.atan2(wz,wx); }
     const desSpeed = P.desiredSpeed * clampJS(1 - Math.abs(wrap(course - s.psi))*0.25, 0.7, 1);   // only a mild slow-down on turns
@@ -1694,7 +1698,7 @@ function guidance(s, t) {
   const aim = pursuit(pathPts, nav, P.lookahead);
   // pure-pursuit heading toward the lookahead point, plus a cross-track pull onto the line
   let course = Math.atan2(aim.z - nav.z, aim.x - nav.x);
-  course = course + clampJS(P.xteGain * aim.xteSigned, -0.7, 0.7);
+  course = course - clampJS(P.xteGain * aim.xteSigned, -0.7, 0.7);   // minus: rotate back TOWARD the line (see pursuit)
 
   // disturbance feed-forward: point upstream so water-vel + current = desired course
   let desPsi = course;
@@ -1731,6 +1735,12 @@ function runAssist(s, dt, t, g){
   const nx = s.x + Math.cos(s.psi)*s.u*dt, nz = s.z + Math.sin(s.psi)*s.u*dt;
   if (-terrainHeight(nx,nz) >= P.draft){ s.x = nx; s.z = nz; }   // only ever move into water; if pinned, just keep turning toward deep
   s.grounded = false;
+  // keep the Kalman filter's proprioception honest during the cheat: report the TRUE water-relative surge for
+  // this kinematic motion, otherwise the KF dead-reckons on a stale speed and absorbs the gap into its
+  // current estimate — which the feed-forward then crabs against after handback.
+  { const d = sampleDisturb(s.x, s.z, t), cs = Math.cos(s.psi), sn = Math.sin(s.psi);
+    s.speedWater  = (cs*s.u - d.cur.x)*cs + (sn*s.u - d.cur.z)*sn;
+    s.speedGround = s.u; }
 }
 
 // ============================================================================
@@ -1780,7 +1790,9 @@ init().catch(fatal);
   const h=location.hostname;
   const dev = location.protocol!=='file:' && (h==='localhost'||h==='127.0.0.1'||/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)||/\.ts\.net$/.test(h)||/\.trycloudflare\.com$/.test(h));
   if(!dev) return;
-  setInterval(()=>{ try{
+  let _bFail=0, _bId=null;   // stop hammering /telemetry after ~5s of consecutive failures (static LAN/tailnet host without the devserver)
+  _bId=setInterval(()=>{ try{
+    if (_bFail>14){ clearInterval(_bId); console.log('[telemetry] beacon off (endpoint unavailable)'); return; }
     const view=(typeof flyMode!=='undefined'&&flyMode)?'fly':((typeof cineMode!=='undefined'&&cineMode)?'cine':((typeof fpsMode!=='undefined'&&fpsMode)?'fps':'orbit'));
     fetch('/telemetry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       app:'sim', t:Date.now(), secure:isSecureContext,
@@ -1791,7 +1803,7 @@ init().catch(fatal);
       flyYaw:+((typeof flyState!=='undefined'&&flyState.yaw)||0).toFixed(2),
       flyPitch:+((typeof flyState!=='undefined'&&flyState.pitch)||0).toFixed(2),
       region:(typeof REGION!=='undefined'&&REGION)?REGION.id:null
-    })}).catch(()=>{}); }catch(_){}
+    })}).then(r=>{ _bFail = r.ok ? 0 : _bFail+1; }).catch(()=>{ _bFail++; }); }catch(_){ _bFail++; }
   }, 350);
 })();
 
@@ -3109,6 +3121,12 @@ function updateEnvironment(dt) {
   { const phi2 = phi*0.9 + 1.9;
     uSun2Dir.value.set( Math.sin(phi2)*0.5, Math.abs(Math.cos(phi2))*0.6 + 0.25, Math.cos(phi2) ).normalize();
     if (sun2Light){ sun2Light.intensity = uAlien.value * 1.9;
+      // Skip the companion sun's 2048² shadow pass on Earth scenes (intensity 0 → invisible anyway).
+      // castShadow stays TRUE permanently (the WebGPU null-depthTexture workaround); per-light
+      // shadow.autoUpdate/needsUpdate just gates the map re-render, keeping the allocation alive.
+      if (sun2Light.shadow){ const _s2 = uAlien.value > 0.02;
+        if (_s2 && sun2Light.shadow.autoUpdate === false) sun2Light.shadow.needsUpdate = true;   // fresh map the moment alien fades in
+        sun2Light.shadow.autoUpdate = _s2; }
       sun2Light.position.set(boat3.x + uSun2Dir.value.x*600, uSun2Dir.value.y*600+40, boat3.z + uSun2Dir.value.z*600);
       sun2Light.target.position.set(boat3.x, 0, boat3.z); sun2Light.target.updateMatrixWorld(); } }
   if (islandLightsGroup) {
@@ -3707,10 +3725,12 @@ const EXTRA_SFX = false;   // ← plane engine / UFO beam / storm rain — OFF u
 let _audioInit=false, audioListener=null, _oceanGain=null, _oceanLP=null, _regionBus=null, _regionBusTgt=1,
     _fireVoices=[], _fireIdx=0, _thunderVoices=[], _thunderIdx=0,
     _planeSrc=null, _ufoSrc=null, _rainSrc=null;
+let _audioBusy=false;
 async function _initAudio(){
-  if (_audioInit) return; _audioInit=true;
+  if (_audioInit || _audioBusy) return; _audioBusy=true;   // one-shot ONLY on success — a failed CDN load must stay retryable on the next gesture
   let T; try{ T = await import('https://cdn.jsdelivr.net/npm/tone@14.8.49/+esm'); }
-  catch(e){ console.warn('[audio] Tone load failed', e); return; }
+  catch(e){ console.warn('[audio] Tone load failed (will retry on next gesture)', e); _audioBusy=false; return; }
+  _audioInit=true; _audioBusy=false;
   const ctx = THREE.AudioContext.getContext();                            // ONE shared Web Audio context for three + Tone
   try{ T.setContext(ctx); }catch(e){ console.warn('[audio] setContext', e); }
   try{ await T.start(); }catch(_){}
@@ -4288,7 +4308,15 @@ function triggerSounding(){ buildDipStick(boat3.x, boat3.z); _soundingShown=true
 //  Data: window.STARMAP (build/build_starmap.js) — falls back to procedural stars.
 // ============================================================================
 let starMap = null;
-const OBS_LAT = 17.7 * Math.PI/180, OBS_LON_DEG = -62.0, STAR_R = 9000;   // big dome, centred on the CAMERA → reads as the far sky, not a close shell
+let OBS_LAT = 17.7 * Math.PI/180, OBS_LON_DEG = -62.0; const STAR_R = 9000;   // big dome, centred on the CAMERA → reads as the far sky, not a close shell
+// The observer follows the ACTIVE REGION (the Faroes must not get a 17.7°N Caribbean sky). Synced every
+// star-map update so live region swaps re-aim the celestial pole with no extra plumbing.
+function _syncStarObserver(){
+  if (typeof REGION !== 'undefined' && REGION && isFinite(REGION.lat0)){
+    OBS_LAT = REGION.lat0 * Math.PI/180;
+    OBS_LON_DEG = isFinite(REGION.lon0) ? REGION.lon0 : -62.0;
+  }
+}
 function _raDecVec(raDeg, decDeg, out){ const ra=raDeg*Math.PI/180, dec=decDeg*Math.PI/180, cd=Math.cos(dec);
   return out.set(cd*Math.cos(ra), cd*Math.sin(ra), Math.sin(dec)); }
 
@@ -4469,6 +4497,7 @@ function _localSiderealRad(){
 }
 function updateStarMap(){
   if (!starMap) return;
+  _syncStarObserver();   // sky pole/latitude tracks the current region
   const vis = uNight.value > 0.012; starMap.grp.visible = vis; if (!vis) return;
   if (starMap.con) starMap.con.visible = (P.showConstellations !== false);   // stars stay; constellation lines/labels toggle
   const cam=(activeCam||camera);
@@ -5312,7 +5341,8 @@ function buildVolcano(){
     volcFireVol.scale.set(220,180,1); volcFireVol.frustumCulled=false; volcFireVol.renderOrder=24;   // wide enough to hold the wind-sheared crown
     scene.add(volcFireVol); }
 }
-function eruptVolcano(){ if (volc.state==='idle' || volc.state==='subside'){ volc.state='rumble'; volc.t=0; volc.dur=1.6; volc.flash=0; } return 'volcano: '+volc.state; }
+function eruptVolcano(){ if (!VOLC_ENABLED) return 'volcano disabled';   // updateVolcano() early-returns while disabled, so entering "rumble" would latch the state machine forever
+  if (volc.state==='idle' || volc.state==='subside'){ volc.state='rumble'; volc.t=0; volc.dur=1.6; volc.flash=0; } return 'volcano: '+volc.state; }
 function _setSpin(s){ const a=Math.random()*6.2832, c=Math.random()*2-1, sr=Math.sqrt(1-c*c); s.ax=sr*Math.cos(a); s.ay=c; s.az=sr*Math.sin(a); s.spin=(Math.random()*2-1)*7; }
 function _spawnFount(vx,vz){ const N=FOUNT_MAX;
   for(let k=0;k<200;k++){ const i=fountCur; fountCur=(fountCur+1)%N; const s=fount[i]; if(s.life>0) continue;
@@ -5906,7 +5936,7 @@ window.dev = {
   // hierarchical-A* benchmark: time a long boat→far-island plan with the coarse heuristic on vs off
   navBench(){ if(!BLOCKED) return 'no grid'; const far=ISLANDS.slice().sort((a,b)=>Math.hypot(b.x-boat3.x,b.z-boat3.z)-Math.hypot(a.x-boat3.x,a.z-boat3.z))[0]||{x:GRID.maxX,z:GRID.maxZ};
     const run=(on)=>{ P.hierNav=on; _coarseKey=-1; const t0=performance.now(); let pts=0; for(let i=0;i<25;i++){ const r=planRaw(boat3.x,boat3.z,far.x,far.z); pts=r.pts.length; } return {ms:+( (performance.now()-t0)/25 ).toFixed(2), pts}; };
-    const flat=run(false), hier=run(true); P.hierNav=true;
+    const prevHier=P.hierNav; const flat=run(false), hier=run(true); P.hierNav=prevHier; _coarseKey=-1;   // benchmark must not change nav behavior as a side effect
     return { to:far.name, flat, hier, speedup:+(flat.ms/Math.max(hier.ms,0.001)).toFixed(2)+'x' }; },
   lookAt(px,py,pz, tx,ty,tz){ if(!flyMode) setFly(true);
     flyState.pos.set(px,py,pz);
@@ -6139,6 +6169,7 @@ function computeViewport(){
   return { w, h, l:Math.round((WW-w)/2), t:Math.round((HH-h)/2) };
 }
 function onResize() {
+  if (renderer) renderer.setPixelRatio(Math.min(window.devicePixelRatio, Q.pixelCap));   // window moved to a different-DPR monitor
   const vp = computeViewport(), aspect = vp.w/vp.h, view = 380;
   camera.left=-view*aspect; camera.right=view*aspect; camera.top=view; camera.bottom=-view;
   camera.updateProjectionMatrix();
@@ -6217,9 +6248,11 @@ function initInput() {
     if (pt && Math.hypot(pt.x-VOLC.x, pt.z-VOLC.z) < VOLC.rad*0.9) eruptVolcano();
   });
   // crow's-nest view: 'V' toggles, drag to look around. Fly view: 'F' toggles, WASD/arrows to move, drag to look.
-  const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA');
+  const typing = (e)=> e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA'
+    || e.target.tagName==='SELECT' || e.target.isContentEditable);   // panel <select>s must not steer the boat
   window.addEventListener('keydown', (e) => {
     if (typing(e)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;   // don't hijack browser shortcuts (Cmd/Ctrl+V etc.)
     if (demoMode){ const _mk=e.key.toLowerCase();
       if(e.key==='Escape'){ exitDemoMode(); return; }
       if(e.key===' '){ if(typeof triggerSounding==='function') triggerSounding(); e.preventDefault(); return; }   // Space = depth sounding
@@ -6237,9 +6270,13 @@ function initInput() {
   });
   window.addEventListener('keyup', (e) => { if (flyMode) flyState.keys[e.key.toLowerCase()] = false; manualKeys[e.key.toLowerCase()] = false; });
 
-  // start audio on the first user gesture (browsers require it); fires once
-  const _audioKick=()=>{ _initAudio(); window.removeEventListener('pointerdown',_audioKick); window.removeEventListener('keydown',_audioKick); window.removeEventListener('touchstart',_audioKick); };
+  // start audio on the first user gesture (browsers require it); listeners stay armed until init SUCCEEDS
+  // (a failed Tone CDN load or a suspended iOS context used to leave all SFX permanently dead)
+  const _audioKick=()=>{ _initAudio().then(()=>{ if (_audioInit){
+    window.removeEventListener('pointerdown',_audioKick); window.removeEventListener('keydown',_audioKick); window.removeEventListener('touchstart',_audioKick); } }); };
   window.addEventListener('pointerdown',_audioKick); window.addEventListener('keydown',_audioKick); window.addEventListener('touchstart',_audioKick);
+  // permanent, cheap: iOS/Safari can re-suspend the shared context (lock screen, tab switch) — resume on any gesture
+  window.addEventListener('pointerdown', ()=>{ try{ const c=THREE.AudioContext.getContext(); if (c && c.state==='suspended') c.resume(); }catch(_){} });
 
   // ---- MOBILE TILT STEERING: tilt the device to drive like WASD (toggle button, default OFF; iOS asks permission) ----
   (function setupTiltSteer(){
@@ -6322,7 +6359,8 @@ function initInput() {
   }
 
   let dragging=false, lx=0, ly=0;
-  renderer.domElement.addEventListener('pointerdown', (e)=>{ if(fpsMode||flyMode){ dragging=true; lx=e.clientX; ly=e.clientY; } });
+  renderer.domElement.addEventListener('pointerdown', (e)=>{ if(fpsMode||flyMode){ dragging=true; lx=e.clientX; ly=e.clientY;
+    try{ renderer.domElement.setPointerCapture(e.pointerId); }catch(_){} } });   // keep the drag if the pointer leaves the window
   window.addEventListener('pointerup', ()=>{ dragging=false; });
   window.addEventListener('pointermove', (e)=>{ if(dragging && (fpsMode||flyMode)){
     const dx=(e.clientX-lx)*0.004, dy=(e.clientY-ly)*0.004;
@@ -6585,7 +6623,10 @@ async function enableGodrays(){
 
 // persist all panel settings between refreshes
 const SETTINGS_KEY = 'pidHelmsman.v1';
-function saveSettings(){ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }
+function saveSettings(){   // debounced — sliders call this on every input tick; one JSON.stringify(P) per drag, not per pixel
+  clearTimeout(saveSettings._t);
+  saveSettings._t = setTimeout(()=>{ try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(P)); } catch(_){ } }, 250);
+}
 function loadSettings(){ try { const s = localStorage.getItem(SETTINGS_KEY);
   if (s){ Object.assign(P, JSON.parse(s)); P.paused = false; P.cine = true; P.bloom = false; } } catch(_){ } }   // Director camera is the default view; don't auto-restore pause / bloom
 
@@ -6839,11 +6880,11 @@ function buildPanel() {
   s = section(panel, 'Weather & sea');
   addToggle(s, 'Ocean current', P, 'curOn');
   addSlider(s, 'Current strength', P, 'curStrength', 0, 16, 0.5, v=>v.toFixed(1));
-  addSlider(s, 'Current bearing',  P, 'curDirDeg', 0, 359, 1, v=>v.toFixed(0)+'°');
+  addSlider(s, 'Current set (flows toward)',  P, 'curDirDeg', 0, 359, 1, v=>(((v+90)%360).toFixed(0))+'°');   // stored as math angle; shown as compass bearing (N=0) to match the rose
   addToggle(s, 'Tides (current oscillates)', P, 'tideOn');
   addToggle(s, 'Wind', P, 'windOn');
   addSlider(s, 'Wind strength', P, 'windStrength', 0, 16, 0.5, v=>v.toFixed(1));
-  addSlider(s, 'Wind bearing',  P, 'windDirDeg', 0, 359, 1, v=>v.toFixed(0)+'°');
+  addSlider(s, 'Wind (blows toward)',  P, 'windDirDeg', 0, 359, 1, v=>(((v+90)%360).toFixed(0))+'°');   // stored as math angle; shown as compass bearing (N=0) to match the rose
   addToggle(s, 'Storm', P, 'stormOn');
   addSlider(s, 'Storm intensity', P, 'stormIntensity', 0, 1, 0.05, v=>v.toFixed(2));
   addSlider(s, 'Fog', P, 'fog', 0, 1, 0.05, v=>v.toFixed(2));
@@ -6895,6 +6936,7 @@ function buildPanel() {
   resetAll.title = 'Restore every setting to its default and reload';
   resetAll.onclick=()=>{
     Object.assign(P, JSON.parse(JSON.stringify(DEFAULTS)));
+    clearTimeout(saveSettings._t);   // a pending debounced save must not resurrect the cleared settings before the reload lands
     try { localStorage.removeItem(SETTINGS_KEY); } catch(_){}
     location.reload();
   };
@@ -6975,6 +7017,7 @@ const REGION_META = {
   japan:     { tag:'Japan · Sagami',    blurb:'The Great Wave & Mt. Fuji' },
   thailand:  { tag:'Thailand · Andaman', blurb:'Limestone karst & warm seas' },
   sweden:    { tag:'Sweden · Stockholm', blurb:'Granite skerries & pine · Djurö→Stavsnäs' },
+  hawaii:    { tag:'Hawaiʻi · The Islands', blurb:'Volcanic shields & trade winds' },
   halong:    { tag:'Hạ Long Bay',        blurb:'Limestone towers & jade water' },
   elnido:    { tag:'El Nido & Coron',     blurb:'Palawan karst & turquoise lagoons' },
   solomon:   { tag:'Gizo & Kolombangara', blurb:'Volcanic rainforest & reef lagoons' },
@@ -7740,8 +7783,18 @@ function teardownRegionWorld(){
   // leak is the acceptable trade for a rock-solid live swap.
   for (const o of _regionObjs){ scene.remove(o); }
   _regionObjs.length = 0;
+  // SAFE subset we CAN dispose (uniquely region-owned, never sampled by a surviving material — so the
+  // weak-map-key crash above doesn't apply). This reclaims the bulk of the per-swap VRAM:
+  //  · label sprites: each owns its own CanvasTexture + SpriteMaterial (makeLabelSprite)
+  //  · clipmap ring geometries (7 × 321² verts) — their meshes/materials died with the detach
+  //  · _heightTex (RGBA16F, up to 2048²) — only the (also dead) clipmap materials sample it;
+  //    bakeHeightTex() and setTerrainLOD() already dispose it live, proving it's safe.
+  const _dl = (L)=>{ if (L && L.sp && L.sp.material){ if (L.sp.material.map) L.sp.material.map.dispose(); L.sp.material.dispose(); } };
+  labelEls.forEach(_dl); cityLabelEls.forEach(_dl);
+  for (const C of clipLevels){ if (C && C.mesh && C.mesh.geometry) C.mesh.geometry.dispose(); }
+  if (_heightTex) _heightTex.dispose();
   FLEET.length = 0; labelEls.length = 0; cityLabelEls.length = 0; _curveInsts.length = 0; clipLevels.length = 0;
-  if (typeof islandLightsGroup!=='undefined' && islandLightsGroup) islandLightsGroup.clear();   // detach only, no dispose (see above)
+  if (typeof islandLightsGroup!=='undefined' && islandLightsGroup) islandLightsGroup.clear();   // detach only, no dispose (shared glow texture)
   _heightTex = null; terrainMesh = null;
   // clear the persistent nav visuals so the OLD region's wedge ribbons / target glow never linger over the new map
   if (pathRibbon){ pathRibbon.visible=false; pathRibbon.geometry.setDrawRange(0,0); }
@@ -7776,7 +7829,7 @@ window.swapRegion = swapRegion;   // console helper: stream a region in live, e.
 // DEMO MODE — curated "scenarios" (region + settings + route + view) you build in-app,
 // save, and let viewers click through with a clean stepper (the full Helm panel hidden).
 // ============================================================================
-const BAKED_SCENARIOS = [{"name":"Caribbean","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":15.1,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Sunset","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":18.25,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Underwater","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":14,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Impressionist","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":18.05,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"gauguin","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Stormy","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":true,"stormIntensity":0.2,"volcanoAuto":true,"waveHeight":2.2,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":18.05,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"gauguin","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Greece","region":"aegean","present":"dive","view":"cine","cineView":"follow","fleet":"off","route":["Kea","Andros","Tinos","Naxos","Amorgos","Ios","Sikinos","Paros","Syros"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":8,"windDirDeg":115,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.15,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":5.5,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.4,"moonPhase":0.2,"style":"gauguin","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Starry Night","region":"aegean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Kea","Andros","Tinos","Naxos","Amorgos","Ios","Sikinos","Paros","Syros"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":8,"windDirDeg":115,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.15,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":22,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.4,"moonPhase":0.2,"style":"vangogh","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Hawaii","region":"hawaii","present":"dive","view":"cine","cineView":"follow","fleet":"off","route":["Niʻihau","Kauaʻi","Oʻahu","Molokaʻi","Maui","Hawaiʻi","Kahoʻolawe","Lānaʻi"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":true,"timeOfDay":8.927199999988101,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":true,"showBirds":true,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"photoreal","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Plane","region":"thailand","present":"dive","view":"cine","cineView":"follow","fleet":"plane","route":["Phuket","James Bond I.","Ko Yao Noi","Ko Yao Yai","Ko Phi Phi","Ko Lanta","Ko Racha"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":25.11362467106871,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":4,"windDirDeg":225,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":0.9,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":17.95,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":true,"showBirds":true,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.6,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}}];   // baked-in demo scenarios (Export output). localStorage overrides if present.
+const BAKED_SCENARIOS = [{"name":"Caribbean","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":15.1,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Sunset","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":18.25,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Underwater","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":14,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Impressionist","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":18.05,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"gauguin","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Stormy","region":"caribbean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Guadeloupe (N)","Antigua","Barbuda","Nevis","St. Kitts","St. Barths","St. Martin","Anguilla","Tortola","St. Thomas","Culebra"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":true,"stormIntensity":0.2,"volcanoAuto":true,"waveHeight":2.2,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":18.05,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"gauguin","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Greece","region":"aegean","present":"dive","view":"cine","cineView":"follow","fleet":"off","route":["Kea","Andros","Tinos","Naxos","Amorgos","Ios","Sikinos","Paros","Syros"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":8,"windDirDeg":90,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.15,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":5.5,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.4,"moonPhase":0.2,"style":"gauguin","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":true,"contours":true,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Starry Night","region":"aegean","present":"snap","view":"cine","cineView":"follow","fleet":"off","route":["Kea","Andros","Tinos","Naxos","Amorgos","Ios","Sikinos","Paros","Syros"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":8,"windDirDeg":90,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.15,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":22,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":false,"showBirds":false,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.4,"moonPhase":0.2,"style":"vangogh","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Hawaii","region":"hawaii","present":"dive","view":"cine","cineView":"follow","fleet":"off","route":["Niʻihau","Kauaʻi","Oʻahu","Molokaʻi","Maui","Hawaiʻi","Kahoʻolawe","Lānaʻi"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":30,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":12,"windDirDeg":60,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":1.8,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":true,"timeOfDay":8.927199999988101,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":true,"showBirds":true,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.5,"moonPhase":0.2,"style":"photoreal","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}},{"name":"Plane","region":"thailand","present":"dive","view":"cine","cineView":"follow","fleet":"plane","route":["Phuket","James Bond I.","Ko Yao Noi","Ko Yao Yai","Ko Phi Phi","Ko Lanta","Ko Racha"],"settings":{"hKp":1.8,"hKi":0.05,"hKd":1.1,"sKp":0.1,"sKi":0.03,"sKd":0,"desiredSpeed":25.11362467106871,"desiredHeadingDeg":90,"mode":"tour","curOn":true,"curStrength":6,"curDirDeg":205,"windOn":true,"windStrength":4,"windDirDeg":225,"tideOn":true,"stormOn":false,"stormIntensity":0,"volcanoAuto":true,"waveHeight":0.9,"paused":false,"usePlanner":true,"navOnEstimate":true,"feedForward":true,"gpsNoise":5,"showPath":true,"pathFull":true,"showGps":false,"lookahead":26,"xteGain":0.03,"draft":2.6,"autoDay":false,"timeOfDay":17.95,"dayLength":30,"showTitle":false,"showHints":false,"showTelemetry":false,"showCompass":false,"showLabels":true,"showConstellations":false,"showFish":true,"showBirds":true,"transFadeOut":0.4,"transHold":0.2,"transFadeIn":0.4,"transEase":1,"shadowDepth":0.6,"bloom":false,"atmosphere":0.6,"moonPhase":0.2,"style":"tropical","cine":true,"tourPace":true,"tourMinutes":1,"cineStyle":0.25,"cineView":"follow","bathy":false,"contours":false,"curveWorld":true,"curveRadius":5200,"debugNav":false,"music":true,"showClouds":true,"cloudSoft":true,"rainLens":true,"showRainParticles":true,"aspect":"16:9","grid":"off","outline":false,"lodTerrain":true,"hierNav":true}}];   // baked-in demo scenarios (Export output). localStorage overrides if present.
 const DEMO_KEY = 'islandHopper.scenarios.v1';
 let demoMode=false, _demoIdx=0, _demoBar=null, _demoBusy=false;
 let _demoKeepCam=false, _demoCam=null;   // while STEPPING scenarios, keep the viewer's currently-selected camera (sticky) instead of resetting to each scenario's saved view; first entry still starts on the ship
@@ -8363,13 +8416,18 @@ function addSelect(parent, label, obj, key, options, onChange){
 }
 
 function updateReadouts(){
+  const _now = performance.now();   // 6-7 Hz is plenty for a readout — innerHTML re-parse + layout every frame was the one steady DOM churn in the loop
+  if (updateReadouts._t && _now - updateReadouts._t < 150) return;
+  updateReadouts._t = _now;
   const g=lastGuide;
   let est='';
   if (kf) { const e=kf.est, tc=sampleDisturb(boat3.x, boat3.z, clock.elapsedTime).cur;
     const cerr=Math.hypot(e.cx-tc.x, e.cz-tc.z);
     est = `<div class="read">ĉ ${Math.hypot(e.cx,e.cz).toFixed(1)} (err ${cerr.toFixed(1)}) · XTE ${(g.xte||0).toFixed(0)}m</div>`; }
+  // psi is a math angle (0 = +x = East, +CW toward +z = South); the compass rose is a map (N up).
+  // Display a true COMPASS BEARING (N=0°, E=90°) so the number agrees with the needle: bearing = psi + 90.
   ui.read.innerHTML = `spd <b>${boat3.u.toFixed(1)}</b> / ${(g.desSpeed||0).toFixed(0)} &nbsp; `
-    + `hdg <b>${((r2d(boat3.psi)%360+360)%360).toFixed(0)}°</b> &nbsp; → ${g.name||'—'}` + est;
+    + `hdg <b>${(((r2d(boat3.psi)+90)%360+360)%360).toFixed(0)}°</b> &nbsp; → ${g.name||'—'}` + est;
 }
 
 // ============================================================================
@@ -8378,7 +8436,7 @@ function updateReadouts(){
 const TEL = []; const TEL_MAX = 320;
 function recordTelemetry(t, herr, u, desSpeed){
   TEL.push({ t, herrDeg: r2d(herr), p: headingPID.p, i: headingPID.iTerm, d: headingPID.d,
-    out: headingPID.out, u, desSpeed });
+    out: headingPID.out, u, desSpeed, assist: !!boat3.assist });   // assist = the kinematic helper is steering, PID frozen
   if (TEL.length > TEL_MAX) TEL.shift();
 }
 const tcv = document.getElementById('telemetry'), tcx = tcv.getContext('2d');
@@ -8390,12 +8448,14 @@ function drawTelemetry(){
   // ---- graph A: heading error (deg, ±90 clamp) ----
   panelBg(padL,aT,gw,aH);
   zeroLine(padL,aT,gw,aH);
+  assistBands(padL,aT,gw,aH);
   tcx.fillStyle='rgba(220,238,251,.7)'; tcx.textAlign='left';
   tcx.fillText('heading error  ±90°', padL+5, aT+9);
   plot(TEL, d=>clampJS(d.herrDeg,-90,90)/90, padL,aT,gw,aH, '#ffe08a', 1.6);
   // ---- graph B: rudder P/I/D split (±deltaMax) ----
   panelBg(padL,bT,gw,bH);
   zeroLine(padL,bT,gw,bH);
+  assistBands(padL,bT,gw,bH,true);
   const sc = 1/BOAT.deltaMax;
   plot(TEL, d=>clampJS(d.p*sc,-1,1), padL,bT,gw,bH, '#ff7b7b', 1.2);   // P red
   plot(TEL, d=>clampJS(d.i*sc,-1,1), padL,bT,gw,bH, '#7be08a', 1.2);   // I green
@@ -8408,12 +8468,30 @@ function drawTelemetry(){
   tcx.fillStyle='#ffffff'; tcx.fillText('= rudder', padL+46, bT+9);
 }
 function panelBg(x,y,w,h){ tcx.fillStyle='rgba(10,24,38,.45)'; tcx.fillRect(x,y,w,h); }
+// amber bands where the "electric motor" assist was steering — the PID traces are FROZEN there, so the
+// graphs must not pretend the controller produced that recovery
+function assistBands(x,y,w,h,label){
+  let k0=-1, labelled=false;
+  tcx.fillStyle='rgba(255,166,66,.14)';
+  for (let k=0;k<=TEL.length;k++){
+    const on = k<TEL.length && TEL[k].assist;
+    if (on && k0<0) k0=k;
+    if (!on && k0>=0){ const x0=x+(k0/(TEL_MAX-1))*w, x1=x+((k-1)/(TEL_MAX-1))*w;
+      tcx.fillRect(x0, y, Math.max(x1-x0,1.5), h);
+      if (label && !labelled && x1-x0>26){ tcx.fillStyle='rgba(255,190,110,.85)'; tcx.font='9px ui-monospace, monospace';
+        tcx.fillText('assist', x0+3, y+h-7); tcx.fillStyle='rgba(255,166,66,.14)'; labelled=true; }
+      k0=-1; }
+  }
+}
 function zeroLine(x,y,w,h){ tcx.strokeStyle='rgba(150,200,255,.22)'; tcx.lineWidth=1;
   tcx.beginPath(); tcx.moveTo(x, y+h/2); tcx.lineTo(x+w, y+h/2); tcx.stroke(); }
 function plot(arr, f, x, y, w, h, color, lw){
   if (arr.length<2) return; tcx.strokeStyle=color; tcx.lineWidth=lw; tcx.beginPath();
-  for (let k=0;k<arr.length;k++){ const px=x + (k/(TEL_MAX-1))*w; const py=y+h/2 - f(arr[k])*(h/2-3);
-    if(k===0) tcx.moveTo(px,py); else tcx.lineTo(px,py); }
+  let pen=false;
+  for (let k=0;k<arr.length;k++){ const v=f(arr[k]);
+    if (!isFinite(v)){ pen=false; continue; }                     // one NaN must not erase the whole trace
+    const px=x + (k/(TEL_MAX-1))*w; const py=y+h/2 - v*(h/2-3);
+    if(!pen){ tcx.moveTo(px,py); pen=true; } else tcx.lineTo(px,py); }
   tcx.stroke();
 }
 
@@ -8468,17 +8546,18 @@ function drawCompass(){
   if (location.protocol==='file:') return;   // only file:// is truly excluded
   if (!local) { console.log('[live-reload] off (not localhost/LAN/tailnet: "' + host + '")'); return; }
   console.log('[live-reload] watching reload.txt every 1s');
-  var last = null;
+  var last = null, fails = 0, id = null;
   async function poll(){
     try {
       var r = await fetch('reload.txt?_=' + Date.now(), { cache: 'no-store' });
-      if (!r.ok) { console.warn('[live-reload] reload.txt -> HTTP ' + r.status); return; }
+      if (!r.ok) { if (++fails >= 10) { clearInterval(id); console.log('[live-reload] off (reload.txt unavailable)'); } return; }
+      fails = 0;
       var v = (await r.text()).trim();          // compare CONTENTS (a timestamp), not headers
       if (last === null) { last = v; console.log('[live-reload] baseline ' + v); return; }
       if (v !== last) { console.log('[live-reload] change ' + last + ' -> ' + v + ', reloading'); location.reload(); }
-    } catch(e) { console.warn('[live-reload] poll failed', e); }
+    } catch(e) { if (++fails >= 10) { clearInterval(id); console.log('[live-reload] off (poll failing)'); } }
   }
-  setInterval(poll, 1000); poll();
+  id = setInterval(poll, 1000); poll();
 })();
 </script>
 </body>
