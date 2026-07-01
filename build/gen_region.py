@@ -28,13 +28,15 @@ KNOWN = {
     'Paros': (25.15, 37.08), 'Antiparos': (25.03, 37.03), 'Ios': (25.28, 36.72),
     'Syros': (24.92, 37.44), 'Tinos': (25.16, 37.58), 'Sifnos': (24.67, 36.97),
     'Serifos': (24.50, 37.15), 'Folegandros': (24.92, 36.62), 'Sikinos': (25.10, 36.69),
-    'Amorgos': (25.90, 36.85), 'Kimolos': (24.57, 36.80), 'Iraklia': (25.46, 36.84),
+    'Amorgos': (25.90, 36.85), 'Kimolos': (24.57, 36.80), 'Milos': (24.42, 36.68), 'Iraklia': (25.46, 36.84),
     'Schoinoussa': (25.52, 36.86), 'Koufonisia': (25.60, 36.94), 'Kea': (24.34, 37.62),
     'Andros': (24.90, 37.84), 'Donousa': (25.81, 37.10),
   },
   'japan': {
     'Izu Ōshima': (139.39, 34.74), 'Toshima': (139.28, 34.52), 'Enoshima': (139.48, 35.30),
     'Hatsushima': (139.17, 35.04), 'Jōgashima': (139.61, 35.13), 'Niijima': (139.27, 34.38),
+    # the shipped blob also names these (KNOWN had drifted — re-added 2026-07-01):
+    'Kōzushima': (139.153, 34.216), 'Miyakejima': (139.52, 34.09), 'Shikinejima': (139.212, 34.327),
   },
   'thailand': {
     'Phuket': (98.34, 7.92), 'Ko Yao Yai': (98.60, 8.12), 'Ko Yao Noi': (98.62, 8.21),
@@ -80,10 +82,14 @@ KNOWN = {
   'skye': {     # Small Isles & Skye/Raasay (Inner Hebrides) (lon,lat)
     'Rùm': (-6.33, 57.00), 'Eigg': (-6.13, 56.90), 'Muck': (-6.23, 56.83), 'Canna': (-6.53, 57.06),
     'Sanday': (-6.50, 57.04), 'Soay': (-6.22, 57.16), 'Scalpay': (-5.97, 57.30), 'Raasay': (-6.04, 57.40),
+    'Skye': (-6.35, 57.30),   # the namesake island itself (size-scaled threshold lets its huge blob match)
   },
   'montauk': {  # Montauk & the East End islands (Long Island, NY) (lon,lat)
     'Gardiners': (-72.10, 41.10), 'Shelter Island': (-72.33, 41.06), 'Plum Island': (-72.18, 41.18),
-    'Great Gull': (-72.12, 41.20), 'Block Island': (-71.58, 41.17), 'Ram Island': (-72.28, 41.07),
+    'Great Gull': (-72.12, 41.20), 'Block Island': (-71.58, 41.17),
+    # 'Ram Island' removed 2026-07-01: GEBCO resolves no blob there (it hugs Shelter Island); the spit
+    # that used to steal the name is the Long Beach / Orient Beach bar → named for Orient Point instead
+    'Orient Point': (-72.278, 41.137),
   },
   'kodiak': {   # Kodiak Archipelago & Barren Islands (Alaska) (lon,lat)
     'Kodiak': (-153.40, 57.60), 'Afognak': (-152.65, 58.25), 'Shuyak': (-152.50, 58.55),
@@ -149,6 +155,7 @@ def main():
     ap.add_argument('--lonscale', type=float, default=None,
                     help='east-west scale for longitude (default cos(lat0)). Corrects the 2x E-W stretch at high latitudes; pass 1.0 for the old uncompensated behaviour')
     ap.add_argument('--min-cells', type=int, default=4, help='drop land blobs smaller than this')
+    ap.add_argument('--no-lakes', action='store_true', help='skip flat-patch interior lake detection')
     ap.add_argument('--simplify', type=float, default=1.2, help='coastline simplify tolerance (px)')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
@@ -185,6 +192,46 @@ def main():
 
     # ---- ISLAND_POLYS: 0 m coastline of each connected land blob, in world coords ----
     land = Z >= 0
+    # LAKES: GEBCO shows inland water as FLAT land (a lake surface is a constant elevation above 0 m),
+    # so a plain Z>=0 mask fills them solid. Detect interior lakes as near-flat patches (3x3 local range
+    # < 2 m) that sit in a DEPRESSION (surrounding ring ≥ 2 m higher) and never touch the sea or the tile
+    # edge — then punch them out of the land mask so find_contours emits them as hole rings.
+    if not a.no_lakes:
+        # A DEM burns a lake in as a CONSTANT elevation, so look for connected same-integer-value
+        # regions (a 3x3 flatness filter misses narrow lakes like Sørvágsvatn, only 2-4 cells wide).
+        Zq = np.round(Z).astype(int)
+        lakes = np.zeros_like(land)
+        cand_vals, cand_counts = np.unique(Zq[(Zq > 0) & (Zq < 2000)], return_counts=True)
+        n_lakes = 0
+        for v in cand_vals[cand_counts >= 10]:
+            vm = Zq == v
+            vl, vn = ndimage.label(vm, structure=np.ones((3, 3)))
+            szs = np.bincount(vl.ravel())
+            for vk in np.where(szs >= 10)[0]:
+                if vk == 0:
+                    continue
+                fc = vl == vk
+                frs, fcs = np.where(fc)
+                if frs.min() == 0 or fcs.min() == 0 or frs.max() == nrows - 1 or fcs.max() == ncols - 1:
+                    continue                               # touches the tile edge → not an interior lake
+                ringm = ndimage.binary_dilation(fc, np.ones((3, 3))) & ~fc
+                sea_ring = int((~land[ringm]).sum())
+                if sea_ring > max(1, int(0.10 * ringm.sum())):
+                    continue                               # more than a sliver of sea contact → coastal flat
+                                                           # (10%: Sørvágsvatn hangs right above the sea cliff)
+                if float(Z[ringm].mean()) < v + 2.0:
+                    continue                               # not in a depression → flat plain, skip
+                # keep a 1-cell rock lip anywhere the lake nears the sea, so the carved water stays a
+                # TRUE interior hole (otherwise Sørvágsvatn merges with the ocean through the cliff gap
+                # and Vágar's outer contour swallows it instead of emitting a hole ring)
+                fc = fc & ~ndimage.binary_dilation(~land, np.ones((3, 3)))
+                if fc.sum() < 8:
+                    continue
+                lakes |= fc
+                n_lakes += 1
+        if lakes.any():
+            land = land & ~lakes
+            print(f'  lakes carved: {n_lakes} patch(es), {int(lakes.sum())} cells')
     lbl, n = ndimage.label(land, structure=np.ones((3, 3)))  # 8-connectivity
     known = KNOWN.get(a.id, {})
     polys, named = [], {}
@@ -197,28 +244,54 @@ def main():
         contours = measure.find_contours(padded, 0.5)
         if not contours:
             continue
-        contour = max(contours, key=len)  # outer ring (largest)
-        contour = measure.approximate_polygon(contour, a.simplify)
+        # outer ring = LARGEST ENCLOSED AREA (shoelace) — a convoluted lake shoreline can have more
+        # vertices than the outer coast, so max-by-len picked the wrong ring; every other contour of
+        # this blob is an interior LAKE hole (find_contours returns hole rings too)
+        def _ring_area(c):
+            x, y = c[:, 1], c[:, 0]
+            return 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+        contours = sorted(contours, key=_ring_area, reverse=True)
+        contour = measure.approximate_polygon(contours[0], a.simplify)
         if len(contour) < 4:
             continue
-        ring = [[round(v, 1) for v in world(rr - 1, ccc - 1)] for rr, ccc in contour]  # undo pad
-        if ring[0] != ring[-1]:
-            ring.append(ring[0])
+
+        def _to_world_ring(c):
+            rg = [[round(v, 1) for v in world(rr - 1, ccc - 1)] for rr, ccc in c]  # undo pad
+            if rg[0] != rg[-1]:
+                rg.append(rg[0])
+            return rg
+        ring = _to_world_ring(contour)
+        holes = []
+        for hc in contours[1:]:
+            if _ring_area(hc) < max(a.min_cells, 4):      # skip 1-2 px pits (contour area in px²)
+                continue
+            hs = measure.approximate_polygon(hc, a.simplify)
+            if len(hs) >= 4:
+                holes.append(_to_world_ring(hs))
         cx = round(sum(p[0] for p in ring) / len(ring), 1)
         cz = round(sum(p[1] for p in ring) / len(ring), 1)
         peak_m = float(Z[comp].max())
         # centroid lon/lat for naming
         rr, ccx = ndimage.center_of_mass(comp)
         clon, clat = lonlat(rr, ccx)
+        # naming threshold scales with the blob's angular size: a 0.08° radius can never match the
+        # centroid of a big island (Kodiak, Skye, Siquijor all missed their own names). EDGE-CLIPPED
+        # blobs (mainlands) keep the strict threshold — a scaled one let Honshu grab "Enoshima".
+        rws, cls = np.where(comp)
+        ext_deg = max(int(rws.max() - rws.min()), int(cls.max() - cls.min())) * cs
+        clipped = rws.min() == 0 or cls.min() == 0 or rws.max() == nrows - 1 or cls.max() == ncols - 1
         name = 'islet'
-        best = 0.08  # deg threshold
+        best = 0.08 if clipped else max(0.08, 0.35 * ext_deg)
         for nm, (klon, klat) in known.items():
             d = ((clon - klon) ** 2 + (clat - klat) ** 2) ** 0.5
             if d < best and nm not in named:
                 best, name = d, nm
         if name != 'islet':
             named[name] = True
-        polys.append({'n': name, 'h': round(peak_m / 50, 1), 'c': [cx, cz], 'r': ring})
+        poly = {'n': name, 'h': round(peak_m / 50, 1), 'c': [cx, cz], 'r': ring}
+        if holes:
+            poly['hl'] = holes                            # interior lake rings; runtime fill carves them (even-odd)
+        polys.append(poly)
 
     polys.sort(key=lambda p: -len(p['r']))
     region = {

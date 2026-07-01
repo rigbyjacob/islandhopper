@@ -297,3 +297,15 @@ shows the Hawaiʻi · The Islands pin, telemetry beacon verified against the run
 NOT done in this pass (needs the data re-bake session): aegean/japan lonscale regen, lake holes,
 Ram Island/Sumilon/namesake label fixes, CLIP_N/ocean/bloom tiering, A* component labeling,
 recording audio track.
+
+## Addendum 2 — data session (2026-07-01, evening)
+
+Done and validated live: aegean + japan re-baked from GEBCO_2026.nc with lonscale (all names
+reproduce; japan's KNOWN drift fixed — Kōzushima/Miyakejima/Shikinejima restored; Milos + Kea
+now named on aegean); gen_region.py gained interior-lake detection (constant-elevation patches
+in a depression, sealed lip vs the sea) emitting `hl` hole rings + area-based outer-ring pick +
+size-scaled naming threshold (edge-clipped mainlands excluded); runtime scanline fill is even-odd
+across outer+hole rings — Sørvágsvatn is carved on Vágar with its cliff lip intact; label fixes:
+Sumilon→real islet, Siquijor/Skye/Kodiak named, montauk 'Ram Island'→'Orient Point' (tour updated
+— GEBCO resolves no Ram Island blob). Remaining open: perf tiering (CLIP_N/ocean/bloom), A*
+component labeling, recording audio, CDN-vendoring for dist.
